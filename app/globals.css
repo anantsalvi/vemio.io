@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   VEMIO™ Design Tokens
+   SOC-grade dark theme with amber/teal accent system
+   ============================================================================ */
+
+@theme {
+  /* ── Core Palette ─────────────────────────────────────────────────────── */
+  --color-vemio-bg: #0a0e17;
+  --color-vemio-surface: #111827;
+  --color-vemio-surface-raised: #1a2332;
+  --color-vemio-surface-hover: #1f2b3d;
+  --color-vemio-border: #1e293b;
+  --color-vemio-border-subtle: #162032;
+
+  /* ── Text ──────────────────────────────────────────────────────────── */
+  --color-vemio-text: #e2e8f0;
+  --color-vemio-text-muted: #94a3b8;
+  --color-vemio-text-dim: #64748b;
+
+  /* ── Accent: Amber (Primary CTA, warnings) ────────────────────────── */
+  --color-vemio-amber: #f59e0b;
+  --color-vemio-amber-soft: rgba(245, 158, 11, 0.12);
+  --color-vemio-amber-glow: rgba(245, 158, 11, 0.25);
+
+  /* ── Accent: Teal (Health, uptime, success) ────────────────────────── */
+  --color-vemio-teal: #14b8a6;
+  --color-vemio-teal-soft: rgba(20, 184, 166, 0.12);
+
+  /* ── Status Colors ─────────────────────────────────────────────────── */
+  --color-status-up: #22c55e;
+  --color-status-down: #ef4444;
+  --color-status-degraded: #f59e0b;
+  --color-status-unknown: #6b7280;
+
+  /* ── Severity ──────────────────────────────────────────────────────── */
+  --color-severity-critical: #ef4444;
+  --color-severity-high: #f97316;
+  --color-severity-medium: #eab308;
+  --color-severity-low: #3b82f6;
+  --color-severity-info: #6b7280;
+
+  /* ── BCS Score Gradient ────────────────────────────────────────────── */
+  --color-bcs-excellent: #22c55e;
+  --color-bcs-good: #84cc16;
+  --color-bcs-fair: #eab308;
+  --color-bcs-poor: #f97316;
+  --color-bcs-critical: #ef4444;
+
+  /* ── Typography ────────────────────────────────────────────────────── */
+  --font-display: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* ── Spacing / Radius ──────────────────────────────────────────────── */
+  --radius-card: 12px;
+  --radius-badge: 6px;
+  --radius-button: 8px;
+}
+
+/* ── Base Resets ──────────────────────────────────────────────────────── */
+html {
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--color-vemio-bg);
+  color: var(--color-vemio-text);
+}
+
+/* ── Scrollbar (dark theme) ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-vemio-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-vemio-text-dim);
+}
+
+/* ── Focus Ring ──────────────────────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--color-vemio-amber);
+  outline-offset: 2px;
+}
+
+/* ── Utility: Glow Effects ───────────────────────────────────────────── */
+.glow-amber {
+  box-shadow: 0 0 20px var(--color-vemio-amber-glow),
+              0 0 60px rgba(245, 158, 11, 0.08);
+}
+
+.glow-teal {
+  box-shadow: 0 0 20px rgba(20, 184, 166, 0.2),
+              0 0 60px rgba(20, 184, 166, 0.06);
+}
+
+/* ── Pulse animation for live indicators ─────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* ── Scanline effect (SOC aesthetic) ─────────────────────────────────── */
+.scanline::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.01) 2px,
+    rgba(255, 255, 255, 0.01) 4px
+  );
+  pointer-events: none;
+}

@@ -37,20 +37,28 @@ const WEBHOOK_SECRET = process.env.AUVIK_WEBHOOK_SECRET;
 function verifySignature(payload, signature) {
   if (!WEBHOOK_SECRET) {
     console.warn('[VEMIO Webhook] AUVIK_WEBHOOK_SECRET not set — skipping validation');
-    return true; // Allow in development, but log warning
+    return true;
   }
 
   if (!signature) {
     return false;
   }
 
-  const expected = crypto
-    .createHmac('sha256', WEBHOOK_SECRET)
-    .update(payload, 'utf8')
-    .digest('hex');
-
-  // Timing-safe comparison to prevent timing attacks
+  // First try direct comparison (Auvik Header auth sends the secret as-is)
   try {
+    const sigBuf = Buffer.from(signature, 'utf8');
+    const secretBuf = Buffer.from(WEBHOOK_SECRET, 'utf8');
+    if (sigBuf.length === secretBuf.length && crypto.timingSafeEqual(sigBuf, secretBuf)) {
+      return true;
+    }
+  } catch {}
+
+  // Fall back to HMAC-SHA256 verification (in case Auvik adds HMAC support later)
+  try {
+    const expected = crypto
+      .createHmac('sha256', WEBHOOK_SECRET)
+      .update(payload, 'utf8')
+      .digest('hex');
     return crypto.timingSafeEqual(
       Buffer.from(signature, 'hex'),
       Buffer.from(expected, 'hex')
@@ -157,7 +165,8 @@ export async function POST(request) {
     const rawBody = await request.text();
 
     // Verify HMAC signature
-    const signature = request.headers.get('x-auvik-signature')
+     const signature = request.headers.get('x-auvik-signature')
+      || request.headers.get('auvik_webhook_secret')
       || request.headers.get('x-hub-signature-256')?.replace('sha256=', '');
 
     if (WEBHOOK_SECRET && !verifySignature(rawBody, signature)) {

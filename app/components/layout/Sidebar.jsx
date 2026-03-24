@@ -18,9 +18,9 @@ const navItems = [
   { href: '/devices', label: 'Device Health', icon: Server },
   { href: '/tickets', label: 'Tickets & SLA', icon: Ticket },
   // Phase 2+
-  // { href: '/sites', label: 'Sites', icon: MapPin },
-  // { href: '/rca', label: 'RCA Reports', icon: FileText },
-  // { href: '/reports', label: 'Reports', icon: FileText },
+  { href: '/sites', label: 'Sites', icon: MapPin },
+  { href: '/rca', label: 'RCA Reports', icon: FileText },
+  { href: '/reports', label: 'Reports', icon: FileText },
 ];
 
 export default function Sidebar({ currentPath }) {

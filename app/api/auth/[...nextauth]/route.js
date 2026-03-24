@@ -119,19 +119,6 @@ export const authOptions = {
     signIn: '/login',
     error: '/login',
   },
-
-  // Security
-  cookies: {
-    sessionToken: {
-      name: '__Secure-vemio.session-token',
-      options: {
-        httpOnly: true,
-        sameSite: 'lax',
-        path: '/',
-        secure: true,
-      },
-    },
-  },
 };
 
 const handler = NextAuth(authOptions);

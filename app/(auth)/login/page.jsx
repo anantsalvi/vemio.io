@@ -1,12 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Shield, Eye, EyeOff, AlertTriangle, Loader2 } from 'lucide-react';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -42,6 +42,110 @@ export default function LoginPage() {
     }
   };
 
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      {/* Error message */}
+      {error && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="flex items-start gap-2 p-3 rounded-lg text-sm"
+          style={{
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.2)',
+            color: '#fca5a5',
+          }}
+        >
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </motion.div>
+      )}
+
+      {/* Email */}
+      <div>
+        <label className="block text-xs font-medium text-vemio-text-muted mb-2 uppercase tracking-wider">
+          Email
+        </label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+          autoFocus
+          autoComplete="email"
+          placeholder="you@company.com"
+          className="w-full px-4 py-3 rounded-lg text-sm transition-all duration-200 placeholder:text-vemio-text-dim"
+          style={{
+            background: 'var(--color-vemio-surface-raised)',
+            border: '1px solid var(--color-vemio-border)',
+            color: 'var(--color-vemio-text)',
+            outline: 'none',
+          }}
+          onFocus={(e) => e.target.style.borderColor = 'var(--color-vemio-amber)'}
+          onBlur={(e) => e.target.style.borderColor = 'var(--color-vemio-border)'}
+        />
+      </div>
+
+      {/* Password */}
+      <div>
+        <label className="block text-xs font-medium text-vemio-text-muted mb-2 uppercase tracking-wider">
+          Password
+        </label>
+        <div className="relative">
+          <input
+            type={showPassword ? 'text' : 'password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            autoComplete="current-password"
+            placeholder="••••••••"
+            className="w-full px-4 py-3 pr-11 rounded-lg text-sm transition-all duration-200 placeholder:text-vemio-text-dim"
+            style={{
+              background: 'var(--color-vemio-surface-raised)',
+              border: '1px solid var(--color-vemio-border)',
+              color: 'var(--color-vemio-text)',
+              outline: 'none',
+            }}
+            onFocus={(e) => e.target.style.borderColor = 'var(--color-vemio-amber)'}
+            onBlur={(e) => e.target.style.borderColor = 'var(--color-vemio-border)'}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-vemio-text-dim hover:text-vemio-text transition-colors"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Submit */}
+      <button
+        type="submit"
+        disabled={loading || !email || !password}
+        className="w-full py-3 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        style={{
+          background: loading
+            ? 'rgba(245, 158, 11, 0.3)'
+            : 'linear-gradient(135deg, #f59e0b, #d97706)',
+          color: '#0a0e17',
+          boxShadow: loading ? 'none' : '0 2px 12px rgba(245, 158, 11, 0.3)',
+        }}
+      >
+        {loading ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Authenticating...
+          </>
+        ) : (
+          'Sign In'
+        )}
+      </button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
       {/* Background grid effect */}
@@ -100,105 +204,13 @@ export default function LoginPage() {
             boxShadow: '0 4px 24px rgba(0, 0, 0, 0.3)',
           }}
         >
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Error message */}
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="flex items-start gap-2 p-3 rounded-lg text-sm"
-                style={{
-                  background: 'rgba(239, 68, 68, 0.1)',
-                  border: '1px solid rgba(239, 68, 68, 0.2)',
-                  color: '#fca5a5',
-                }}
-              >
-                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{error}</span>
-              </motion.div>
-            )}
-
-            {/* Email */}
-            <div>
-              <label className="block text-xs font-medium text-vemio-text-muted mb-2 uppercase tracking-wider">
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus
-                autoComplete="email"
-                placeholder="you@company.com"
-                className="w-full px-4 py-3 rounded-lg text-sm transition-all duration-200 placeholder:text-vemio-text-dim"
-                style={{
-                  background: 'var(--color-vemio-surface-raised)',
-                  border: '1px solid var(--color-vemio-border)',
-                  color: 'var(--color-vemio-text)',
-                  outline: 'none',
-                }}
-                onFocus={(e) => e.target.style.borderColor = 'var(--color-vemio-amber)'}
-                onBlur={(e) => e.target.style.borderColor = 'var(--color-vemio-border)'}
-              />
+          <Suspense fallback={
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 text-vemio-amber animate-spin" />
             </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-xs font-medium text-vemio-text-muted mb-2 uppercase tracking-wider">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  className="w-full px-4 py-3 pr-11 rounded-lg text-sm transition-all duration-200 placeholder:text-vemio-text-dim"
-                  style={{
-                    background: 'var(--color-vemio-surface-raised)',
-                    border: '1px solid var(--color-vemio-border)',
-                    color: 'var(--color-vemio-text)',
-                    outline: 'none',
-                  }}
-                  onFocus={(e) => e.target.style.borderColor = 'var(--color-vemio-amber)'}
-                  onBlur={(e) => e.target.style.borderColor = 'var(--color-vemio-border)'}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-vemio-text-dim hover:text-vemio-text transition-colors"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading || !email || !password}
-              className="w-full py-3 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{
-                background: loading
-                  ? 'rgba(245, 158, 11, 0.3)'
-                  : 'linear-gradient(135deg, #f59e0b, #d97706)',
-                color: '#0a0e17',
-                boxShadow: loading ? 'none' : '0 2px 12px rgba(245, 158, 11, 0.3)',
-              }}
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Authenticating...
-                </>
-              ) : (
-                'Sign In'
-              )}
-            </button>
-          </form>
+          }>
+            <LoginForm />
+          </Suspense>
         </div>
 
         {/* Footer */}

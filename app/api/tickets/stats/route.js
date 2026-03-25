@@ -44,27 +44,24 @@ export const GET = withAuth(async (req, session) => {
          COUNT(*) FILTER (WHERE status IN ('open', 'pending')) AS period_open,
          COUNT(*) FILTER (WHERE status IN ('resolved', 'closed')) AS period_closed,
          
-         -- SLA compliance (response)
          COUNT(*) FILTER (WHERE sla_response_met IS NOT NULL) AS response_measured,
          COUNT(*) FILTER (WHERE sla_response_met = TRUE) AS response_met,
          COUNT(*) FILTER (WHERE sla_response_met = FALSE) AS response_breached,
          
-         -- SLA compliance (resolution)
          COUNT(*) FILTER (WHERE sla_resolution_met IS NOT NULL) AS resolution_measured,
          COUNT(*) FILTER (WHERE sla_resolution_met = TRUE) AS resolution_met,
          COUNT(*) FILTER (WHERE sla_resolution_met = FALSE) AS resolution_breached,
          
-         -- Average times (in minutes) for resolved/closed tickets
          ROUND(AVG(
-           EXTRACT(EPOCH FROM (first_response_at - opened_at)) / 60
+           EXTRACT(EPOCH FROM (first_response_at - created_at)) / 60
          ) FILTER (WHERE first_response_at IS NOT NULL), 1) AS avg_response_minutes,
          
          ROUND(AVG(
-           EXTRACT(EPOCH FROM (resolved_at - opened_at)) / 60
+           EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60
          ) FILTER (WHERE resolved_at IS NOT NULL), 1) AS avg_resolution_minutes
 
        FROM tickets
-       WHERE opened_at >= ${periodSql}`
+       WHERE created_at >= ${periodSql}`
     );
 
     // 3. MTTR by priority (period-scoped)
@@ -73,14 +70,14 @@ export const GET = withAuth(async (req, session) => {
          priority,
          COUNT(*) AS count,
          ROUND(AVG(
-           EXTRACT(EPOCH FROM (resolved_at - opened_at)) / 60
+           EXTRACT(EPOCH FROM (resolved_at - created_at)) / 60
          ), 0) AS avg_resolution_minutes,
          ROUND(AVG(
-           EXTRACT(EPOCH FROM (first_response_at - opened_at)) / 60
+           EXTRACT(EPOCH FROM (first_response_at - created_at)) / 60
          ), 0) AS avg_response_minutes
        FROM tickets
        WHERE resolved_at IS NOT NULL
-         AND opened_at >= ${periodSql}
+         AND created_at >= ${periodSql}
        GROUP BY priority
        ORDER BY 
          CASE priority 
@@ -91,15 +88,15 @@ export const GET = withAuth(async (req, session) => {
          END`
     );
 
-    // 4. Ticket volume trend (daily, last 30 days regardless of period)
+    // 4. Ticket volume trend (daily, last 30 days)
     const trendResult = await queryWithTenant(tenantId,
       `SELECT
-         DATE(opened_at) AS day,
+         DATE(created_at) AS day,
          COUNT(*) AS opened,
          COUNT(*) FILTER (WHERE status IN ('resolved', 'closed')) AS closed
        FROM tickets
-       WHERE opened_at >= NOW() - INTERVAL '30 days'
-       GROUP BY DATE(opened_at)
+       WHERE created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY DATE(created_at)
        ORDER BY day`
     );
 
@@ -110,7 +107,7 @@ export const GET = withAuth(async (req, session) => {
          COUNT(*) AS count,
          COUNT(*) FILTER (WHERE sla_resolution_met = FALSE) AS breached
        FROM tickets
-       WHERE opened_at >= ${periodSql}
+       WHERE created_at >= ${periodSql}
        GROUP BY category
        ORDER BY count DESC
        LIMIT 8`
@@ -119,14 +116,11 @@ export const GET = withAuth(async (req, session) => {
     const s = statusResult.rows[0];
     const p = periodResult.rows[0];
 
-    // Compute SLA compliance percentages
     const responseMeasured = parseInt(p.response_measured || 0);
     const resolutionMeasured = parseInt(p.resolution_measured || 0);
 
     const stats = {
       period,
-
-      // All-time status counts
       allTime: {
         total: parseInt(s.total),
         open: parseInt(s.open),
@@ -134,15 +128,11 @@ export const GET = withAuth(async (req, session) => {
         resolved: parseInt(s.resolved),
         closed: parseInt(s.closed),
       },
-
-      // Period-scoped counts
       period: {
         total: parseInt(p.period_total),
         open: parseInt(p.period_open),
         closed: parseInt(p.period_closed),
       },
-
-      // SLA compliance
       sla: {
         responseCompliance: responseMeasured > 0
           ? parseFloat(((parseInt(p.response_met) / responseMeasured) * 100).toFixed(1))
@@ -153,27 +143,19 @@ export const GET = withAuth(async (req, session) => {
         responseBreaches: parseInt(p.response_breached || 0),
         resolutionBreaches: parseInt(p.resolution_breached || 0),
       },
-
-      // Average times
       avgResponseMinutes: p.avg_response_minutes ? parseFloat(p.avg_response_minutes) : null,
       avgResolutionMinutes: p.avg_resolution_minutes ? parseFloat(p.avg_resolution_minutes) : null,
-
-      // MTTR by priority
       mttrByPriority: mttrResult.rows.map(r => ({
         priority: r.priority,
         count: parseInt(r.count),
         avgResponseMin: r.avg_response_minutes ? parseInt(r.avg_response_minutes) : null,
         avgResolutionMin: r.avg_resolution_minutes ? parseInt(r.avg_resolution_minutes) : null,
       })),
-
-      // Daily trend
       dailyTrend: trendResult.rows.map(r => ({
         date: r.day.toISOString().split('T')[0],
         opened: parseInt(r.opened),
         closed: parseInt(r.closed),
       })),
-
-      // Top categories
       topCategories: categoryResult.rows.map(r => ({
         name: r.category,
         count: parseInt(r.count),

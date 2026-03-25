@@ -76,6 +76,63 @@ export const GET = withAuth(async (req, session) => {
         alerts: { active: parseInt(alertResult.rows[0].count) },
         sites: { total: parseInt(siteResult.rows[0].count) },
       };
+
+      // Uptime trend — daily average from device_status_history
+      try {
+        const trendResult = await queryWithTenant(tenantId,
+          `WITH daily AS (
+             SELECT 
+               DATE(changed_at) AS day,
+               COUNT(*) FILTER (WHERE status = 'up') AS up_events,
+               COUNT(*) AS total_events
+             FROM device_status_history
+             WHERE changed_at > NOW() - INTERVAL '7 days'
+             GROUP BY DATE(changed_at)
+             ORDER BY day
+           )
+           SELECT day, 
+             CASE WHEN total_events > 0 
+               THEN ROUND((up_events::numeric / total_events) * 100, 1)
+               ELSE NULL END AS uptime
+           FROM daily`
+        );
+
+        if (trendResult.rows.length > 0) {
+          overview.uptimeTrend = trendResult.rows.map(r => ({
+            date: r.day.toISOString().split('T')[0],
+            uptime: r.uptime ? parseFloat(r.uptime) : null,
+          }));
+        }
+      } catch (err) {
+        console.error('[VEMIO API] Uptime trend query error:', err.message);
+      }
+
+      // Recent events from webhook_events
+      try {
+        const eventsResult = await queryWithTenant(tenantId,
+          `SELECT 
+             we.event_type, we.received_at, we.raw_payload,
+             d.name AS device_name, s.name AS site_name
+           FROM webhook_events we
+           LEFT JOIN devices d ON d.auvik_device_id = we.auvik_device_id
+           LEFT JOIN sites s ON s.id = we.site_id
+           WHERE we.received_at > NOW() - INTERVAL '24 hours'
+           ORDER BY we.received_at DESC
+           LIMIT 10`
+        );
+
+        if (eventsResult.rows.length > 0) {
+          overview.recentEvents = eventsResult.rows.map(r => ({
+            time: new Date(r.received_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }),
+            type: r.event_type.includes('alert') ? 'alert' : r.event_type.includes('resolved') ? 'resolved' : 'report',
+            message: r.device_name || r.event_type,
+            severity: 'info',
+            site: r.site_name || 'Unknown',
+          }));
+        }
+      } catch (err) {
+        console.error('[VEMIO API] Recent events query error:', err.message);
+      }
     } else {
       // Demo data — realistic for a mid-size textile company
       overview = getDemoOverview();

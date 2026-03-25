@@ -2,7 +2,7 @@ import './globals.css';
 
 export const metadata = {
   title: {
-    default: 'VEMIO™ — Network Intelligence Dashboard',
+    default: 'VEMIO™ | Network Intelligence Dashboard',
     template: '%s | VEMIO™',
   },
   description: 'Managed network intelligence platform by Vinay Enterprises',

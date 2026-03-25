@@ -11,12 +11,16 @@ import {
   Shield,
   Settings,
   Activity,
+  Gauge,
+  Bell,
 } from 'lucide-react';
 
 const navItems = [
   { href: '/overview', label: 'Overview', icon: LayoutDashboard },
+  { href: '/intelligence', label: 'Intelligence', icon: Gauge },
   { href: '/devices', label: 'Device Health', icon: Server },
   { href: '/tickets', label: 'Tickets & SLA', icon: Ticket },
+  { href: '/alerts', label: 'Alerts', icon: Bell },
   // Phase 2+
   { href: '/sites', label: 'Sites', icon: MapPin },
   { href: '/rca', label: 'RCA Reports', icon: FileText },

@@ -148,7 +148,7 @@ async function getSiteDetail(tenantId, siteId) {
 
     // Active alerts at this site
     const alerts = await queryWithTenant(tenantId, `
-      SELECT id, alert_type, severity, title, triggered_at,
+      SELECT a.id, a.alert_type, a.severity, a.title, a.triggered_at,
         d.name AS device_name
       FROM alerts a
       LEFT JOIN devices d ON d.id = a.device_id

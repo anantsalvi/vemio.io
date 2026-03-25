@@ -82,12 +82,12 @@ export const GET = withAuth(async (req, session) => {
         const trendResult = await queryWithTenant(tenantId,
           `WITH daily AS (
              SELECT 
-               DATE(changed_at) AS day,
+               DATE(recorded_at) AS day,
                COUNT(*) FILTER (WHERE status = 'up') AS up_events,
                COUNT(*) AS total_events
              FROM device_status_history
-             WHERE changed_at > NOW() - INTERVAL '7 days'
-             GROUP BY DATE(changed_at)
+             WHERE recorded_at > NOW() - INTERVAL '7 days'
+             GROUP BY DATE(recorded_at)
              ORDER BY day
            )
            SELECT day, 
@@ -107,28 +107,70 @@ export const GET = withAuth(async (req, session) => {
         console.error('[VEMIO API] Uptime trend query error:', err.message);
       }
 
-      // Recent events from webhook_events
+      // Recent events from device_status_history (proper device names + status transitions)
       try {
         const eventsResult = await queryWithTenant(tenantId,
           `SELECT 
-             we.event_type, we.received_at, we.raw_payload,
-             d.name AS device_name, s.name AS site_name
-           FROM webhook_events we
-           LEFT JOIN devices d ON d.auvik_device_id = we.auvik_device_id
-           LEFT JOIN sites s ON s.id = we.site_id
-           WHERE we.received_at > NOW() - INTERVAL '24 hours'
-           ORDER BY we.received_at DESC
-           LIMIT 10`
+             dsh.status,
+             dsh.recorded_at,
+             dsh.source AS event_source,
+             dsh.latency_ms,
+             dsh.cpu_percent,
+             d.name AS device_name,
+             d.device_type,
+             s.name AS site_name
+           FROM device_status_history dsh
+           JOIN devices d ON d.id = dsh.device_id
+           LEFT JOIN sites s ON s.id = d.site_id
+           WHERE dsh.recorded_at > NOW() - INTERVAL '24 hours'
+           ORDER BY dsh.recorded_at DESC
+           LIMIT 15`
         );
 
         if (eventsResult.rows.length > 0) {
-          overview.recentEvents = eventsResult.rows.map(r => ({
-            time: new Date(r.received_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' }),
-            type: r.event_type.includes('alert') ? 'alert' : r.event_type.includes('resolved') ? 'resolved' : 'report',
-            message: r.device_name || r.event_type,
-            severity: 'info',
-            site: r.site_name || 'Unknown',
-          }));
+          overview.recentEvents = eventsResult.rows.map(r => {
+            // Build a human-readable message from the status transition
+            const name = r.device_name || 'Unknown device';
+            const type = formatDeviceType(r.device_type);
+            let message, eventType, severity;
+
+            switch (r.status) {
+              case 'down':
+                message = `${name} went offline`;
+                eventType = 'alert';
+                severity = 'high';
+                break;
+              case 'degraded':
+                message = r.cpu_percent && parseFloat(r.cpu_percent) > 80
+                  ? `${name} CPU at ${parseFloat(r.cpu_percent).toFixed(0)}%`
+                  : r.latency_ms && r.latency_ms > 100
+                    ? `${name} latency ${r.latency_ms}ms`
+                    : `${name} degraded`;
+                eventType = 'alert';
+                severity = 'medium';
+                break;
+              case 'up':
+                message = `${name} online`;
+                eventType = 'resolved';
+                severity = 'info';
+                break;
+              default:
+                message = `${name} status: ${r.status}`;
+                eventType = 'report';
+                severity = 'info';
+            }
+
+            return {
+              time: new Date(r.recorded_at).toLocaleTimeString('en-IN', {
+                hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata',
+              }),
+              type: eventType,
+              message,
+              severity,
+              site: r.site_name || 'Unknown',
+              deviceType: type,
+            };
+          });
         }
       } catch (err) {
         console.error('[VEMIO API] Recent events query error:', err.message);
@@ -144,6 +186,24 @@ export const GET = withAuth(async (req, session) => {
 
   return Response.json(overview);
 });
+
+
+/** Map device_type enum to human-readable short labels */
+function formatDeviceType(type) {
+  const map = {
+    firewall: 'Firewall',
+    switch: 'Switch',
+    router: 'Router',
+    access_point: 'AP',
+    server: 'Server',
+    ups: 'UPS',
+    printer: 'Printer',
+    ip_phone: 'IP Phone',
+    workstation: 'Workstation',
+    other: 'Device',
+  };
+  return map[type] || 'Device';
+}
 
 
 function getDemoOverview() {
@@ -175,11 +235,11 @@ function getDemoOverview() {
       { date: '2026-03-24', uptime: 99.8 },
     ],
     recentEvents: [
-      { time: '14:32', type: 'alert', message: 'Core Switch SW-01 port 24 flapping', severity: 'high', site: 'HQ - Naroda' },
-      { time: '13:15', type: 'resolved', message: 'AP-CONF-07 back online', severity: 'info', site: 'Warehouse - Narol' },
-      { time: '11:48', type: 'alert', message: 'Firewall FW-02 CPU > 85%', severity: 'medium', site: 'Branch - Vatva' },
-      { time: '09:22', type: 'maintenance', message: 'Scheduled firmware update: AP-series', severity: 'info', site: 'All sites' },
-      { time: '08:00', type: 'report', message: 'Daily BCS recalculated: 87.4', severity: 'info', site: 'System' },
+      { time: '14:32', type: 'alert', message: 'Core Switch SW-01 went offline', severity: 'high', site: 'HQ - Naroda', deviceType: 'Switch' },
+      { time: '13:15', type: 'resolved', message: 'AP-CONF-07 online', severity: 'info', site: 'Warehouse - Narol', deviceType: 'AP' },
+      { time: '11:48', type: 'alert', message: 'Firewall FW-02 CPU at 85%', severity: 'medium', site: 'Branch - Vatva', deviceType: 'Firewall' },
+      { time: '09:22', type: 'maintenance', message: 'Scheduled firmware update: AP-series', severity: 'info', site: 'All sites', deviceType: 'AP' },
+      { time: '08:00', type: 'report', message: 'Daily BCS recalculated: 87.4', severity: 'info', site: 'System', deviceType: 'Device' },
     ],
   };
 }

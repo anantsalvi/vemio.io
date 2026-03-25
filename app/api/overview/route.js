@@ -31,10 +31,10 @@ export const GET = withAuth(async (req, session) => {
     );
 
     // Latest BCS score
-    const bcsResult = await queryWithTenant(tenantId,
-      `SELECT overall_score, device_health_score, ticket_health_score, sla_score, calculated_at
+     const bcsResult = await queryWithTenant(tenantId,
+      `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
        FROM bcs_scores
-       ORDER BY calculated_at DESC
+       ORDER BY computed_at DESC
        LIMIT 1`
     );
 
@@ -60,11 +60,11 @@ export const GET = withAuth(async (req, session) => {
       overview = {
         source: 'live',
         bcs: bcs ? {
-          overall: parseFloat(bcs.overall_score),
-          deviceHealth: parseFloat(bcs.device_health_score),
-          ticketHealth: parseFloat(bcs.ticket_health_score),
-          sla: parseFloat(bcs.sla_score),
-          calculatedAt: bcs.calculated_at,
+          overall: parseFloat(bcs.score),
+          deviceHealth: parseFloat(bcs.visibility_coverage),
+          ticketHealth: parseFloat(bcs.alerting_maturity),
+          sla: parseFloat(bcs.response_discipline),
+          calculatedAt: bcs.computed_at,
         } : null,
         devices: {
           total: parseInt(devices.total),

@@ -103,7 +103,7 @@ async function generateSLAReport(tenantId, tenant, reportMonth, startDate, endDa
 
   // Top 5 breached tickets
   const breachedTickets = await queryWithTenant(tenantId, `
-    SELECT glpi_ticket_id, title, priority, status, created_at, resolved_at,
+    SELECT t.glpi_ticket_id, t.title, t.priority, t.status, t.created_at, t.resolved_at,
       s.name AS site_name
     FROM tickets t
     LEFT JOIN sites s ON s.id = t.site_id

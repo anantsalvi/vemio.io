@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, CheckCircle2 } from 'lucide-react';
-
+import ExportButton from '@/app/components/ExportButton';
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.05 } },
@@ -175,9 +175,18 @@ export default function AlertsPage() {
             <h1 className="alerts-title">Alerts</h1>
             <p className="alerts-subtitle">Real-time infrastructure alerts and notifications</p>
           </div>
-          <button onClick={fetchAlerts} className="alerts-refresh-btn">
-            Refresh
-          </button>
+         <div className="alerts-header-actions">
+            <ExportButton
+              data={alerts}
+              filename="vemio-alerts"
+              columns={['severity', 'title', 'state', 'alert_type', 'device_name', 'site_name', 'triggered_at']}
+              headers={{ alert_type: 'Type', device_name: 'Device', site_name: 'Site', triggered_at: 'Triggered' }}
+              label="Export CSV"
+            />
+            <button onClick={fetchAlerts} className="alerts-refresh-btn">
+              Refresh
+            </button>
+          </div>
         </motion.div>
 
         {/* ── Summary cards ── */}
@@ -289,6 +298,12 @@ export default function AlertsPage() {
       </motion.div>
 
       <style>{`
+      .alerts-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
         .alerts-root {
           display: flex;
           flex-direction: column;

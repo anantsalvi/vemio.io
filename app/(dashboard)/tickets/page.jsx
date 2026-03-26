@@ -9,7 +9,7 @@ import {
   Search, RefreshCw, AlertTriangle, ChevronLeft, ChevronRight,
   CheckCircle2, XCircle, Clock, Ticket,
 } from 'lucide-react';
-
+import ExportButton from '@/app/components/ExportButton';
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.08 } },
@@ -164,11 +164,19 @@ export default function TicketsPage() {
       <motion.div variants={stagger} initial="hidden" animate="visible" className="tk-root">
 
         {/* ── Header ── */}
-        <motion.div variants={fadeUp} className="tk-header">
+<motion.div variants={fadeUp} className="tk-header">
           <div>
             <h1 className="tk-title">Tickets & SLA</h1>
             <p className="tk-subtitle">Service desk metrics and ticket tracking</p>
           </div>
+          <div className="tk-header-actions">
+            <ExportButton
+              data={tickets}
+              filename="vemio-tickets"
+              columns={['sourceId', 'title', 'status', 'priority', 'site', 'age']}
+              headers={{ sourceId: 'Ticket ID', site: 'Site' }}
+              label="Export CSV"
+            />
           {/* Period selector: scrollable row on mobile */}
           <div className="tk-period-row">
             {['7d', 'mtd', '30d', '90d'].map(p => (
@@ -180,7 +188,8 @@ export default function TicketsPage() {
                 }}>
                 {p.toUpperCase()}
               </button>
-            ))}
+             ))}
+          </div>
           </div>
         </motion.div>
 
@@ -300,6 +309,13 @@ export default function TicketsPage() {
       </motion.div>
 
       <style>{`
+      .tk-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
         .tk-root {
           display: flex;
           flex-direction: column;

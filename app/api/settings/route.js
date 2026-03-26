@@ -106,10 +106,10 @@ export const PATCH = withAuth(async (req, session) => {
 
     return Response.json({ success: true, settings: merged });
 
-  } catch (err) {
-    console.error('Settings PATCH error:', err);
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
-  }
+} catch (err) {
+  console.error('Settings PATCH error:', err);
+  return Response.json({ error: err.message, stack: err.stack }, { status: 500 });
+}
 });
 
 // Simple deep merge — arrays are replaced, not concatenated

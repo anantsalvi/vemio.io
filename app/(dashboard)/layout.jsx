@@ -1,5 +1,5 @@
 'use client';
-
+export const dynamic = 'force-dynamic';
 import { useSidebar } from '@/hooks/useSidebar';
 import { BrandingProvider } from '@/hooks/useBranding';
 import Sidebar from '@/components/Sidebar';

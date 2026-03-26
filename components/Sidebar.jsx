@@ -30,7 +30,8 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ isRail = false, onNavigate }) {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const sessionData = useSession();
+  const session = sessionData?.data;
 
   function isActive(href) {
     return pathname === href || pathname.startsWith(href + "/");

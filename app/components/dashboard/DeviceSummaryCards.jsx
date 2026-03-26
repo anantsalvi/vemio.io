@@ -57,42 +57,130 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 h-full">
-      {cards.map((card, i) => {
-        const Icon = card.icon;
-        return (
-          <motion.div
-            key={card.label}
-            variants={cardVariants}
-            className="rounded-xl p-4 flex flex-col justify-between relative overflow-hidden"
-            style={{
-              background: 'var(--color-vemio-surface)',
-              border: '1px solid var(--color-vemio-border)',
-            }}
-          >
-            <div className="flex items-center justify-between">
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center"
-                style={{ background: card.bg }}
-              >
-                <Icon className="w-4 h-4" style={{ color: card.color }} />
+    <>
+      <div className="dsc-grid">
+        {cards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <motion.div
+              key={card.label}
+              variants={cardVariants}
+              className="dsc-card"
+            >
+              <div className="dsc-card-top">
+                <div className="dsc-icon-wrap" style={{ background: card.bg }}>
+                  <Icon className="dsc-icon" style={{ color: card.color }} />
+                </div>
+                {card.pulse && (
+                  <span className="dsc-pulse-dot" style={{ background: card.color }} />
+                )}
               </div>
-              {card.pulse && (
-                <span
-                  className="w-2 h-2 rounded-full animate-pulse-dot"
-                  style={{ background: card.color }}
-                />
-              )}
-            </div>
-            <div className="mt-3">
-              <p className="text-2xl font-bold tabular-nums" style={{ color: card.color }}>
-                {card.value}
-              </p>
-              <p className="text-[11px] text-vemio-text-dim mt-0.5">{card.label}</p>
-            </div>
-          </motion.div>
-        );
-      })}
-    </div>
+              <div className="dsc-card-body">
+                <p className="dsc-value" style={{ color: card.color }}>
+                  {card.value}
+                </p>
+                <p className="dsc-label">{card.label}</p>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      <style>{`
+        /* 3-col on desktop (matches the 2fr column in OverviewPage row-1),
+           3-col on tablet (sidebar gone → more room),
+           2-col on mobile */
+        .dsc-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 12px;
+          height: 100%;
+        }
+
+        @media (max-width: 767px) {
+          .dsc-grid {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+          }
+        }
+
+        .dsc-card {
+          border-radius: 12px;
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          gap: 10px;
+          position: relative;
+          overflow: hidden;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+          min-height: 90px;
+        }
+
+        @media (max-width: 479px) {
+          .dsc-card { padding: 12px; min-height: 80px; }
+        }
+
+        .dsc-card-top {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        .dsc-icon-wrap {
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+
+        .dsc-icon {
+          width: 16px;
+          height: 16px;
+        }
+
+        /* Pulse dot — visible on all devices (not just hover) */
+        .dsc-pulse-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          animation: dsc-pulse 1.8s ease-in-out infinite;
+          flex-shrink: 0;
+        }
+
+        @keyframes dsc-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%       { opacity: 0.4; transform: scale(0.75); }
+        }
+
+        .dsc-card-body {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .dsc-value {
+          font-size: 24px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
+          line-height: 1;
+          margin: 0;
+        }
+
+        @media (max-width: 479px) {
+          .dsc-value { font-size: 20px; }
+        }
+
+        .dsc-label {
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+          margin: 0;
+        }
+      `}</style>
+    </>
   );
 }

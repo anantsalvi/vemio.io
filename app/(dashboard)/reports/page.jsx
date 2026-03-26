@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { RefreshCw, Download, FileText, Shield, Server, ChevronDown } from 'lucide-react';
+import { RefreshCw, Download, FileText, Shield, Server } from 'lucide-react';
 
 const stagger = {
   hidden: {},
@@ -14,16 +14,16 @@ const fadeUp = {
 };
 
 const REPORT_TYPES = [
-  { key: 'sla', label: 'SLA Compliance Report', desc: 'Ticket SLA metrics, breach analysis, and compliance percentages', icon: FileText },
-  { key: 'bcs', label: 'BCS Summary Report', desc: 'Business Continuity Score with dimension breakdown and trend', icon: Shield },
-  { key: 'device_health', label: 'Device Health Report', desc: 'Device status by type and site, down device inventory', icon: Server },
+  { key: 'sla',           label: 'SLA Compliance',   desc: 'Ticket SLA metrics, breach analysis, and compliance percentages', icon: FileText },
+  { key: 'bcs',           label: 'BCS Summary',       desc: 'Business Continuity Score with dimension breakdown and trend',     icon: Shield   },
+  { key: 'device_health', label: 'Device Health',     desc: 'Device status by type and site, down device inventory',           icon: Server   },
 ];
 
 function getMonthOptions() {
   const options = [];
   const now = new Date();
   for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d     = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const label = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
     options.push({ value, label });
@@ -31,12 +31,12 @@ function getMonthOptions() {
   return options;
 }
 
-// ── PDF Renderer ────────────────────────────────────────────────────────────
+// ── PDF generation (unchanged) ────────────────────────────────────────────────
 
 function generatePDFContent(data) {
   if (!data) return '';
   const { report_type, report_month, generated_at, tenant } = data;
-  const monthLabel = new Date(report_month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const monthLabel     = new Date(report_month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
   const generatedLabel = new Date(generated_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
   const header = `
@@ -53,15 +53,14 @@ function generatePDFContent(data) {
     <div style="margin-bottom:24px;">
       <div style="font-size:18px;font-weight:700;color:#0F172A;">${
         report_type === 'sla' ? 'SLA Compliance Report' :
-        report_type === 'bcs' ? 'Business Continuity Score Report' :
-        'Device Health Report'
+        report_type === 'bcs' ? 'Business Continuity Score Report' : 'Device Health Report'
       }</div>
       <div style="font-size:12px;color:#64748B;margin-top:4px;">${monthLabel} · Generated ${generatedLabel} IST</div>
     </div>
   `;
 
-  if (report_type === 'sla') return header + renderSLAReport(data);
-  if (report_type === 'bcs') return header + renderBCSReport(data);
+  if (report_type === 'sla')           return header + renderSLAReport(data);
+  if (report_type === 'bcs')           return header + renderBCSReport(data);
   if (report_type === 'device_health') return header + renderDeviceHealthReport(data);
   return header;
 }
@@ -315,68 +314,35 @@ function renderDeviceHealthReport(data) {
     </div>
   `;
 }
-
 function metricCard(label, value, color = '#0F172A') {
-  return `
-    <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 16px;">
-      <div style="font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:1px;">${label}</div>
-      <div style="font-size:24px;font-weight:700;color:${color};margin-top:4px;">${value}</div>
-    </div>
-  `;
+  return `<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 16px;"><div style="font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:1px;">${label}</div><div style="font-size:24px;font-weight:700;color:${color};margin-top:4px;">${value}</div></div>`;
 }
-
 function complianceCard(label, percent, met, breached) {
   const color = percent === 'N/A' ? '#64748B' : percent >= 90 ? '#10B981' : percent >= 70 ? '#F59E0B' : '#EF4444';
-  return `
-    <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:16px;">
-      <div style="font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">${label}</div>
-      <div style="font-size:28px;font-weight:700;color:${color};">${percent}${percent !== 'N/A' ? '%' : ''}</div>
-      <div style="font-size:10px;color:#94A3B8;margin-top:4px;">${met} met · ${breached} breached</div>
-    </div>
-  `;
+  return `<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:16px;"><div style="font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">${label}</div><div style="font-size:28px;font-weight:700;color:${color};">${percent}${percent !== 'N/A' ? '%' : ''}</div><div style="font-size:10px;color:#94A3B8;margin-top:4px;">${met} met · ${breached} breached</div></div>`;
 }
 
-// ── Report Preview + Download ───────────────────────────────────────────────
+// ── Report Preview ────────────────────────────────────────────────────────────
 
 function ReportPreview({ data, onDownload, downloading }) {
   const content = generatePDFContent(data);
-
   return (
-    <div>
-      {/* Preview */}
-      <div
-        className="rounded-xl overflow-hidden mb-4"
-        style={{
-          background: '#FFF',
-          border: '1px solid var(--color-vemio-border)',
-          maxHeight: '600px',
-          overflowY: 'auto',
-        }}
-      >
+    <>
+      <div className="report-preview-scroll">
         <div
-          style={{ padding: '32px', fontFamily: "'Segoe UI', Arial, sans-serif", fontSize: '12px', color: '#1E293B' }}
+          className="report-preview-inner"
           dangerouslySetInnerHTML={{ __html: content }}
         />
       </div>
-
-      {/* Download button */}
-      <button
-        onClick={onDownload}
-        disabled={downloading}
-        className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
-        style={{
-          background: 'var(--color-vemio-amber)',
-          color: '#0F172A',
-        }}
-      >
+      <button onClick={onDownload} disabled={downloading} className="report-download-btn">
         <Download className="w-4 h-4" />
-        {downloading ? 'Generating PDF...' : 'Download PDF'}
+        {downloading ? 'Generating PDF…' : 'Download PDF'}
       </button>
-    </div>
+    </>
   );
 }
 
-// ── Main Page ───────────────────────────────────────────────────────────────
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
   const [reportType, setReportType] = useState('sla');
@@ -384,8 +350,8 @@ export default function ReportsPage() {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [data, setData]           = useState(null);
+  const [loading, setLoading]     = useState(false);
   const [downloading, setDownloading] = useState(false);
   const months = getMonthOptions();
 
@@ -396,115 +362,224 @@ export default function ReportsPage() {
       const res = await fetch(`/api/reports?type=${reportType}&month=${month}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
-    } catch (err) {
-      console.error('Report generation failed:', err);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { console.error('Report generation failed:', err); }
+    finally { setLoading(false); }
   }
 
   function downloadPDF() {
     if (!data) return;
     setDownloading(true);
-
-    const content = generatePDFContent(data);
-    const monthLabel = new Date(month + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }).replace(' ', '-');
-    const filename = `VEMIO-${reportType}-${monthLabel}.pdf`;
-
+    const content     = generatePDFContent(data);
+    const monthLabel  = new Date(month + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }).replace(' ', '-');
+    const filename    = `VEMIO-${reportType}-${monthLabel}.pdf`;
     const printWindow = window.open('', '_blank');
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>${filename}</title>
-        <style>
-          @page { size: A4; margin: 20mm; }
-          body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1E293B; margin: 0; padding: 0; }
-          table { page-break-inside: auto; }
-          tr { page-break-inside: avoid; }
-        </style>
-      </head>
-      <body>${content}</body>
-      </html>
-    `);
+    printWindow.document.write(`<!DOCTYPE html><html><head><title>${filename}</title><style>@page{size:A4;margin:20mm}body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1E293B;margin:0;padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}</style></head><body>${content}</body></html>`);
     printWindow.document.close();
-
-    setTimeout(() => {
-      printWindow.print();
-      setDownloading(false);
-    }, 500);
+    setTimeout(() => { printWindow.print(); setDownloading(false); }, 500);
   }
 
   return (
-    <motion.div variants={stagger} initial="hidden" animate="visible" className="space-y-6">
-      <motion.div variants={fadeUp}>
-        <h1 className="text-xl font-bold text-vemio-text">Reports</h1>
-        <p className="text-sm text-vemio-text-muted mt-0.5">Generate and download monthly PDF reports</p>
-      </motion.div>
-
-      {/* Report Selector */}
-      <motion.div variants={fadeUp} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {REPORT_TYPES.map(rt => {
-          const Icon = rt.icon;
-          const isActive = reportType === rt.key;
-          return (
-            <button
-              key={rt.key}
-              onClick={() => { setReportType(rt.key); setData(null); }}
-              className="rounded-xl p-4 text-left transition-all"
-              style={{
-                background: isActive ? 'rgba(245,158,11,0.06)' : 'var(--color-vemio-surface)',
-                border: isActive ? '1px solid rgba(245,158,11,0.25)' : '1px solid var(--color-vemio-border)',
-              }}
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <Icon className={`w-4 h-4 ${isActive ? 'text-vemio-amber' : 'text-vemio-text-dim'}`} />
-                <span className={`text-sm font-semibold ${isActive ? 'text-vemio-amber' : 'text-vemio-text'}`}>
-                  {rt.label}
-                </span>
-              </div>
-              <p className="text-xs text-vemio-text-dim">{rt.desc}</p>
-            </button>
-          );
-        })}
-      </motion.div>
-
-      {/* Month Selector + Generate */}
-      <motion.div variants={fadeUp} className="flex items-center gap-3">
-        <select
-          value={month}
-          onChange={e => { setMonth(e.target.value); setData(null); }}
-          className="px-3 py-2 rounded-lg text-sm text-vemio-text"
-          style={{
-            background: 'var(--color-vemio-surface)',
-            border: '1px solid var(--color-vemio-border)',
-          }}
-        >
-          {months.map(m => (
-            <option key={m.value} value={m.value}>{m.label}</option>
-          ))}
-        </select>
-
-        <button
-          onClick={generateReport}
-          disabled={loading}
-          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
-          style={{
-            background: 'var(--color-vemio-amber)',
-            color: '#0F172A',
-          }}
-        >
-          {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-          Generate Report
-        </button>
-      </motion.div>
-
-      {/* Report Preview */}
-      {data && (
+    <>
+      <motion.div variants={stagger} initial="hidden" animate="visible" className="reports-root">
+        {/* Header */}
         <motion.div variants={fadeUp}>
-          <ReportPreview data={data} onDownload={downloadPDF} downloading={downloading} />
+          <h1 className="reports-title">Reports</h1>
+          <p className="reports-subtitle">Generate and download monthly PDF reports</p>
         </motion.div>
-      )}
-    </motion.div>
+
+        {/* Report type selector */}
+        <motion.div variants={fadeUp} className="reports-type-grid">
+          {REPORT_TYPES.map(rt => {
+            const Icon     = rt.icon;
+            const isActive = reportType === rt.key;
+            return (
+              <button
+                key={rt.key}
+                onClick={() => { setReportType(rt.key); setData(null); }}
+                className={`reports-type-card ${isActive ? 'reports-type-card--active' : ''}`}
+              >
+                <div className="reports-type-card-top">
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-vemio-amber' : 'text-vemio-text-dim'}`} />
+                  <span className={`reports-type-label ${isActive ? 'text-vemio-amber' : 'text-vemio-text'}`}>
+                    {rt.label}
+                  </span>
+                </div>
+                <p className="reports-type-desc">{rt.desc}</p>
+              </button>
+            );
+          })}
+        </motion.div>
+
+        {/* Month + Generate — stacks on mobile */}
+        <motion.div variants={fadeUp} className="reports-controls">
+          <select
+            value={month}
+            onChange={e => { setMonth(e.target.value); setData(null); }}
+            className="reports-month-select"
+          >
+            {months.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+
+          <button onClick={generateReport} disabled={loading} className="reports-generate-btn">
+            {loading
+              ? <RefreshCw className="w-4 h-4 animate-spin" />
+              : <FileText  className="w-4 h-4" />}
+            Generate Report
+          </button>
+        </motion.div>
+
+        {/* Preview */}
+        {data && (
+          <motion.div variants={fadeUp} className="reports-preview-wrap">
+            <ReportPreview data={data} onDownload={downloadPDF} downloading={downloading} />
+          </motion.div>
+        )}
+      </motion.div>
+
+      <style>{`
+        .reports-root {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+          max-width: 1400px;
+        }
+        @media (max-width: 767px) { .reports-root { gap: 14px; } }
+
+        .reports-title    { font-size: 18px; font-weight: 700; color: var(--vemio-text); margin: 0; }
+        .reports-subtitle { font-size: 13px; color: var(--vemio-text-muted); margin: 3px 0 0; }
+
+        /* Type cards: 3-col desktop, 1-col mobile (they're wide enough at 1-col) */
+        .reports-type-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 12px;
+        }
+        @media (max-width: 767px) {
+          .reports-type-grid { grid-template-columns: 1fr; gap: 8px; }
+        }
+
+        .reports-type-card {
+          border-radius: 12px;
+          padding: 14px;
+          text-align: left;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+        }
+        .reports-type-card--active {
+          background: rgba(245,158,11,0.06);
+          border-color: rgba(245,158,11,0.25);
+        }
+        .reports-type-card-top {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 6px;
+        }
+        .reports-type-label {
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .reports-type-desc {
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+          line-height: 1.4;
+          margin: 0;
+        }
+
+        /* Controls: side by side, wraps to column on mobile */
+        .reports-controls {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .reports-month-select {
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-size: 13px;
+          color: var(--vemio-text);
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+          cursor: pointer;
+          /* Full width on mobile */
+        }
+        @media (max-width: 479px) {
+          .reports-month-select { width: 100%; }
+        }
+
+        .reports-generate-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 18px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: opacity 0.15s;
+          background: var(--color-vemio-amber);
+          color: #0F172A;
+          border: none;
+          white-space: nowrap;
+        }
+        .reports-generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        @media (max-width: 479px) {
+          .reports-generate-btn { width: 100%; justify-content: center; }
+        }
+
+        /* Preview */
+        .reports-preview-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .report-preview-scroll {
+          border-radius: 12px;
+          overflow: hidden;
+          border: 1px solid var(--color-vemio-border);
+          background: #fff;
+          /* Tighter max height on mobile, taller on desktop */
+          max-height: 480px;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        @media (min-width: 768px) {
+          .report-preview-scroll { max-height: 600px; }
+        }
+        .report-preview-inner {
+          padding: 28px;
+          font-family: 'Segoe UI', Arial, sans-serif;
+          font-size: 12px;
+          color: #1E293B;
+        }
+        @media (max-width: 479px) {
+          .report-preview-inner { padding: 16px; }
+        }
+
+        .report-download-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          background: var(--color-vemio-amber);
+          color: #0F172A;
+          border: none;
+          transition: opacity 0.15s;
+          width: fit-content;
+        }
+        .report-download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        @media (max-width: 479px) {
+          .report-download-btn { width: 100%; justify-content: center; }
+        }
+      `}</style>
+    </>
   );
 }

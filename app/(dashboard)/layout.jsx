@@ -1,54 +1,122 @@
-'use client';
+// app/(dashboard)/layout.jsx
+"use client";
 
-import { useSession } from 'next-auth/react';
-import { useRouter, usePathname } from 'next/navigation';
-import { useEffect } from 'react';
-import AuthProvider from '@/app/components/auth/AuthProvider';
-import Sidebar from '@/app/components/layout/Sidebar';
-import DashboardHeader from '@/app/components/layout/DashboardHeader';
-import { Loader2 } from 'lucide-react';
-
-function DashboardShell({ children }) {
-  const { data: session, status } = useSession();
-  const router = useRouter();
-  const pathname = usePathname();
-
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/login');
-    }
-  }, [status, router]);
-
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-vemio-bg">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 text-vemio-amber animate-spin" />
-          <p className="text-vemio-text-muted text-sm">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!session) return null;
-
-  return (
-    <div className="min-h-screen flex bg-vemio-bg">
-      <Sidebar currentPath={pathname} />
-      <div className="flex-1 flex flex-col min-w-0 ml-[260px]">
-        <DashboardHeader session={session} />
-        <main className="flex-1 p-6 overflow-auto">
-          {children}
-        </main>
-      </div>
-    </div>
-  );
-}
+import { useSidebar } from "@/hooks/useSidebar";
+import Sidebar from "@/components/Sidebar";
+import TopBar from "@/components/TopBar";
 
 export default function DashboardLayout({ children }) {
+  const sidebar = useSidebar();
+
   return (
-    <AuthProvider>
-      <DashboardShell>{children}</DashboardShell>
-    </AuthProvider>
+    <div className="vemio-layout">
+      {/* ── Backdrop (mobile drawer overlay) ── */}
+      {sidebar.isMobile && sidebar.drawerOpen && (
+        <div
+          className="vemio-backdrop"
+          onClick={sidebar.closeDrawer}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* ── Sidebar ── */}
+      <aside
+        className="vemio-sidebar"
+        data-mode={sidebar.mode}
+        data-open={sidebar.drawerOpen}
+        style={{ width: sidebar.sidebarWidth }}
+      >
+        <Sidebar
+          isRail={sidebar.isRail}
+          onNavigate={sidebar.isMobile ? sidebar.closeDrawer : undefined}
+        />
+      </aside>
+
+      {/* ── Main area ── */}
+      <div
+        className="vemio-main"
+        style={{
+          marginLeft:
+            sidebar.isMobile ? 0 : sidebar.sidebarWidth,
+        }}
+      >
+        <TopBar onMenuClick={sidebar.toggleDrawer} isMobile={sidebar.isMobile} />
+        <main className="vemio-content">{children}</main>
+      </div>
+
+      <style>{`
+        .vemio-layout {
+          display: flex;
+          min-height: 100vh;
+          background: var(--vemio-bg);
+          position: relative;
+        }
+
+        /* Backdrop */
+        .vemio-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.6);
+          backdrop-filter: blur(2px);
+          z-index: 40;
+        }
+
+        /* Sidebar */
+        .vemio-sidebar {
+          position: fixed;
+          top: 0;
+          left: 0;
+          height: 100vh;
+          background: var(--vemio-surface);
+          border-right: 1px solid var(--vemio-border);
+          z-index: 50;
+          overflow: hidden;
+          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                      width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+          flex-shrink: 0;
+        }
+
+        /* Mobile: hidden by default, slide in when open */
+        .vemio-sidebar[data-mode="mobile"] {
+          transform: translateX(-100%);
+        }
+        .vemio-sidebar[data-mode="mobile"][data-open="true"] {
+          transform: translateX(0);
+        }
+
+        /* Tablet / Desktop: always visible */
+        .vemio-sidebar[data-mode="tablet"],
+        .vemio-sidebar[data-mode="desktop"] {
+          transform: translateX(0);
+        }
+
+        /* Main */
+        .vemio-main {
+          flex: 1;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .vemio-content {
+          flex: 1;
+          padding: 24px;
+          overflow-x: hidden;
+        }
+
+        @media (max-width: 767px) {
+          .vemio-content {
+            padding: 16px 12px;
+          }
+        }
+
+        @media (min-width: 768px) and (max-width: 1023px) {
+          .vemio-content {
+            padding: 20px 16px;
+          }
+        }
+      `}</style>
+    </div>
   );
 }

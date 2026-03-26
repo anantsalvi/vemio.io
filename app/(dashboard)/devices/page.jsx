@@ -4,245 +4,522 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
-  Server, Search, Filter, RefreshCw, ChevronLeft, ChevronRight,
-  Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu, AlertTriangle,
+  Server, Search, RefreshCw, ChevronLeft, ChevronRight,
+  Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
 } from 'lucide-react';
 
 const STATUS_CONFIG = {
-  up: { label: 'Online', color: 'var(--color-status-up)', bg: 'rgba(34,197,94,0.1)' },
-  down: { label: 'Offline', color: 'var(--color-status-down)', bg: 'rgba(239,68,68,0.1)' },
-  degraded: { label: 'Degraded', color: 'var(--color-status-degraded)', bg: 'rgba(245,158,11,0.1)' },
-  unknown: { label: 'Unknown', color: 'var(--color-status-unknown)', bg: 'rgba(107,114,128,0.1)' },
+  up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'   },
+  down:     { label: 'Offline',  color: 'var(--color-status-down)',     bg: 'rgba(239,68,68,0.1)'   },
+  degraded: { label: 'Degraded', color: 'var(--color-status-degraded)', bg: 'rgba(245,158,11,0.1)'  },
+  unknown:  { label: 'Unknown',  color: 'var(--color-status-unknown)',  bg: 'rgba(107,114,128,0.1)' },
 };
 
 const TYPE_ICONS = {
-  firewall: Shield,
-  core_switch: MonitorSpeaker,
+  firewall:      Shield,
+  core_switch:   MonitorSpeaker,
   access_switch: MonitorSpeaker,
-  access_point: Wifi,
-  server: Cpu,
-  nas: HardDrive,
-  ups: HardDrive,
-  router: Radio,
-  other: Server,
+  access_point:  Wifi,
+  server:        Cpu,
+  nas:           HardDrive,
+  ups:           HardDrive,
+  router:        Radio,
+  other:         Server,
 };
 
 const fadeUp = {
-  hidden: { opacity: 0, y: 16 },
+  hidden:  { opacity: 0, y: 16 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } },
 };
 
+function timeAgo(date) {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 export default function DevicesPage() {
   const router = useRouter();
-  const [data, setData] = useState(null);
+  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ type: '', status: '', search: '' });
-  const [page, setPage] = useState(1);
+  const [page, setPage]       = useState(1);
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (filters.type) params.set('type', filters.type);
+      if (filters.type)   params.set('type',   filters.type);
       if (filters.status) params.set('status', filters.status);
       if (filters.search) params.set('search', filters.search);
-      params.set('page', page.toString());
+      params.set('page',  page.toString());
       params.set('limit', '25');
-
       const res = await fetch(`/api/devices?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
-    } catch (err) {
-      console.error('Failed to fetch devices:', err);
-    } finally {
-      setLoading(false);
-    }
+    } catch (err) { console.error('Failed to fetch devices:', err); }
+    finally { setLoading(false); }
   }, [filters, page]);
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
 
-  const summary = data?.summary;
-  const devices = data?.devices || [];
+  const summary    = data?.summary;
+  const devices    = data?.devices    || [];
   const pagination = data?.pagination;
 
   return (
-    <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.06 } } }} className="space-y-5">
-      {/* Header */}
-      <motion.div variants={fadeUp} className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-vemio-text">Device Health</h1>
-          <p className="text-sm text-vemio-text-muted mt-0.5">
-            {summary ? `${summary.total} devices across your network` : 'Loading...'}
-          </p>
-        </div>
-        <button onClick={fetchDevices} className="p-2 rounded-lg hover:bg-vemio-surface-hover transition-colors">
-          <RefreshCw className={`w-4 h-4 text-vemio-text-muted ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </motion.div>
-
-      {/* Status summary pills */}
-      {summary && (
-        <motion.div variants={fadeUp} className="flex gap-2 flex-wrap">
-          {Object.entries(STATUS_CONFIG).map(([key, cfg]) => {
-            const count = summary[key] || 0;
-            const isActive = filters.status === key;
-            return (
-              <button
-                key={key}
-                onClick={() => { setFilters(f => ({ ...f, status: isActive ? '' : key })); setPage(1); }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
-                style={{
-                  background: isActive ? cfg.bg : 'var(--color-vemio-surface)',
-                  border: `1px solid ${isActive ? cfg.color + '40' : 'var(--color-vemio-border)'}`,
-                  color: isActive ? cfg.color : 'var(--color-vemio-text-muted)',
-                }}
-              >
-                <span className="w-2 h-2 rounded-full" style={{ background: cfg.color }} />
-                {cfg.label}: {count}
-              </button>
-            );
-          })}
-        </motion.div>
-      )}
-
-      {/* Search + type filter */}
-      <motion.div variants={fadeUp} className="flex gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-vemio-text-dim" />
-          <input
-            type="text"
-            placeholder="Search by name, IP, or manufacturer..."
-            value={filters.search}
-            onChange={(e) => { setFilters(f => ({ ...f, search: e.target.value })); setPage(1); }}
-            className="w-full pl-9 pr-4 py-2.5 rounded-lg text-sm"
-            style={{
-              background: 'var(--color-vemio-surface)',
-              border: '1px solid var(--color-vemio-border)',
-              color: 'var(--color-vemio-text)',
-              outline: 'none',
-            }}
-          />
-        </div>
-        <select
-          value={filters.type}
-          onChange={(e) => { setFilters(f => ({ ...f, type: e.target.value })); setPage(1); }}
-          className="px-4 py-2.5 rounded-lg text-sm appearance-none cursor-pointer"
-          style={{
-            background: 'var(--color-vemio-surface)',
-            border: '1px solid var(--color-vemio-border)',
-            color: 'var(--color-vemio-text)',
-            outline: 'none',
-            minWidth: '160px',
-          }}
-        >
-          <option value="">All types</option>
-          <option value="firewall">Firewalls</option>
-          <option value="core_switch">Core Switches</option>
-          <option value="access_switch">Access Switches</option>
-          <option value="access_point">Access Points</option>
-          <option value="router">Routers</option>
-          <option value="server">Servers</option>
-          <option value="nas">NAS/Storage</option>
-          <option value="ups">UPS</option>
-          <option value="other">Other</option>
-        </select>
-      </motion.div>
-
-      {/* Device table */}
+    <>
       <motion.div
-        variants={fadeUp}
-        className="rounded-2xl overflow-hidden"
-        style={{ background: 'var(--color-vemio-surface)', border: '1px solid var(--color-vemio-border)' }}
+        initial="hidden"
+        animate="visible"
+        variants={{ visible: { transition: { staggerChildren: 0.06 } } }}
+        className="dv-root"
       >
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--color-vemio-border)' }}>
-                {['Status', 'Device Name', 'Type', 'IP Address', 'Make / Model', 'Site', 'Last Seen'].map(h => (
-                  <th key={h} className="text-left px-4 py-3 text-xs font-medium text-vemio-text-dim uppercase tracking-wider">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {devices.length > 0 ? devices.map((device) => {
-                const statusCfg = STATUS_CONFIG[device.status] || STATUS_CONFIG.unknown;
-                const TypeIcon = TYPE_ICONS[device.type] || Server;
-                return (
-                  <tr
-                    key={device.id}
-                    onClick={() => router.push(`/devices/${device.id}`)}
-                    className="cursor-pointer transition-colors hover:bg-vemio-surface-hover"
-                    style={{ borderBottom: '1px solid var(--color-vemio-border-subtle)' }}
-                  >
-                    <td className="px-4 py-3">
-                      <span
-                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider"
-                        style={{ background: statusCfg.bg, color: statusCfg.color }}
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${device.status === 'down' ? 'animate-pulse-dot' : ''}`}
-                          style={{ background: statusCfg.color }} />
-                        {statusCfg.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <TypeIcon className="w-4 h-4 text-vemio-text-dim shrink-0" />
-                        <span className="font-medium text-vemio-text truncate max-w-[200px]">{device.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-vemio-text-muted capitalize">{device.type?.replace('_', ' ')}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-vemio-text-muted">{device.ipAddress || '—'}</td>
-                    <td className="px-4 py-3 text-vemio-text-muted">{[device.make, device.model].filter(Boolean).join(' ') || '—'}</td>
-                    <td className="px-4 py-3 text-vemio-text-muted">{device.siteName || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-vemio-text-dim">
-                      {device.lastSeenAt ? timeAgo(new Date(device.lastSeenAt)) : '—'}
+        {/* ── Header ── */}
+        <motion.div variants={fadeUp} className="dv-header">
+          <div>
+            <h1 className="dv-title">Device Health</h1>
+            <p className="dv-subtitle">
+              {summary ? `${summary.total} devices across your network` : 'Loading…'}
+            </p>
+          </div>
+          <button onClick={fetchDevices} className="dv-refresh-btn" aria-label="Refresh">
+            <RefreshCw className={`w-4 h-4 text-vemio-text-muted ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </motion.div>
+
+        {/* ── Status pills — scrollable row on mobile ── */}
+        {summary && (
+          <motion.div variants={fadeUp} className="dv-pills">
+            {Object.entries(STATUS_CONFIG).map(([key, cfg]) => {
+              const count    = summary[key] || 0;
+              const isActive = filters.status === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => { setFilters(f => ({ ...f, status: isActive ? '' : key })); setPage(1); }}
+                  className="dv-pill"
+                  style={{
+                    background:  isActive ? cfg.bg                        : 'var(--color-vemio-surface)',
+                    border:      `1px solid ${isActive ? cfg.color + '40' : 'var(--color-vemio-border)'}`,
+                    color:       isActive ? cfg.color                      : 'var(--color-vemio-text-muted)',
+                  }}
+                >
+                  <span className="dv-pill-dot" style={{ background: cfg.color }} />
+                  {cfg.label}: {count}
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+
+        {/* ── Search + type filter ── */}
+        <motion.div variants={fadeUp} className="dv-filters">
+          <div className="dv-search-wrap">
+            <Search className="dv-search-icon" />
+            <input
+              type="text"
+              placeholder="Search by name, IP, or manufacturer…"
+              value={filters.search}
+              onChange={e => { setFilters(f => ({ ...f, search: e.target.value })); setPage(1); }}
+              className="dv-search-input"
+            />
+          </div>
+          <select
+            value={filters.type}
+            onChange={e => { setFilters(f => ({ ...f, type: e.target.value })); setPage(1); }}
+            className="dv-type-select"
+          >
+            <option value="">All types</option>
+            <option value="firewall">Firewalls</option>
+            <option value="core_switch">Core Switches</option>
+            <option value="access_switch">Access Switches</option>
+            <option value="access_point">Access Points</option>
+            <option value="router">Routers</option>
+            <option value="server">Servers</option>
+            <option value="nas">NAS / Storage</option>
+            <option value="ups">UPS</option>
+            <option value="other">Other</option>
+          </select>
+        </motion.div>
+
+        {/* ── Device table ── */}
+        <motion.div variants={fadeUp} className="dv-table-panel">
+          <div className="dv-table-scroll">
+            <table className="dv-table">
+              <thead>
+                <tr className="dv-thead-row">
+                  <th className="dv-th">Status</th>
+                  <th className="dv-th dv-th--wide">Device Name</th>
+                  <th className="dv-th dv-th--md-only">Type</th>
+                  <th className="dv-th dv-th--md-only">IP Address</th>
+                  <th className="dv-th dv-th--lg-only">Make / Model</th>
+                  <th className="dv-th dv-th--lg-only">Site</th>
+                  <th className="dv-th dv-th--sm-only">Last Seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.length > 0 ? devices.map(device => {
+                  const statusCfg = STATUS_CONFIG[device.status] || STATUS_CONFIG.unknown;
+                  const TypeIcon  = TYPE_ICONS[device.type] || Server;
+                  return (
+                    <tr
+                      key={device.id}
+                      onClick={() => router.push(`/devices/${device.id}`)}
+                      className="dv-tr"
+                    >
+                      {/* Status */}
+                      <td className="dv-td">
+                        <span className="dv-status-badge"
+                          style={{ background: statusCfg.bg, color: statusCfg.color }}>
+                          <span
+                            className={`dv-status-dot ${device.status === 'down' ? 'dv-status-dot--pulse' : ''}`}
+                            style={{ background: statusCfg.color }}
+                          />
+                          {statusCfg.label}
+                        </span>
+                      </td>
+
+                      {/* Name */}
+                      <td className="dv-td dv-td--wide">
+                        <div className="dv-name-cell">
+                          <TypeIcon className="dv-type-icon" />
+                          <span className="dv-name">{device.name}</span>
+                        </div>
+                        {/* On mobile, show type + IP below name */}
+                        <div className="dv-name-sub">
+                          <span>{device.type?.replace('_', ' ')}</span>
+                          {device.ipAddress && <span className="dv-name-ip">{device.ipAddress}</span>}
+                        </div>
+                      </td>
+
+                      {/* Type — hidden on mobile */}
+                      <td className="dv-td dv-td--md-only dv-td--muted dv-td--capitalize">
+                        {device.type?.replace('_', ' ')}
+                      </td>
+
+                      {/* IP — hidden on mobile */}
+                      <td className="dv-td dv-td--md-only dv-td--mono">{device.ipAddress || '—'}</td>
+
+                      {/* Make/Model — hidden below 1024px */}
+                      <td className="dv-td dv-td--lg-only dv-td--muted">
+                        {[device.make, device.model].filter(Boolean).join(' ') || '—'}
+                      </td>
+
+                      {/* Site — hidden below 1024px */}
+                      <td className="dv-td dv-td--lg-only dv-td--muted">{device.siteName || '—'}</td>
+
+                      {/* Last Seen — hidden on very small screens */}
+                      <td className="dv-td dv-td--sm-only dv-td--dim">
+                        {device.lastSeenAt ? timeAgo(new Date(device.lastSeenAt)) : '—'}
+                      </td>
+                    </tr>
+                  );
+                }) : (
+                  <tr>
+                    <td colSpan={7} className="dv-empty">
+                      {loading ? 'Loading devices…' : 'No devices found matching your filters'}
                     </td>
                   </tr>
-                );
-              }) : (
-                <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-vemio-text-muted">
-                    {loading ? 'Loading devices...' : 'No devices found matching your filters'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {pagination && pagination.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: '1px solid var(--color-vemio-border)' }}>
-            <p className="text-xs text-vemio-text-dim">
-              Showing {(pagination.page - 1) * pagination.limit + 1}–{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
-            </p>
-            <div className="flex gap-1">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page === 1}
-                className="p-1.5 rounded-lg hover:bg-vemio-surface-hover disabled:opacity-30 transition-colors"
-              >
-                <ChevronLeft className="w-4 h-4 text-vemio-text-muted" />
-              </button>
-              <button
-                onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
-                disabled={page === pagination.totalPages}
-                className="p-1.5 rounded-lg hover:bg-vemio-surface-hover disabled:opacity-30 transition-colors"
-              >
-                <ChevronRight className="w-4 h-4 text-vemio-text-muted" />
-              </button>
-            </div>
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
-      </motion.div>
-    </motion.div>
-  );
-}
 
-function timeAgo(date) {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+          {/* Pagination */}
+          {pagination && pagination.totalPages > 1 && (
+            <div className="dv-pagination">
+              <p className="dv-pagination-info">
+                {(pagination.page - 1) * pagination.limit + 1}–
+                {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+              </p>
+              <div className="dv-pagination-btns">
+                <button onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1} className="dv-page-btn">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+                  disabled={page === pagination.totalPages} className="dv-page-btn">
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+
+      <style>{`
+        .dv-root {
+          display: flex;
+          flex-direction: column;
+          gap: 18px;
+          max-width: 1400px;
+        }
+        @media (max-width: 767px) { .dv-root { gap: 12px; } }
+
+        /* Header */
+        .dv-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .dv-title    { font-size: 18px; font-weight: 700; color: var(--vemio-text); margin: 0; }
+        .dv-subtitle { font-size: 13px; color: var(--vemio-text-muted); margin: 3px 0 0; }
+        .dv-refresh-btn {
+          padding: 8px;
+          border-radius: 8px;
+          border: 1px solid var(--color-vemio-border);
+          background: var(--color-vemio-surface);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          flex-shrink: 0;
+          transition: background 0.15s;
+          margin-top: 2px;
+        }
+        .dv-refresh-btn:hover { background: var(--color-vemio-surface-raised); }
+
+        /* Pills — overflow scroll on mobile so they never wrap to 2 rows */
+        .dv-pills {
+          display: flex;
+          gap: 8px;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          padding-bottom: 2px;
+          flex-wrap: nowrap;
+        }
+        .dv-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background 0.15s, border-color 0.15s, color 0.15s;
+          flex-shrink: 0;
+          min-height: 32px;
+        }
+        .dv-pill-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+
+        /* Search + filter row: search fills space, select fixed width */
+        .dv-filters {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+        }
+        .dv-search-wrap {
+          flex: 1;
+          position: relative;
+          min-width: 0;
+        }
+        .dv-search-icon {
+          position: absolute;
+          left: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 16px;
+          height: 16px;
+          color: var(--color-vemio-text-dim);
+          pointer-events: none;
+        }
+        .dv-search-input {
+          width: 100%;
+          padding: 9px 12px 9px 34px;
+          font-size: 13px;
+          border-radius: 8px;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+          color: var(--color-vemio-text);
+          outline: none;
+          transition: border-color 0.15s;
+        }
+        .dv-search-input::placeholder { color: rgba(148,163,184,0.5); }
+        .dv-search-input:focus { border-color: rgba(245,158,11,0.3); }
+
+        .dv-type-select {
+          padding: 9px 12px;
+          border-radius: 8px;
+          font-size: 13px;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+          color: var(--color-vemio-text);
+          outline: none;
+          cursor: pointer;
+          flex-shrink: 0;
+          /* Fixed width on desktop, shrinks on mobile */
+          width: 160px;
+        }
+        @media (max-width: 479px) {
+          .dv-type-select { width: 120px; font-size: 12px; }
+        }
+
+        /* Table panel */
+        .dv-table-panel {
+          border-radius: 16px;
+          overflow: hidden;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+        }
+        .dv-table-scroll {
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        .dv-table {
+          width: 100%;
+          border-collapse: collapse;
+          /* min-width keeps the table readable when scrolled on mobile */
+          min-width: 420px;
+        }
+        .dv-thead-row { border-bottom: 1px solid var(--color-vemio-border); }
+        .dv-th {
+          padding: 10px 14px;
+          text-align: left;
+          font-size: 10px;
+          font-weight: 500;
+          color: var(--color-vemio-text-dim);
+          text-transform: uppercase;
+          letter-spacing: 0.07em;
+          white-space: nowrap;
+        }
+
+        /* Column visibility */
+        .dv-th--md-only, .dv-td--md-only { display: none; }
+        @media (min-width: 640px) {
+          .dv-th--md-only, .dv-td--md-only { display: table-cell; }
+        }
+        .dv-th--lg-only, .dv-td--lg-only { display: none; }
+        @media (min-width: 1024px) {
+          .dv-th--lg-only, .dv-td--lg-only { display: table-cell; }
+        }
+        .dv-th--sm-only, .dv-td--sm-only { display: none; }
+        @media (min-width: 480px) {
+          .dv-th--sm-only, .dv-td--sm-only { display: table-cell; }
+        }
+
+        .dv-tr {
+          border-bottom: 1px solid rgba(255,255,255,0.03);
+          cursor: pointer;
+          transition: background 0.12s;
+        }
+        .dv-tr:hover { background: rgba(255,255,255,0.025); }
+
+        .dv-td {
+          padding: 10px 14px;
+          font-size: 13px;
+          vertical-align: middle;
+        }
+        .dv-td--muted     { color: var(--vemio-text-muted); font-size: 12px; }
+        .dv-td--mono      { font-family: monospace; font-size: 11px; color: var(--vemio-text-muted); }
+        .dv-td--dim       { font-size: 11px; color: var(--color-vemio-text-dim); }
+        .dv-td--capitalize { text-transform: capitalize; }
+
+        /* Status badge */
+        .dv-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 2px 8px;
+          border-radius: 20px;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          white-space: nowrap;
+        }
+        .dv-status-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .dv-status-dot--pulse {
+          animation: dv-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes dv-pulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.35; }
+        }
+
+        /* Name cell */
+        .dv-td--wide { max-width: 0; } /* forces truncation inside flex */
+        .dv-name-cell {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .dv-type-icon {
+          width: 15px;
+          height: 15px;
+          color: var(--color-vemio-text-dim);
+          flex-shrink: 0;
+        }
+        .dv-name {
+          font-weight: 500;
+          color: var(--vemio-text);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        /* Mobile sub-line: type + IP shown below device name on small screens */
+        .dv-name-sub {
+          display: none;
+          gap: 8px;
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+          margin-top: 2px;
+          padding-left: 23px; /* align with name after icon */
+        }
+        @media (max-width: 639px) {
+          .dv-name-sub { display: flex; flex-wrap: wrap; }
+        }
+        .dv-name-ip { font-family: monospace; }
+
+        .dv-empty {
+          padding: 48px 14px;
+          text-align: center;
+          font-size: 13px;
+          color: var(--vemio-text-muted);
+        }
+
+        /* Pagination */
+        .dv-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          border-top: 1px solid var(--color-vemio-border);
+        }
+        .dv-pagination-info {
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+        }
+        .dv-pagination-btns { display: flex; gap: 4px; }
+        .dv-page-btn {
+          padding: 6px;
+          border-radius: 6px;
+          background: transparent;
+          border: none;
+          color: var(--vemio-text-muted);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          transition: background 0.12s;
+        }
+        .dv-page-btn:hover    { background: rgba(255,255,255,0.05); }
+        .dv-page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+      `}</style>
+    </>
+  );
 }

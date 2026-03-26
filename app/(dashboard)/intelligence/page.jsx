@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { RefreshCw, TrendingDown, TrendingUp } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { RefreshCw, TrendingDown, TrendingUp, HelpCircle, X, Eye, Shield, Cpu, Settings, Bell, Clock } from 'lucide-react';
 
 const stagger = {
   hidden: {},
@@ -23,6 +23,158 @@ function getScoreLabel(s) {
   if (s >= 70) return 'Moderate';
   if (s >= 50) return 'At Risk';
   return 'Critical';
+}
+
+// ── Dimension Explanations ───────────────────────────────────────────────────
+
+const DIMENSION_EXPLAIN = {
+  visibility_coverage: {
+    icon: Eye,
+    title: 'Visibility Coverage',
+    what: 'Measures how many of your monitored devices have a known status (online, offline, or degraded) versus unknown.',
+    how: 'Devices with active status reporting divided by total monitored devices.',
+    improve: [
+      'Ensure SNMP or agent-based monitoring is enabled on all infrastructure devices',
+      'Investigate devices stuck in "unknown" status — they may have lost connectivity to the monitoring collector',
+      'Add new devices to the monitored inventory as they are deployed',
+    ],
+  },
+  redundancy_readiness: {
+    icon: Shield,
+    title: 'Redundancy Readiness',
+    what: 'Evaluates whether your critical infrastructure devices (firewalls, core switches, routers) have high-availability or failover configurations.',
+    how: 'Critical devices with redundancy confirmed divided by critical devices assessed.',
+    improve: [
+      'Deploy HA pairs for firewalls and core switches',
+      'Document redundancy status for all critical devices in VEMIO',
+      'Consider dual-WAN or SD-WAN for internet breakout redundancy',
+    ],
+  },
+  firmware_currency: {
+    icon: Cpu,
+    title: 'Firmware Currency',
+    what: 'Tracks whether your devices are running current, vendor-supported firmware versions.',
+    how: 'Devices on current firmware divided by devices with firmware data available.',
+    improve: [
+      'Schedule quarterly firmware review cycles for all managed devices',
+      'Prioritise firmware updates for internet-facing devices (firewalls, routers)',
+      'Track vendor end-of-support dates — devices on unsupported firmware score 0',
+    ],
+  },
+  config_integrity: {
+    icon: Settings,
+    title: 'Configuration Integrity',
+    what: 'Measures whether critical device configurations have been validated (backed up and reviewed) within the last 90 days.',
+    how: 'Critical devices with config validated in the last 90 days divided by total critical devices.',
+    improve: [
+      'Enable automated config backup via Auvik or a config management tool',
+      'Schedule quarterly config reviews for all critical infrastructure',
+      'Document a baseline config for each device type to compare against',
+    ],
+  },
+  alerting_maturity: {
+    icon: Bell,
+    title: 'Alerting Maturity',
+    what: 'Measures the ratio of system-detected (proactive) tickets versus manually created tickets in the last 90 days.',
+    how: 'Tickets created automatically by monitoring divided by total tickets.',
+    improve: [
+      'Configure Auvik alert rules for all critical failure conditions',
+      'Enable VEMIO auto-ticket creation from persistent alerts',
+      'Reduce manual ticket creation by improving monitoring coverage',
+    ],
+  },
+  response_discipline: {
+    icon: Clock,
+    title: 'Response Discipline',
+    what: 'Tracks the percentage of resolved tickets that met their SLA targets in the last 90 days.',
+    how: 'Tickets resolved within SLA divided by total resolved tickets.',
+    improve: [
+      'Review and tighten SLA response and resolution targets',
+      'Implement escalation rules for tickets approaching SLA deadlines',
+      'Analyse SLA misses to identify recurring root causes',
+    ],
+  },
+};
+
+// ── BCS Explanation Panel ────────────────────────────────────────────────────
+
+function BCSExplainPanel({ isOpen, onClose, dims, weights }) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          className="bcs-explain-overflow"
+        >
+          <div className="bcs-explain-panel">
+            <div className="bcs-explain-header">
+              <div>
+                <h3 className="bcs-explain-title">How is the BCS calculated?</h3>
+                <p className="bcs-explain-sub">
+                  The Business Continuity Score is a weighted composite of six infrastructure health dimensions, each scored 0–100.
+                </p>
+              </div>
+              <button onClick={onClose} className="bcs-explain-close" aria-label="Close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bcs-explain-formula">
+              <span className="bcs-explain-formula-label">Composite Score</span>
+              <span className="bcs-explain-formula-eq">
+                = Σ (dimension score × weight%)
+              </span>
+            </div>
+
+            <div className="bcs-explain-grid">
+              {Object.entries(DIMENSION_EXPLAIN).map(([key, info]) => {
+                const Icon = info.icon;
+                const score = dims?.[key] ?? 0;
+                const weight = parseFloat(weights?.[key]) || 0;
+                const color = getScoreColor(score);
+
+                return (
+                  <div key={key} className="bcs-explain-card">
+                    <div className="bcs-explain-card-header">
+                      <div className="bcs-explain-icon-wrap" style={{ background: `${color}15` }}>
+                        <Icon className="w-4 h-4" style={{ color }} />
+                      </div>
+                      <div className="bcs-explain-card-title-group">
+                        <span className="bcs-explain-card-title">{info.title}</span>
+                        <span className="bcs-explain-card-meta">
+                          <span className="bcs-explain-card-score" style={{ color }}>{score.toFixed(1)}</span>
+                          <span className="bcs-explain-card-weight">{weight}% weight</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="bcs-explain-what">{info.what}</p>
+
+                    <div className="bcs-explain-how">
+                      <span className="bcs-explain-how-label">Calculation</span>
+                      <span className="bcs-explain-how-text">{info.how}</span>
+                    </div>
+
+                    <div className="bcs-explain-improve">
+                      <span className="bcs-explain-improve-label">How to improve</span>
+                      <ul className="bcs-explain-improve-list">
+                        {info.improve.map((tip, i) => (
+                          <li key={i} className="bcs-explain-improve-item">{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
 }
 
 // ── BCS Gauge ────────────────────────────────────────────────────────────────
@@ -171,9 +323,10 @@ const DIMENSION_META = [
 ];
 
 export default function IntelligencePage() {
-  const [data, setData]     = useState(null);
+  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
-  const [range, setRange]   = useState('90d');
+  const [range, setRange]     = useState('90d');
+  const [showExplain, setShowExplain] = useState(false);
 
   useEffect(() => {
     async function fetchBCS() {
@@ -214,17 +367,35 @@ export default function IntelligencePage() {
             <h1 className="intel-title">Business Continuity Score</h1>
             <p className="intel-subtitle">Infrastructure resilience across six dimensions</p>
           </div>
-          {current?.computed_at && (
-            <span className="intel-computed">
-              Computed{' '}
-              {new Date(current.computed_at).toLocaleString('en-IN', {
-                day: 'numeric', month: 'short',
-                hour: '2-digit', minute: '2-digit',
-                timeZone: 'Asia/Kolkata',
-              })}{' '}IST
-            </span>
-          )}
+          <div className="intel-header-right">
+            <button
+              onClick={() => setShowExplain(prev => !prev)}
+              className="intel-explain-btn"
+              aria-label="How is this scored?"
+            >
+              <HelpCircle className="w-4 h-4" />
+              <span className="intel-explain-btn-text">How is this scored?</span>
+            </button>
+            {current?.computed_at && (
+              <span className="intel-computed">
+                Computed{' '}
+                {new Date(current.computed_at).toLocaleString('en-IN', {
+                  day: 'numeric', month: 'short',
+                  hour: '2-digit', minute: '2-digit',
+                  timeZone: 'Asia/Kolkata',
+                })}{' '}IST
+              </span>
+            )}
+          </div>
         </motion.div>
+
+        {/* ── Explanation Panel (toggles) ── */}
+        <BCSExplainPanel
+          isOpen={showExplain}
+          onClose={() => setShowExplain(false)}
+          dims={dims}
+          weights={weights}
+        />
 
         {/* ── Row 1: Gauge + Dimensions ── */}
         <div className="intel-row-1">
@@ -334,15 +505,220 @@ export default function IntelligencePage() {
           color: var(--vemio-text-muted);
           margin: 3px 0 0;
         }
+        .intel-header-right {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .intel-explain-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          color: var(--color-vemio-amber);
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.15);
+          transition: background 0.15s;
+        }
+        .intel-explain-btn:hover {
+          background: rgba(245, 158, 11, 0.14);
+        }
+        @media (max-width: 479px) {
+          .intel-explain-btn-text { display: none; }
+          .intel-explain-btn { padding: 8px; }
+        }
         .intel-computed {
           font-size: 10px;
           color: var(--color-vemio-text-dim);
           text-transform: uppercase;
           letter-spacing: 0.08em;
           white-space: nowrap;
-          margin-top: 4px;
         }
         @media (max-width: 479px) { .intel-computed { display: none; } }
+
+        /* ── Explanation Panel ── */
+        .bcs-explain-overflow {
+          overflow: hidden;
+        }
+        .bcs-explain-panel {
+          border-radius: 16px;
+          padding: 24px;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+        }
+        @media (max-width: 479px) {
+          .bcs-explain-panel { padding: 16px; }
+        }
+        .bcs-explain-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        .bcs-explain-title {
+          font-size: 15px;
+          font-weight: 700;
+          color: var(--color-vemio-text);
+          margin: 0;
+        }
+        .bcs-explain-sub {
+          font-size: 12px;
+          color: var(--color-vemio-text-muted);
+          margin: 4px 0 0;
+          max-width: 540px;
+          line-height: 1.5;
+        }
+        .bcs-explain-close {
+          padding: 6px;
+          border-radius: 6px;
+          border: 1px solid var(--color-vemio-border);
+          background: transparent;
+          color: var(--color-vemio-text-muted);
+          cursor: pointer;
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          transition: background 0.15s;
+        }
+        .bcs-explain-close:hover {
+          background: var(--color-vemio-surface-raised);
+        }
+
+        .bcs-explain-formula {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 14px;
+          border-radius: 8px;
+          background: var(--color-vemio-surface-raised);
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
+        .bcs-explain-formula-label {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--color-vemio-amber);
+        }
+        .bcs-explain-formula-eq {
+          font-size: 12px;
+          color: var(--color-vemio-text-muted);
+          font-family: var(--font-mono);
+        }
+
+        .bcs-explain-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 14px;
+        }
+        @media (max-width: 767px) {
+          .bcs-explain-grid { grid-template-columns: 1fr; }
+        }
+
+        .bcs-explain-card {
+          border-radius: 12px;
+          padding: 16px;
+          background: var(--color-vemio-surface-raised);
+          border: 1px solid var(--color-vemio-border);
+        }
+        .bcs-explain-card-header {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+        .bcs-explain-icon-wrap {
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+        .bcs-explain-card-title-group {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+        .bcs-explain-card-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--color-vemio-text);
+        }
+        .bcs-explain-card-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 2px;
+        }
+        .bcs-explain-card-score {
+          font-size: 12px;
+          font-weight: 700;
+          font-variant-numeric: tabular-nums;
+        }
+        .bcs-explain-card-weight {
+          font-size: 10px;
+          color: var(--color-vemio-text-dim);
+        }
+        .bcs-explain-what {
+          font-size: 12px;
+          color: var(--color-vemio-text-muted);
+          line-height: 1.5;
+          margin: 0 0 10px;
+        }
+        .bcs-explain-how {
+          padding: 8px 10px;
+          border-radius: 6px;
+          background: rgba(20, 184, 166, 0.05);
+          border: 1px solid rgba(20, 184, 166, 0.1);
+          margin-bottom: 10px;
+        }
+        .bcs-explain-how-label {
+          display: block;
+          font-size: 9px;
+          font-weight: 600;
+          color: var(--color-vemio-teal);
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          margin-bottom: 3px;
+        }
+        .bcs-explain-how-text {
+          font-size: 11px;
+          color: var(--color-vemio-text-muted);
+          font-family: var(--font-mono);
+          line-height: 1.4;
+        }
+        .bcs-explain-improve {
+          margin: 0;
+        }
+        .bcs-explain-improve-label {
+          display: block;
+          font-size: 9px;
+          font-weight: 600;
+          color: var(--color-vemio-text-dim);
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          margin-bottom: 6px;
+        }
+        .bcs-explain-improve-list {
+          margin: 0;
+          padding-left: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .bcs-explain-improve-item {
+          font-size: 11px;
+          color: var(--color-vemio-text-muted);
+          line-height: 1.4;
+        }
 
         /* ── Row 1: Gauge (1fr) + Dims (2fr), stacks on tablet/mobile ── */
         .intel-row-1 {
@@ -385,7 +761,6 @@ export default function IntelligencePage() {
           margin: 0 0 12px;
         }
 
-        /* Gauge SVG — constrain width on desktop so it doesn't balloon */
         .bcs-gauge-wrap {
           display: flex;
           flex-direction: column;
@@ -488,7 +863,7 @@ export default function IntelligencePage() {
           text-align: center;
         }
 
-        /* ── Row 3: Focus cards — 3-col desktop, 1-col mobile ── */
+        /* ── Row 3: Focus cards ── */
         .intel-focus-row {
           display: grid;
           grid-template-columns: repeat(3, 1fr);

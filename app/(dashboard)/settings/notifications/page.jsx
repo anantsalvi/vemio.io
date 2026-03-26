@@ -45,8 +45,8 @@ function Toggle({ value, onChange }) {
       style={{ background: value ? 'var(--color-vemio-amber)' : 'var(--color-vemio-border)' }}
     >
       <span
-        className="absolute top-[3px] w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200"
-        style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }}
+className="absolute top-[3px] left-0 w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200"
+style={{ transform: value ? 'translateX(20px)' : 'translateX(3px)' }}
       />
     </button>
   );

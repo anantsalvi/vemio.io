@@ -6,7 +6,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useBranding } from "@/hooks/useBranding";
-import VemioLogo from "@/app/components/VemioLogo";
+import VemioRibbonLogo from "@/app/components/VemioRibbonLogo";
 import ThemeToggle from '@/app/components/ThemeToggle';
 import {
   LayoutDashboard,
@@ -60,7 +60,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
             unoptimized
           />
         ) : (
-          <VemioLogo size={isRail ? 28 : 24} />
+          <VemioRibbonLogo width={isRail ? 28 : 24} />
         )}
         {!isRail && (
           <span className="logo-text">

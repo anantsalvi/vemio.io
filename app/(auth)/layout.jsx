@@ -1,5 +1,5 @@
 export const metadata = {
-  title: 'Sign In | VEMIO™',
+  title: 'Sign In™',
 };
 
 export default function AuthLayout({ children }) {

@@ -654,6 +654,26 @@ export default function NotificationsSettingsPage() {
           color: var(--color-status-up);
           margin: 0;
         }
+          .ns-toggle {
+  width: 42px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.ns-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
       `}</style>
     </>
   );
@@ -672,29 +692,10 @@ function Toggle({ value, onChange }) {
       role="switch"
       aria-checked={value}
     >
-      <span className="ns-toggle-thumb" style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }} />
-      <style>{`
-        .ns-toggle {
-          width: 42px;
-          height: 24px;
-          border-radius: 12px;
-          border: none;
-          cursor: pointer;
-          position: relative;
-          transition: background 0.2s;
-          flex-shrink: 0;
-        }
-        .ns-toggle-thumb {
-          position: absolute;
-          top: 3px;
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #fff;
-          transition: transform 0.2s cubic-bezier(0.4,0,0.2,1);
-          box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-        }
-      `}</style>
+      <span
+        className="ns-toggle-thumb"
+        style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }}
+      />
     </button>
   );
 }

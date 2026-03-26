@@ -16,10 +16,14 @@ export const GET = withAuth(async (req, session, { params }) => {
   const days = Math.min(90, Math.max(1, parseInt(url.searchParams.get('days') || '30')));
 
   try {
-    // Get device info
+    // Get device info — including enrichment fields
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.name, d.device_type, d.current_status, d.make, d.model,
               d.ip_address, d.last_seen_at, d.auvik_device_id,
+              d.serial_number, d.firmware_version,
+              d.eol_date, d.warranty_expiry,
+              d.is_critical, d.has_redundancy,
+              d.firmware_is_current, d.config_last_validated,
               s.name AS site_name
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id
@@ -89,7 +93,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       dailyUptime.push({
         date: dayStart.toISOString().split('T')[0],
         changes: dayHistory.length,
-        // Simplified: if no changes that day, assume status was same as last known
         hasData: dayHistory.length > 0,
       });
     }
@@ -106,6 +109,14 @@ export const GET = withAuth(async (req, session, { params }) => {
         lastSeenAt: device.last_seen_at,
         siteName: device.site_name,
         auvikDeviceId: device.auvik_device_id,
+        serialNumber: device.serial_number,
+        firmwareVersion: device.firmware_version,
+        eolDate: device.eol_date,
+        warrantyExpiry: device.warranty_expiry,
+        isCritical: device.is_critical,
+        hasRedundancy: device.has_redundancy,
+        firmwareIsCurrent: device.firmware_is_current,
+        configLastValidated: device.config_last_validated,
       },
       history: history.map(h => ({
         status: h.status,

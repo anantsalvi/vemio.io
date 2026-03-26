@@ -4,10 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Server, Search, RefreshCw, ChevronLeft, ChevronRight,
+  Server, Search, RefreshCw, ChevronLeft, ChevronRight, Download,
   Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
 } from 'lucide-react';
-import ExportButton from '@/app/components/ExportButton';
 
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'   },
@@ -53,6 +52,8 @@ export default function DevicesPage() {
     search: searchParams.get('search') || '',
   });
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [exporting, setExporting] = useState(false);
 
   // Sync URL when filters change (shallow update, no navigation)
   useEffect(() => {
@@ -73,13 +74,37 @@ export default function DevicesPage() {
       if (filters.status) params.set('status', filters.status);
       if (filters.search) params.set('search', filters.search);
       params.set('page',  page.toString());
-      params.set('limit', '25');
+      params.set('limit', pageSize.toString());
       const res = await fetch(`/api/devices?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (err) { console.error('Failed to fetch devices:', err); }
     finally { setLoading(false); }
-  }, [filters, page]);
+  }, [filters, page, pageSize]);
+
+  // Export all devices (fetches without pagination limit)
+  const handleExportAll = useCallback(async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (filters.type)   params.set('type',   filters.type);
+      if (filters.status) params.set('status', filters.status);
+      if (filters.search) params.set('search', filters.search);
+      params.set('page', '1');
+      params.set('limit', '10000'); // Fetch all
+      const res = await fetch(`/api/devices?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const allData = await res.json();
+      const { downloadCSV } = await import('@/lib/exportCSV');
+      downloadCSV(
+        allData.devices || [],
+        'vemio-devices',
+        ['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt'],
+        { ipAddress: 'IP Address', lastSeenAt: 'Last Seen', siteName: 'Site', make: 'Manufacturer' }
+      );
+    } catch (err) { console.error('Export failed:', err); }
+    finally { setExporting(false); }
+  }, [filters]);
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
 
@@ -104,12 +129,15 @@ export default function DevicesPage() {
             </p>
           </div>
           <div className="dv-header-actions">
-            <ExportButton
-              data={devices}
-              filename="vemio-devices"
-              columns={['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt']}
-              headers={{ ipAddress: 'IP Address', lastSeenAt: 'Last Seen', siteName: 'Site', make: 'Manufacturer' }}
-            />
+            <button
+              onClick={handleExportAll}
+              disabled={exporting || !summary?.total}
+              className="dv-export-btn"
+              title={summary?.total ? `Export all ${summary.total} devices as CSV` : 'No data to export'}
+            >
+              <Download className={`w-3.5 h-3.5 ${exporting ? 'animate-spin' : ''}`} />
+              <span className="dv-export-label">{exporting ? 'Exporting…' : 'Export All'}</span>
+            </button>
             <button onClick={fetchDevices} className="dv-refresh-btn" aria-label="Refresh">
               <RefreshCw className={`w-4 h-4 text-vemio-text-muted ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -255,22 +283,40 @@ export default function DevicesPage() {
           </div>
 
           {/* Pagination */}
-          {pagination && pagination.totalPages > 1 && (
+          {pagination && (
             <div className="dv-pagination">
-              <p className="dv-pagination-info">
-                {(pagination.page - 1) * pagination.limit + 1}–
-                {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
-              </p>
-              <div className="dv-pagination-btns">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1} className="dv-page-btn">
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
-                  disabled={page === pagination.totalPages} className="dv-page-btn">
-                  <ChevronRight className="w-4 h-4" />
-                </button>
+              <div className="dv-pagination-left">
+                <label className="dv-pagesize-label">
+                  Show
+                  <select
+                    value={pageSize}
+                    onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                    className="dv-pagesize-select"
+                  >
+                    {[25, 50, 100, 250].map(n => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                  per page
+                </label>
+                <span className="dv-pagination-info">
+                  {(pagination.page - 1) * pagination.limit + 1}–
+                  {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total}
+                </span>
               </div>
+              {pagination.totalPages > 1 && (
+                <div className="dv-pagination-btns">
+                  <button onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1} className="dv-page-btn">
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="dv-page-indicator">{page} / {pagination.totalPages}</span>
+                  <button onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+                    disabled={page === pagination.totalPages} className="dv-page-btn">
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </motion.div>
@@ -525,12 +571,38 @@ export default function DevicesPage() {
           justify-content: space-between;
           padding: 10px 14px;
           border-top: 1px solid var(--color-vemio-border);
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .dv-pagination-left {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
         }
         .dv-pagination-info {
           font-size: 11px;
           color: var(--color-vemio-text-dim);
+          margin: 0;
         }
-        .dv-pagination-btns { display: flex; gap: 4px; }
+        .dv-pagesize-label {
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .dv-pagesize-select {
+          padding: 3px 6px;
+          border-radius: 6px;
+          font-size: 11px;
+          background: var(--color-vemio-surface-raised);
+          border: 1px solid var(--color-vemio-border);
+          color: var(--color-vemio-text);
+          cursor: pointer;
+          outline: none;
+        }
+        .dv-pagination-btns { display: flex; gap: 4px; align-items: center; }
         .dv-page-btn {
           padding: 6px;
           border-radius: 6px;
@@ -544,6 +616,44 @@ export default function DevicesPage() {
         }
         .dv-page-btn:hover    { background: rgba(255,255,255,0.05); }
         .dv-page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .dv-page-indicator {
+          font-size: 11px;
+          color: var(--color-vemio-text-dim);
+          min-width: 48px;
+          text-align: center;
+        }
+
+        /* Export button */
+        .dv-export-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 7px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          white-space: nowrap;
+          color: var(--color-vemio-text-muted);
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+          flex-shrink: 0;
+        }
+        .dv-export-btn:hover:not(:disabled) {
+          background: var(--color-vemio-surface-raised);
+          color: var(--color-vemio-text);
+          border-color: var(--color-vemio-text-dim);
+        }
+        .dv-export-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        @media (max-width: 479px) {
+          .dv-export-label { display: none; }
+          .dv-export-btn { padding: 7px 8px; }
+          .dv-pagesize-label { display: none; }
+        }
       `}</style>
     </>
   );

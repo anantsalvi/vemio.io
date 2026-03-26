@@ -4,6 +4,7 @@ import { Menu } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useBranding } from '@/hooks/useBranding';
+import ThemeToggle from '@/app/components/ThemeToggle';
 
 const PAGE_TITLES = {
   '/':                      'Overview',
@@ -74,10 +75,11 @@ export default function TopBar({ onMenuClick, isMobile }) {
         </div>
       </div>
 
-      {/* Right: user info */}
-      <div className="flex items-center shrink-0">
+      {/* Right: theme toggle + user info */}
+      <div className="flex items-center gap-3 shrink-0">
+        <ThemeToggle compact />
+
         {isLoading ? (
-          /* Skeleton placeholder while session loads */
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-full animate-pulse"

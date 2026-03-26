@@ -5,12 +5,13 @@ import { useSidebar } from '@/hooks/useSidebar';
 import { BrandingProvider } from '@/hooks/useBranding';
 import Sidebar from '@/app/components/layout/Sidebar';
 import TopBar from '@/components/TopBar';
-
+import { ThemeProvider } from '@/hooks/useTheme';
 export default function DashboardShell({ children }) {
   const sidebar = useSidebar();
 
   return (
     <SessionProvider>
+       <ThemeProvider>
       <BrandingProvider>
         <div className="flex min-h-screen relative" style={{ background: 'var(--color-vemio-bg)' }}>
 
@@ -54,6 +55,7 @@ export default function DashboardShell({ children }) {
           </div>
         </div>
       </BrandingProvider>
+ </ThemeProvider>
     </SessionProvider>
   );
 }

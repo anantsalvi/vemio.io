@@ -127,3 +127,66 @@ body {
   );
   pointer-events: none;
 }
+/* ============================================================================
+   VEMIO™ Light Theme
+   Append this block to the END of your globals.css file.
+   Activated by data-theme="light" on <html>.
+   ============================================================================ */
+
+[data-theme="light"] {
+  /* ── Core Palette ─────────────────────────────────────────────────────── */
+  --color-vemio-bg: #f8fafc;
+  --color-vemio-surface: #ffffff;
+  --color-vemio-surface-raised: #f1f5f9;
+  --color-vemio-surface-hover: #e8edf3;
+  --color-vemio-border: #e2e8f0;
+  --color-vemio-border-subtle: #eef2f7;
+
+  /* ── Text ──────────────────────────────────────────────────────────── */
+  --color-vemio-text: #1e293b;
+  --color-vemio-text-muted: #475569;
+  --color-vemio-text-dim: #94a3b8;
+
+  /* ── Accent: Amber ─────────────────────────────────────────────────── */
+  --color-vemio-amber: #d97706;
+  --color-vemio-amber-soft: rgba(217, 119, 6, 0.10);
+  --color-vemio-amber-glow: rgba(217, 119, 6, 0.15);
+
+  /* ── Accent: Teal ──────────────────────────────────────────────────── */
+  --color-vemio-teal: #0d9488;
+  --color-vemio-teal-soft: rgba(13, 148, 136, 0.10);
+
+  /* ── Status Colors (slightly deeper for light bg readability) ──────── */
+  --color-status-up: #16a34a;
+  --color-status-down: #dc2626;
+  --color-status-degraded: #d97706;
+  --color-status-unknown: #6b7280;
+
+  /* ── Severity ──────────────────────────────────────────────────────── */
+  --color-severity-critical: #dc2626;
+  --color-severity-high: #ea580c;
+  --color-severity-medium: #ca8a04;
+  --color-severity-low: #2563eb;
+  --color-severity-info: #6b7280;
+
+  /* ── BCS Score Gradient ────────────────────────────────────────────── */
+  --color-bcs-excellent: #16a34a;
+  --color-bcs-good: #65a30d;
+  --color-bcs-fair: #ca8a04;
+  --color-bcs-poor: #ea580c;
+  --color-bcs-critical: #dc2626;
+}
+
+/* ── Light theme scrollbar ───────────────────────────────────────────── */
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ── Light theme body ────────────────────────────────────────────────── */
+[data-theme="light"] body {
+  background-color: var(--color-vemio-bg);
+  color: var(--color-vemio-text);
+}

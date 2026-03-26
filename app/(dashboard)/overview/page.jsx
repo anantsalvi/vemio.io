@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { useSWRFetch } from '@/hooks/useSWRFetch';
+import { OverviewSkeleton } from '@/app/components/dashboard/Skeletons';
 import BCSGauge from '@/app/components/dashboard/BCSGauge';
 import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
 import UptimeChart from '@/app/components/dashboard/UptimeChart';
 import RecentEvents from '@/app/components/dashboard/RecentEvents';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 const stagger = {
   hidden: {},
@@ -18,37 +19,14 @@ const fadeUp = {
 };
 
 export default function OverviewPage() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { data, loading, error, refresh } = useSWRFetch('/api/overview', {
+    refreshInterval: 60000,
+    dedupingInterval: 5000,
+  });
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('/api/overview');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
-  }, []);
-
+  // First load with no cached data — show skeleton
   if (loading && !data) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 text-vemio-amber animate-spin" />
-      </div>
-    );
+    return <OverviewSkeleton />;
   }
 
   if (error && !data) {
@@ -56,7 +34,7 @@ export default function OverviewPage() {
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <AlertTriangle className="w-8 h-8 text-severity-high" />
         <p className="text-vemio-text-muted text-sm">Failed to load dashboard: {error}</p>
-        <button onClick={fetchData} className="text-sm text-vemio-amber hover:underline">
+        <button onClick={refresh} className="text-sm text-vemio-amber hover:underline">
           Retry
         </button>
       </div>
@@ -110,7 +88,6 @@ export default function OverviewPage() {
       </div>
 
       <style>{`
-        /* ── Root ── */
         .overview-root {
           display: flex;
           flex-direction: column;
@@ -118,13 +95,12 @@ export default function OverviewPage() {
           max-width: 1400px;
         }
 
-        /* ── Page header ── */
         .overview-header {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
-          flex-wrap: wrap;          /* badge drops below on very small screens */
+          flex-wrap: wrap;
         }
 
         .overview-title {
@@ -156,33 +132,26 @@ export default function OverviewPage() {
           color: var(--vemio-amber);
         }
 
-        /* ── Row 1: BCS (narrow) + Devices (wide) ── */
         .overview-row-1 {
           display: grid;
-          grid-template-columns: 1fr 2fr;   /* ~33 / 66 */
+          grid-template-columns: 1fr 2fr;
           gap: 16px;
           align-items: start;
         }
 
-        /* ── Row 2: Uptime (wider) + Events (narrower) ── */
         .overview-row-2 {
           display: grid;
-          grid-template-columns: 7fr 5fr;   /* ~58 / 42 */
+          grid-template-columns: 7fr 5fr;
           gap: 16px;
           align-items: start;
         }
 
-        /* ── Tablet (768 – 1023px): stack BCS + devices vertically ── */
         @media (max-width: 1023px) {
           .overview-row-1 {
             grid-template-columns: 1fr;
           }
-
-          /* On tablet the BCS gauge doesn't need to be as tall when full-width;
-             let the component handle its own sizing. */
         }
 
-        /* ── Mobile (< 768px) ── */
         @media (max-width: 767px) {
           .overview-root {
             gap: 14px;

@@ -1,4 +1,4 @@
-// app/components/Sidebar.jsx
+// app/components/layout/Sidebar.jsx
 "use client";
 
 import Link from "next/link";
@@ -6,6 +6,8 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useBranding } from "@/hooks/useBranding";
+import VemioLogo from "@/app/components/VemioLogo";
+import ThemeToggle from '@/app/components/ThemeToggle';
 import {
   LayoutDashboard,
   Activity,
@@ -16,7 +18,6 @@ import {
   FileSearch,
   FileBarChart,
   LogOut,
-  Zap,
   Clock
 } from "lucide-react";
 
@@ -59,7 +60,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
             unoptimized
           />
         ) : (
-          <Zap size={isRail ? 20 : 18} className="logo-icon" />
+          <VemioLogo size={isRail ? 28 : 24} />
         )}
         {!isRail && (
           <span className="logo-text">
@@ -90,6 +91,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
 
       {/* Footer */}
       <div className="sidebar-footer">
+      {!isRail && <ThemeToggle />}
         {/* Powered by */}
         {!isRail && branding.show_powered_by && branding.powered_by_text && (
           <p className="powered-by">{branding.powered_by_text}</p>
@@ -124,7 +126,6 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           overflow: hidden;
         }
 
-        /* ── Logo ── */
         .sidebar-logo {
           display: flex;
           align-items: center;
@@ -140,11 +141,6 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           padding: 0;
         }
 
-        .logo-icon {
-          color: var(--vemio-amber);
-          flex-shrink: 0;
-        }
-
         .logo-img {
           flex-shrink: 0;
           object-fit: contain;
@@ -158,7 +154,6 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           color: var(--vemio-text);
         }
 
-        /* ── Nav ── */
         .sidebar-nav {
           list-style: none;
           margin: 0;
@@ -235,7 +230,6 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           background: var(--vemio-amber);
         }
 
-        /* ── Footer ── */
         .sidebar-footer {
           padding: 12px 10px;
           border-top: 1px solid var(--vemio-border);

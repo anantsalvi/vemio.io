@@ -15,6 +15,7 @@ import {
   FileBarChart,
   LogOut,
   Zap,
+  Clock
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -27,7 +28,7 @@ const NAV_ITEMS = [
   { href: "/rca",           label: "RCA Reports",    icon: FileSearch },
   { href: "/reports",       label: "Reports",        icon: FileBarChart },
   { href: '/settings/notifications', label: 'Notifications', icon: Bell     },
-  { href: '/settings/reports',       label: 'Report Schedule', icon: CalendarClock },
+  { href: '/settings/reports',       label: 'Report Schedule', icon: Clock },
 ];
 
 export default function Sidebar({ isRail = false, onNavigate }) {

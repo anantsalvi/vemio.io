@@ -2,7 +2,7 @@
 
 import { useSidebar } from '@/hooks/useSidebar';
 import { BrandingProvider } from '@/hooks/useBranding';
-import Sidebar from '@/components/Sidebar';
+import Sidebar from '@/app/components/layout/Sidebar';
 import TopBar from '@/components/TopBar';
 
 export default function DashboardLayout({ children }) {

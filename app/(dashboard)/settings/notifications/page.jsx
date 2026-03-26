@@ -13,11 +13,11 @@ const stagger = {
   visible: { transition: { staggerChildren: 0.07 } },
 };
 
-const SEVERITIES    = ['critical', 'high', 'medium', 'low'];
-const FREQUENCIES   = [
-  { value: 'immediate', label: 'Immediate',       desc: 'Send email as soon as alert fires' },
-  { value: 'hourly',    label: 'Hourly digest',   desc: 'Bundle alerts into one email per hour' },
-  { value: 'daily',     label: 'Daily digest',    desc: 'One summary email per day at set time' },
+const SEVERITIES  = ['critical', 'high', 'medium', 'low'];
+const FREQUENCIES = [
+  { value: 'immediate', label: 'Immediate',     desc: 'Send email as soon as alert fires' },
+  { value: 'hourly',    label: 'Hourly digest',  desc: 'Bundle alerts into one email per hour' },
+  { value: 'daily',     label: 'Daily digest',   desc: 'One summary email per day at set time' },
 ];
 const NOTIFY_LABELS = {
   device_down:    'Device goes offline',
@@ -26,14 +26,76 @@ const NOTIFY_LABELS = {
   alert_critical: 'Critical alert fires',
 };
 
-export default function NotificationsSettingsPage() {
-  const [settings,  setSettings]  = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [saving,    setSaving]    = useState(false);
-  const [saved,     setSaved]     = useState(false);
-  const [emailInput, setEmailInput] = useState('');
-  const [emailError, setEmailError] = useState('');
+const SEV_COLORS = {
+  critical: { bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.3)', color: 'var(--color-severity-critical)' },
+  high:     { bg: 'rgba(234,88,12,0.12)', border: 'rgba(234,88,12,0.3)', color: 'var(--color-severity-high)' },
+  medium:   { bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.3)', color: 'var(--color-vemio-amber)' },
+  low:      { bg: 'rgba(20,184,166,0.12)', border: 'rgba(20,184,166,0.3)', color: 'var(--color-status-up)' },
+};
 
+/* ── Shared sub-components ───────────────────────────────────────────────── */
+
+function Toggle({ value, onChange }) {
+  return (
+    <button
+      onClick={() => onChange(!value)}
+      role="switch"
+      aria-checked={value}
+      className="relative w-[42px] h-6 rounded-full shrink-0 transition-colors duration-200 cursor-pointer border-none"
+      style={{ background: value ? 'var(--color-vemio-amber)' : 'var(--color-vemio-border)' }}
+    >
+      <span
+        className="absolute top-[3px] w-[18px] h-[18px] rounded-full bg-white shadow-sm transition-transform duration-200"
+        style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }}
+      />
+    </button>
+  );
+}
+
+function SaveButton({ saving, saved, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={saving}
+      className="flex items-center gap-2 px-5 py-2 rounded-lg text-[13px] font-semibold
+                 shrink-0 whitespace-nowrap cursor-pointer border-none
+                 disabled:opacity-60 disabled:cursor-not-allowed transition-opacity"
+      style={{ background: 'var(--color-vemio-amber)', color: '#0F172A' }}
+    >
+      {saving
+        ? <RefreshCw className="w-4 h-4 animate-spin" />
+        : <Save className="w-4 h-4" />}
+      {saved ? 'Saved!' : 'Save Changes'}
+    </button>
+  );
+}
+
+function Panel({ children, className = '' }) {
+  return (
+    <motion.div
+      variants={fadeUp}
+      className={`rounded-[14px] p-5 max-sm:p-3.5 ${className}`}
+      style={{
+        background: 'var(--color-vemio-surface)',
+        border: '1px solid var(--color-vemio-border)',
+      }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/* ── Main page ───────────────────────────────────────────────────────────── */
+
+export default function NotificationsSettingsPage() {
+  const [settings,    setSettings]    = useState(null);
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [saved,       setSaved]       = useState(false);
+  const [emailInput,  setEmailInput]  = useState('');
+  const [emailError,  setEmailError]  = useState('');
+
+  /* ── data fetch ── */
   useEffect(() => {
     async function load() {
       try {
@@ -41,12 +103,13 @@ export default function NotificationsSettingsPage() {
         if (!res.ok) throw new Error();
         const json = await res.json();
         setSettings(json.settings.notifications);
-      } catch { /* use defaults */ }
+      } catch { /* defaults handled by guard below */ }
       finally { setLoading(false); }
     }
     load();
   }, []);
 
+  /* ── save ── */
   async function save() {
     setSaving(true);
     setSaved(false);
@@ -59,14 +122,14 @@ export default function NotificationsSettingsPage() {
       if (!res.ok) throw new Error();
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch { /* TODO: show error toast */ }
+    } catch { /* TODO: toast */ }
     finally { setSaving(false); }
   }
 
+  /* ── helpers ── */
   function update(path, value) {
     setSettings(prev => {
       const next = { ...prev };
-      // Support one level of nesting e.g. "notify_on.device_down"
       const parts = path.split('.');
       if (parts.length === 1) {
         next[path] = value;
@@ -97,191 +160,305 @@ export default function NotificationsSettingsPage() {
     update('email_recipients', settings.email_recipients.filter(e => e !== email));
   }
 
+  /* ── loading state ── */
   if (loading || !settings) return (
-  <div className="flex items-center justify-center h-64">
-    <RefreshCw className="w-5 h-5 text-vemio-amber animate-spin" />
-  </div>
-);
+    <div className="flex items-center justify-center h-64">
+      <RefreshCw className="w-5 h-5 text-vemio-amber animate-spin" />
+    </div>
+  );
 
   return (
-    <>
-      <motion.div variants={stagger} initial="hidden" animate="visible" className="ns-root">
+    <motion.div
+      variants={stagger}
+      initial="hidden"
+      animate="visible"
+      className="flex flex-col gap-5 max-sm:gap-3.5 max-w-[860px]"
+    >
 
-        {/* Header */}
-        <motion.div variants={fadeUp} className="ns-header">
-          <div>
-            <h1 className="ns-title">Notification Preferences</h1>
-            <p className="ns-subtitle">Configure how and when alert emails are sent to your team</p>
-          </div>
-          <button onClick={save} disabled={saving} className="ns-save-btn">
-            {saving
-              ? <RefreshCw className="w-4 h-4 animate-spin" />
-              : <Save className="w-4 h-4" />}
-            {saved ? 'Saved!' : 'Save Changes'}
-          </button>
-        </motion.div>
+      {/* ── Header ── */}
+      <motion.div variants={fadeUp} className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-lg font-bold m-0 text-vemio-text">Notification Preferences</h1>
+          <p className="text-[13px] mt-1 m-0 text-vemio-text-muted">
+            Configure how and when alert emails are sent to your team
+          </p>
+        </div>
+        <SaveButton saving={saving} saved={saved} onClick={save} />
+      </motion.div>
 
-        {/* Master toggle */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <div className="ns-panel-row">
-            <div className="ns-panel-row-left">
-              <Bell className="w-4 h-4 text-vemio-amber" />
-              <div>
-                <p className="ns-row-title">Email Notifications</p>
-                <p className="ns-row-desc">Master switch — disabling stops all alert emails</p>
-              </div>
+      {/* ── Master toggle ── */}
+      <Panel>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Bell className="w-4 h-4 text-vemio-amber" />
+            <div>
+              <p className="text-[13px] font-semibold m-0 text-vemio-text">Email Notifications</p>
+              <p className="text-xs mt-0.5 m-0 text-vemio-text-dim">
+                Master switch — disabling stops all alert emails
+              </p>
             </div>
-            <Toggle
-              value={settings.enabled}
-              onChange={v => update('enabled', v)}
-            />
           </div>
-        </motion.div>
+          <Toggle value={settings.enabled} onChange={v => update('enabled', v)} />
+        </div>
+      </Panel>
 
-        {/* Recipients */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <p className="ns-panel-title">Email Recipients</p>
-          <p className="ns-panel-desc">These addresses receive all alert notifications for this tenant</p>
+      {/* ── Recipients ── */}
+      <Panel>
+        <p className="text-[13px] font-semibold m-0 mb-1 text-vemio-text">Email Recipients</p>
+        <p className="text-xs m-0 mb-4 text-vemio-text-dim">
+          These addresses receive all alert notifications for this tenant
+        </p>
 
-          <div className="ns-email-list">
-            {settings.email_recipients.length === 0 && (
-              <p className="ns-empty">No recipients added yet</p>
-            )}
-            {settings.email_recipients.map(email => (
-              <div key={email} className="ns-email-row">
-                <Mail className="w-3.5 h-3.5 text-vemio-text-dim flex-shrink-0" />
-                <span className="ns-email-addr">{email}</span>
-                <button onClick={() => removeEmail(email)} className="ns-remove-btn">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
+        {/* list */}
+        <div className="flex flex-col gap-1.5 mb-3">
+          {settings.email_recipients.length === 0 && (
+            <p className="text-xs m-0 text-vemio-text-dim">No recipients added yet</p>
+          )}
+          {settings.email_recipients.map(email => (
+            <div
+              key={email}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg"
+              style={{ background: 'var(--color-vemio-surface-raised)' }}
+            >
+              <Mail className="w-3.5 h-3.5 text-vemio-text-dim shrink-0" />
+              <span className="flex-1 text-[13px] text-vemio-text truncate">{email}</span>
+              <button
+                onClick={() => removeEmail(email)}
+                className="p-1 rounded-md bg-transparent border-none cursor-pointer
+                           text-vemio-text-dim hover:text-severity-high transition-colors shrink-0 flex"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
 
-          <div className="ns-email-add">
-            <input
-              type="email"
-              placeholder="name@company.com"
-              value={emailInput}
-              onChange={e => { setEmailInput(e.target.value); setEmailError(''); }}
-              onKeyDown={e => e.key === 'Enter' && addEmail()}
-              className={`ns-email-input ${emailError ? 'ns-email-input--error' : ''}`}
-            />
-            <button onClick={addEmail} className="ns-add-btn">
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
-          </div>
-          {emailError && <p className="ns-email-error">{emailError}</p>}
-        </motion.div>
+        {/* add input */}
+        <div className="flex gap-2 items-center">
+          <input
+            type="email"
+            placeholder="name@company.com"
+            value={emailInput}
+            onChange={e => { setEmailInput(e.target.value); setEmailError(''); }}
+            onKeyDown={e => e.key === 'Enter' && addEmail()}
+            className="flex-1 px-3 py-2 text-[13px] rounded-lg outline-none transition-[border-color]"
+            style={{
+              background: 'var(--color-vemio-surface-raised)',
+              border: emailError
+                ? '1px solid rgba(239,68,68,0.5)'
+                : '1px solid var(--color-vemio-border)',
+              color: 'var(--color-vemio-text)',
+            }}
+            onFocus={e => { if (!emailError) e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
+            onBlur={e =>  { if (!emailError) e.target.style.borderColor = 'var(--color-vemio-border)'; }}
+          />
+          <button
+            onClick={addEmail}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold
+                       whitespace-nowrap cursor-pointer transition-colors border shrink-0"
+            style={{
+              background: 'rgba(245,158,11,0.1)',
+              borderColor: 'rgba(245,158,11,0.25)',
+              color: 'var(--color-vemio-amber)',
+            }}
+          >
+            <Plus className="w-4 h-4" />
+            Add
+          </button>
+        </div>
+        {emailError && (
+          <p className="text-[11px] mt-1.5 m-0 text-severity-high">{emailError}</p>
+        )}
+      </Panel>
 
-        {/* Severity threshold */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <p className="ns-panel-title">Minimum Severity</p>
-          <p className="ns-panel-desc">Only alerts at this level or above trigger notifications</p>
-          <div className="ns-severity-row">
-            {SEVERITIES.map(sev => (
+      {/* ── Severity threshold ── */}
+      <Panel>
+        <p className="text-[13px] font-semibold m-0 mb-1 text-vemio-text">Minimum Severity</p>
+        <p className="text-xs m-0 mb-4 text-vemio-text-dim">
+          Only alerts at this level or above trigger notifications
+        </p>
+        <div className="flex gap-2 flex-wrap mb-1">
+          {SEVERITIES.map(sev => {
+            const active = settings.min_severity === sev;
+            const c = SEV_COLORS[sev];
+            return (
               <button
                 key={sev}
                 onClick={() => update('min_severity', sev)}
-                className={`ns-sev-btn ns-sev-btn--${sev} ${settings.min_severity === sev ? 'ns-sev-btn--active' : ''}`}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold uppercase tracking-wider
+                           cursor-pointer transition-colors min-h-[34px] border"
+                style={{
+                  background: active ? c.bg : 'transparent',
+                  borderColor: active ? c.border : 'var(--color-vemio-border)',
+                  color: active ? c.color : 'var(--color-vemio-text-dim)',
+                }}
               >
                 {sev}
               </button>
-            ))}
-          </div>
-          <p className="ns-panel-hint">
-            Currently notifying on: {SEVERITIES.slice(0, SEVERITIES.indexOf(settings.min_severity) + 1).join(', ')}
-          </p>
-        </motion.div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] mt-2 m-0 text-vemio-text-dim">
+          Currently notifying on: {SEVERITIES.slice(0, SEVERITIES.indexOf(settings.min_severity) + 1).join(', ')}
+        </p>
+      </Panel>
 
-        {/* Digest frequency */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <p className="ns-panel-title">Delivery Frequency</p>
-          <div className="ns-freq-grid">
-            {FREQUENCIES.map(f => (
+      {/* ── Delivery frequency ── */}
+      <Panel>
+        <p className="text-[13px] font-semibold m-0 mb-1 text-vemio-text">Delivery Frequency</p>
+        <p className="text-xs m-0 mb-4 text-vemio-text-dim">
+          How often should alert notifications be sent
+        </p>
+
+        <div className="grid grid-cols-3 max-sm:grid-cols-1 gap-2.5 mb-3">
+          {FREQUENCIES.map(f => {
+            const active = settings.digest_frequency === f.value;
+            return (
               <button
                 key={f.value}
                 onClick={() => update('digest_frequency', f.value)}
-                className={`ns-freq-card ${settings.digest_frequency === f.value ? 'ns-freq-card--active' : ''}`}
+                className="p-3 rounded-[10px] text-left cursor-pointer transition-colors border"
+                style={{
+                  background: active
+                    ? 'rgba(245,158,11,0.08)'
+                    : 'var(--color-vemio-surface-raised)',
+                  borderColor: active
+                    ? 'rgba(245,158,11,0.3)'
+                    : 'var(--color-vemio-border)',
+                }}
               >
-                <p className="ns-freq-label">{f.label}</p>
-                <p className="ns-freq-desc">{f.desc}</p>
+                <p
+                  className="text-[13px] font-semibold m-0 mb-1"
+                  style={{ color: active ? 'var(--color-vemio-amber)' : 'var(--color-vemio-text)' }}
+                >
+                  {f.label}
+                </p>
+                <p className="text-[11px] leading-snug m-0 text-vemio-text-dim">{f.desc}</p>
               </button>
-            ))}
+            );
+          })}
+        </div>
+
+        {settings.digest_frequency === 'daily' && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-xs whitespace-nowrap text-vemio-text-muted">
+              Daily digest time (IST)
+            </label>
+            <input
+              type="time"
+              value={settings.digest_time_ist}
+              onChange={e => update('digest_time_ist', e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg text-[13px] outline-none cursor-pointer"
+              style={{
+                background: 'var(--color-vemio-surface-raised)',
+                border: '1px solid var(--color-vemio-border)',
+                color: 'var(--color-vemio-text)',
+              }}
+            />
           </div>
-          {settings.digest_frequency === 'daily' && (
-            <div className="ns-time-row">
-              <label className="ns-time-label">Daily digest time (IST)</label>
-              <input
-                type="time"
-                value={settings.digest_time_ist}
-                onChange={e => update('digest_time_ist', e.target.value)}
-                className="ns-time-input"
+        )}
+      </Panel>
+
+      {/* ── Notify on ── */}
+      <Panel>
+        <p className="text-[13px] font-semibold m-0 mb-1 text-vemio-text">Notify On</p>
+        <p className="text-xs m-0 mb-4 text-vemio-text-dim">
+          Choose which event types trigger notifications
+        </p>
+        <div className="flex flex-col gap-1">
+          {Object.entries(NOTIFY_LABELS).map(([key, label]) => (
+            <div
+              key={key}
+              className="flex items-center justify-between px-3 py-2.5 rounded-lg"
+              style={{ background: 'var(--color-vemio-surface-raised)' }}
+            >
+              <span className="text-[13px] text-vemio-text">{label}</span>
+              <Toggle
+                value={settings.notify_on?.[key] ?? true}
+                onChange={v => update(`notify_on.${key}`, v)}
               />
             </div>
-          )}
-        </motion.div>
+          ))}
+        </div>
+      </Panel>
 
-        {/* Notify on */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <p className="ns-panel-title">Notify On</p>
-          <p className="ns-panel-desc">Choose which event types trigger notifications</p>
-          <div className="ns-notify-list">
-            {Object.entries(NOTIFY_LABELS).map(([key, label]) => (
-              <div key={key} className="ns-notify-row">
-                <span className="ns-notify-label">{label}</span>
-                <Toggle
-                  value={settings.notify_on?.[key] ?? true}
-                  onChange={v => update(`notify_on.${key}`, v)}
-                />
-              </div>
-            ))}
+      {/* ── Mute windows ── */}
+      <Panel>
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-1">
+          <div>
+            <p className="text-[13px] font-semibold m-0 mb-1 text-vemio-text">Mute Windows</p>
+            <p className="text-xs m-0 text-vemio-text-dim">
+              Suppress notifications during these time periods
+            </p>
           </div>
-        </motion.div>
+          <button
+            onClick={() => update('mute_windows', [
+              ...settings.mute_windows,
+              { start: '22:00', end: '07:00', days: [0, 6] },
+            ])}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold
+                       whitespace-nowrap cursor-pointer transition-colors shrink-0 border"
+            style={{
+              background: 'var(--color-vemio-surface-raised)',
+              borderColor: 'var(--color-vemio-border)',
+              color: 'var(--color-vemio-text-muted)',
+            }}
+          >
+            <Plus className="w-3.5 h-3.5" /> Add window
+          </button>
+        </div>
 
-        {/* Mute windows */}
-        <motion.div variants={fadeUp} className="ns-panel">
-          <div className="ns-panel-header-row">
-            <div>
-              <p className="ns-panel-title">Mute Windows</p>
-              <p className="ns-panel-desc">Suppress notifications during these time periods</p>
+        {settings.mute_windows.length === 0 && (
+          <p className="text-xs mt-3 m-0 text-vemio-text-dim">No mute windows configured</p>
+        )}
+
+        {settings.mute_windows.map((w, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 p-3 rounded-[10px] mt-2.5 flex-wrap"
+            style={{ background: 'var(--color-vemio-surface-raised)' }}
+          >
+            {/* Time pickers */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs whitespace-nowrap text-vemio-text-muted">From</label>
+              <input
+                type="time"
+                value={w.start}
+                className="px-2.5 py-1.5 rounded-lg text-[13px] outline-none cursor-pointer"
+                style={{
+                  background: 'var(--color-vemio-surface-raised)',
+                  border: '1px solid var(--color-vemio-border)',
+                  color: 'var(--color-vemio-text)',
+                }}
+                onChange={e => {
+                  const updated = [...settings.mute_windows];
+                  updated[i] = { ...updated[i], start: e.target.value };
+                  update('mute_windows', updated);
+                }}
+              />
+              <label className="text-xs whitespace-nowrap text-vemio-text-muted">To</label>
+              <input
+                type="time"
+                value={w.end}
+                className="px-2.5 py-1.5 rounded-lg text-[13px] outline-none cursor-pointer"
+                style={{
+                  background: 'var(--color-vemio-surface-raised)',
+                  border: '1px solid var(--color-vemio-border)',
+                  color: 'var(--color-vemio-text)',
+                }}
+                onChange={e => {
+                  const updated = [...settings.mute_windows];
+                  updated[i] = { ...updated[i], end: e.target.value };
+                  update('mute_windows', updated);
+                }}
+              />
             </div>
-            <button
-              onClick={() => update('mute_windows', [
-                ...settings.mute_windows,
-                { start: '22:00', end: '07:00', days: [0, 6] },
-              ])}
-              className="ns-add-mute-btn"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add window
-            </button>
-          </div>
 
-          {settings.mute_windows.length === 0 && (
-            <p className="ns-empty" style={{ marginTop: 12 }}>No mute windows configured</p>
-          )}
-
-          {settings.mute_windows.map((w, i) => (
-            <div key={i} className="ns-mute-row">
-              <div className="ns-mute-times">
-                <label className="ns-time-label">From</label>
-                <input type="time" value={w.start} className="ns-time-input"
-                  onChange={e => {
-                    const updated = [...settings.mute_windows];
-                    updated[i] = { ...updated[i], start: e.target.value };
-                    update('mute_windows', updated);
-                  }} />
-                <label className="ns-time-label">To</label>
-                <input type="time" value={w.end} className="ns-time-input"
-                  onChange={e => {
-                    const updated = [...settings.mute_windows];
-                    updated[i] = { ...updated[i], end: e.target.value };
-                    update('mute_windows', updated);
-                  }} />
-              </div>
-              <div className="ns-mute-days">
-                {['Su','Mo','Tu','We','Th','Fr','Sa'].map((d, di) => (
+            {/* Day pills */}
+            <div className="flex gap-1 flex-wrap">
+              {['Su','Mo','Tu','We','Th','Fr','Sa'].map((d, di) => {
+                const active = w.days.includes(di);
+                return (
                   <button
                     key={di}
                     onClick={() => {
@@ -292,410 +469,37 @@ export default function NotificationsSettingsPage() {
                       updated[i] = { ...updated[i], days };
                       update('mute_windows', updated);
                     }}
-                    className={`ns-day-btn ${w.days.includes(di) ? 'ns-day-btn--active' : ''}`}
+                    className="w-[30px] h-[30px] rounded-md text-[10px] font-semibold
+                               cursor-pointer transition-colors border"
+                    style={{
+                      background: active ? 'rgba(245,158,11,0.15)' : 'transparent',
+                      borderColor: active ? 'rgba(245,158,11,0.3)' : 'var(--color-vemio-border)',
+                      color: active ? 'var(--color-vemio-amber)' : 'var(--color-vemio-text-dim)',
+                    }}
                   >
                     {d}
                   </button>
-                ))}
-              </div>
-              <button
-                onClick={() => update('mute_windows', settings.mute_windows.filter((_, j) => j !== i))}
-                className="ns-remove-btn"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+                );
+              })}
             </div>
-          ))}
-        </motion.div>
 
-        {/* Bottom save */}
-        <motion.div variants={fadeUp} className="ns-bottom-save">
-          <button onClick={save} disabled={saving} className="ns-save-btn">
-            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            {saved ? 'Saved!' : 'Save Changes'}
-          </button>
-          {saved && <p className="ns-saved-msg">Settings saved successfully</p>}
-        </motion.div>
+            {/* Delete */}
+            <button
+              onClick={() => update('mute_windows', settings.mute_windows.filter((_, j) => j !== i))}
+              className="p-1 rounded-md bg-transparent border-none cursor-pointer
+                         text-vemio-text-dim hover:text-severity-high transition-colors shrink-0 flex"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </Panel>
+
+      {/* ── Bottom save ── */}
+      <motion.div variants={fadeUp} className="flex items-center gap-3.5 pb-6">
+        <SaveButton saving={saving} saved={saved} onClick={save} />
+        {saved && <p className="text-xs m-0 text-status-up">Settings saved successfully</p>}
       </motion.div>
-
-      <style>{`
-        .ns-root {
-          display: flex;
-          flex-direction: column;
-          gap: 20px;
-          max-width: 860px;
-        }
-        @media (max-width: 767px) { .ns-root { gap: 14px; } }
-
-        /* Header */
-        .ns-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-        .ns-title    { font-size: 18px; font-weight: 700; color: var(--vemio-text); margin: 0; }
-        .ns-subtitle { font-size: 13px; color: var(--vemio-text-muted); margin: 3px 0 0; }
-
-        /* Save button */
-        .ns-save-btn {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          padding: 8px 18px;
-          border-radius: 8px;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          border: none;
-          background: var(--color-vemio-amber);
-          color: #0F172A;
-          transition: opacity 0.15s;
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-        .ns-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        /* Panel */
-        .ns-panel {
-          background: var(--color-vemio-surface);
-          border: 1px solid var(--color-vemio-border);
-          border-radius: 14px;
-          padding: 20px;
-        }
-        @media (max-width: 479px) { .ns-panel { padding: 14px; } }
-
-        .ns-panel-title {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--vemio-text);
-          margin: 0 0 4px;
-        }
-        .ns-panel-desc {
-          font-size: 12px;
-          color: var(--color-vemio-text-dim);
-          margin: 0 0 16px;
-        }
-        .ns-panel-hint {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          margin: 8px 0 0;
-        }
-        .ns-panel-header-row {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 4px;
-          flex-wrap: wrap;
-        }
-
-        /* Master toggle row */
-        .ns-panel-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-        }
-        .ns-panel-row-left {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-        .ns-row-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; }
-        .ns-row-desc  { font-size: 12px; color: var(--color-vemio-text-dim); margin: 2px 0 0; }
-
-        /* Email list */
-        .ns-email-list {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          margin-bottom: 12px;
-        }
-        .ns-email-row {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 8px 12px;
-          border-radius: 8px;
-          background: var(--color-vemio-surface-raised);
-        }
-        .ns-email-addr {
-          flex: 1;
-          font-size: 13px;
-          color: var(--vemio-text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .ns-email-add {
-          display: flex;
-          gap: 8px;
-          align-items: center;
-        }
-        .ns-email-input {
-          flex: 1;
-          padding: 8px 12px;
-          font-size: 13px;
-          border-radius: 8px;
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
-          color: var(--vemio-text);
-          outline: none;
-          transition: border-color 0.15s;
-        }
-        .ns-email-input:focus { border-color: rgba(245,158,11,0.4); }
-        .ns-email-input--error { border-color: rgba(239,68,68,0.5); }
-        .ns-email-error {
-          font-size: 11px;
-          color: var(--color-severity-high);
-          margin: 6px 0 0;
-        }
-        .ns-add-btn {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 8px 14px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 600;
-          background: rgba(245,158,11,0.1);
-          border: 1px solid rgba(245,158,11,0.25);
-          color: var(--vemio-amber);
-          cursor: pointer;
-          white-space: nowrap;
-          transition: background 0.15s;
-        }
-        .ns-add-btn:hover { background: rgba(245,158,11,0.18); }
-        .ns-remove-btn {
-          padding: 4px;
-          border-radius: 6px;
-          background: transparent;
-          border: none;
-          color: var(--color-vemio-text-dim);
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          transition: color 0.15s;
-          flex-shrink: 0;
-        }
-        .ns-remove-btn:hover { color: var(--color-severity-high); }
-
-        /* Severity */
-        .ns-severity-row {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-          margin-bottom: 4px;
-        }
-        .ns-sev-btn {
-          padding: 6px 16px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          cursor: pointer;
-          transition: background 0.15s, border-color 0.15s;
-          border: 1px solid var(--color-vemio-border);
-          background: transparent;
-          color: var(--color-vemio-text-dim);
-          min-height: 34px;
-        }
-        .ns-sev-btn--active.ns-sev-btn--critical { background: rgba(239,68,68,0.12);  border-color: rgba(239,68,68,0.3);  color: var(--color-severity-critical); }
-        .ns-sev-btn--active.ns-sev-btn--high     { background: rgba(234,88,12,0.12);  border-color: rgba(234,88,12,0.3);  color: var(--color-severity-high);     }
-        .ns-sev-btn--active.ns-sev-btn--medium   { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); color: var(--vemio-amber);             }
-        .ns-sev-btn--active.ns-sev-btn--low      { background: rgba(20,184,166,0.12); border-color: rgba(20,184,166,0.3); color: var(--color-status-up);         }
-
-        /* Frequency */
-        .ns-freq-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 10px;
-          margin-bottom: 12px;
-        }
-        @media (max-width: 639px) { .ns-freq-grid { grid-template-columns: 1fr; gap: 8px; } }
-
-        .ns-freq-card {
-          padding: 12px;
-          border-radius: 10px;
-          text-align: left;
-          cursor: pointer;
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
-          transition: background 0.15s, border-color 0.15s;
-        }
-        .ns-freq-card--active {
-          background: rgba(245,158,11,0.08);
-          border-color: rgba(245,158,11,0.3);
-        }
-        .ns-freq-label {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--vemio-text);
-          margin: 0 0 4px;
-        }
-        .ns-freq-card--active .ns-freq-label { color: var(--vemio-amber); }
-        .ns-freq-desc {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          margin: 0;
-          line-height: 1.4;
-        }
-
-        /* Time input */
-        .ns-time-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          flex-wrap: wrap;
-        }
-        .ns-time-label {
-          font-size: 12px;
-          color: var(--vemio-text-muted);
-          white-space: nowrap;
-        }
-        .ns-time-input {
-          padding: 6px 10px;
-          border-radius: 8px;
-          font-size: 13px;
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
-          color: var(--vemio-text);
-          outline: none;
-          cursor: pointer;
-        }
-
-        /* Notify on */
-        .ns-notify-list { display: flex; flex-direction: column; gap: 4px; }
-        .ns-notify-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 10px 12px;
-          border-radius: 8px;
-          background: var(--color-vemio-surface-raised);
-        }
-        .ns-notify-label { font-size: 13px; color: var(--vemio-text); }
-
-        /* Mute windows */
-        .ns-add-mute-btn {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          padding: 6px 12px;
-          border-radius: 8px;
-          font-size: 11px;
-          font-weight: 600;
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
-          color: var(--vemio-text-muted);
-          cursor: pointer;
-          white-space: nowrap;
-          transition: background 0.15s;
-          flex-shrink: 0;
-        }
-        .ns-add-mute-btn:hover { background: var(--color-vemio-border); }
-
-        .ns-mute-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 12px;
-          border-radius: 10px;
-          background: var(--color-vemio-surface-raised);
-          margin-top: 10px;
-          flex-wrap: wrap;
-        }
-        .ns-mute-times {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
-        .ns-mute-days {
-          display: flex;
-          gap: 4px;
-          flex-wrap: wrap;
-        }
-        .ns-day-btn {
-          width: 30px;
-          height: 30px;
-          border-radius: 6px;
-          font-size: 10px;
-          font-weight: 600;
-          cursor: pointer;
-          border: 1px solid var(--color-vemio-border);
-          background: transparent;
-          color: var(--color-vemio-text-dim);
-          transition: background 0.15s, color 0.15s;
-        }
-        .ns-day-btn--active {
-          background: rgba(245,158,11,0.15);
-          border-color: rgba(245,158,11,0.3);
-          color: var(--vemio-amber);
-        }
-
-        .ns-empty {
-          font-size: 12px;
-          color: var(--color-vemio-text-dim);
-          margin: 0;
-        }
-
-        .ns-bottom-save {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          padding-bottom: 24px;
-        }
-        .ns-saved-msg {
-          font-size: 12px;
-          color: var(--color-status-up);
-          margin: 0;
-        }
-          .ns-toggle {
-  width: 42px;
-  height: 24px;
-  border-radius: 12px;
-  border: none;
-  cursor: pointer;
-  position: relative;
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-.ns-toggle-thumb {
-  position: absolute;
-  top: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-}
-      `}</style>
-    </>
-  );
-}
-
-// ── Toggle component ──────────────────────────────────────────────────────────
-
-function Toggle({ value, onChange }) {
-  return (
-    <button
-      onClick={() => onChange(!value)}
-      className="ns-toggle"
-      style={{
-        background: value ? 'var(--color-vemio-amber)' : 'var(--color-vemio-border)',
-      }}
-      role="switch"
-      aria-checked={value}
-    >
-      <span
-        className="ns-toggle-thumb"
-        style={{ transform: value ? 'translateX(18px)' : 'translateX(2px)' }}
-      />
-    </button>
+    </motion.div>
   );
 }

@@ -108,8 +108,8 @@ export const POST = withAuth(async (req, session) => {
     ]);
 
     return Response.json({ success: true, rca: result.rows[0] }, { status: 201 });
-  } catch (err) {
-    console.error('[API /rca POST] Error:', err.message);
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
-  }
+} catch (err) {
+  console.error('RCA error:', err);
+  return Response.json({ error: err.message, stack: err.stack }, { status: 500 });
+}
 });

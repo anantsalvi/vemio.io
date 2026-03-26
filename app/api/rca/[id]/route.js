@@ -102,7 +102,7 @@ export const PATCH = withAuth(async (req, session, { params }) => {
     }
     return Response.json({ success: true, rca: result.rows[0] });
 } catch (err) {
-  console.error('RCA API error:', err);
-  return Response.json({ error: err.message }, { status: 500 });
+  console.error('RCA error:', err);
+  return Response.json({ error: err.message, stack: err.stack }, { status: 500 });
 }
 });

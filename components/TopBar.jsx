@@ -1,175 +1,98 @@
-// app/components/TopBar.jsx
-"use client";
+'use client';
 
-import { Menu } from "lucide-react";
-import { usePathname } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { Menu } from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { useBranding } from '@/hooks/useBranding';
 
 const PAGE_TITLES = {
-  "/": "Overview",
-  "/overview": "Overview",
-  "/intelligence": "Business Continuity Score",
-  "/devices": "Device Health",
-  "/tickets": "Tickets & SLA",
-  "/alerts": "Alerts",
-  "/sites": "Sites",
-  "/rca": "RCA Reports",
-  "/reports": "Reports",
-  "/settings/notifications": "Notification Preferences",
-  "/settings/reports": "Report Scheduling",
+  '/':                      'Overview',
+  '/overview':              'Overview',
+  '/intelligence':          'Business Continuity Score',
+  '/devices':               'Device Health',
+  '/tickets':               'Tickets & SLA',
+  '/alerts':                'Alerts',
+  '/sites':                 'Sites',
+  '/rca':                   'RCA Reports',
+  '/reports':               'Reports',
+  '/settings/notifications': 'Notification Preferences',
+  '/settings/reports':       'Report Scheduling',
+  '/settings/branding':      'Branding',
 };
 
 export default function TopBar({ onMenuClick, isMobile }) {
   const pathname = usePathname();
   const sessionData = useSession();
   const session = sessionData?.data;
-  const title = PAGE_TITLES[pathname] ?? "VEMIO";
-  const tenant = session?.user?.tenantName ?? "";
+  const branding = useBranding();
+
+  const title = PAGE_TITLES[pathname] ?? 'VEMIO';
+  const tenantDisplay = branding.company_name || session?.user?.tenantName || '';
 
   return (
-    <header className="vemio-topbar">
-      {/* Left: hamburger (mobile only) + page title */}
-      <div className="topbar-left">
+    <header
+      className="h-14 flex items-center justify-between px-6 max-sm:px-3 sticky top-0 z-30 gap-3"
+      style={{
+        background: 'var(--color-vemio-surface)',
+        borderBottom: '1px solid var(--color-vemio-border)',
+      }}
+    >
+      {/* Left: hamburger + page title */}
+      <div className="flex items-center gap-3 min-w-0">
         {isMobile && (
           <button
-            className="topbar-menu-btn"
             onClick={onMenuClick}
             aria-label="Open navigation"
+            className="flex items-center justify-center w-9 h-9 rounded-lg shrink-0
+                       cursor-pointer transition-colors border"
+            style={{
+              background: 'var(--color-vemio-surface-raised)',
+              borderColor: 'var(--color-vemio-border)',
+              color: 'var(--color-vemio-text)',
+            }}
           >
             <Menu size={20} />
           </button>
         )}
-        <div className="topbar-title-group">
-          <h1 className="topbar-title">{title}</h1>
-          {tenant && <span className="topbar-tenant">{tenant}</span>}
+        <div className="flex items-baseline gap-2.5 min-w-0">
+          <h1 className="text-[15px] font-semibold m-0 whitespace-nowrap truncate text-vemio-text">
+            {title}
+          </h1>
+          {tenantDisplay && (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap shrink-0
+                         max-sm:hidden text-vemio-text-muted"
+              style={{
+                background: 'var(--color-vemio-surface-raised)',
+                border: '1px solid var(--color-vemio-border)',
+              }}
+            >
+              {tenantDisplay}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Right: breadcrumb / user info */}
-      <div className="topbar-right">
+      {/* Right: user info */}
+      <div className="flex items-center shrink-0">
         {session?.user?.name && (
-          <div className="topbar-user">
-            <div className="topbar-avatar">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-8 h-8 rounded-full text-[13px] font-bold
+                         flex items-center justify-center shrink-0"
+              style={{
+                background: branding.primary_color,
+                color: '#000',
+              }}
+            >
               {session.user.name.charAt(0).toUpperCase()}
             </div>
-            <span className="topbar-username">{session.user.name}</span>
+            <span className="text-[13px] max-sm:hidden text-vemio-text-muted">
+              {session.user.name}
+            </span>
           </div>
         )}
       </div>
-
-      <style>{`
-        .vemio-topbar {
-          height: 56px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 0 24px;
-          background: var(--vemio-surface);
-          border-bottom: 1px solid var(--vemio-border);
-          position: sticky;
-          top: 0;
-          z-index: 30;
-          gap: 12px;
-        }
-
-        @media (max-width: 767px) {
-          .vemio-topbar {
-            padding: 0 12px;
-          }
-        }
-
-        .topbar-left {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          min-width: 0;
-        }
-
-        .topbar-menu-btn {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          width: 36px;
-          height: 36px;
-          border-radius: 8px;
-          background: var(--vemio-surface-raised);
-          border: 1px solid var(--vemio-border);
-          color: var(--vemio-text);
-          cursor: pointer;
-          flex-shrink: 0;
-          transition: background 0.15s;
-        }
-        .topbar-menu-btn:hover {
-          background: var(--vemio-border);
-        }
-
-        .topbar-title-group {
-          min-width: 0;
-          display: flex;
-          align-items: baseline;
-          gap: 10px;
-        }
-
-        .topbar-title {
-          font-size: 15px;
-          font-weight: 600;
-          color: var(--vemio-text);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          margin: 0;
-        }
-
-        .topbar-tenant {
-          font-size: 12px;
-          color: var(--vemio-text-muted);
-          background: var(--vemio-surface-raised);
-          border: 1px solid var(--vemio-border);
-          padding: 2px 8px;
-          border-radius: 20px;
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-
-        @media (max-width: 479px) {
-          .topbar-tenant { display: none; }
-        }
-
-        .topbar-right {
-          display: flex;
-          align-items: center;
-          flex-shrink: 0;
-        }
-
-        .topbar-user {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .topbar-avatar {
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          background: var(--vemio-amber);
-          color: #000;
-          font-size: 13px;
-          font-weight: 700;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex-shrink: 0;
-        }
-
-        .topbar-username {
-          font-size: 13px;
-          color: var(--vemio-text-muted);
-        }
-
-        @media (max-width: 479px) {
-          .topbar-username { display: none; }
-        }
-      `}</style>
     </header>
   );
 }

@@ -1,5 +1,5 @@
 'use client';
-
+export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { RefreshCw, Save, Shield, Eye } from 'lucide-react';

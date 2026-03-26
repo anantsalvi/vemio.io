@@ -1,6 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 import { Server, CheckCircle2, XCircle, AlertTriangle, Bell, MapPin } from 'lucide-react';
 
 const cardVariants = {
@@ -9,6 +10,8 @@ const cardVariants = {
 };
 
 export default function DeviceSummaryCards({ devices, alerts, sites }) {
+  const router = useRouter();
+
   const cards = [
     {
       label: 'Total Devices',
@@ -16,6 +19,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       icon: Server,
       color: 'var(--color-vemio-teal)',
       bg: 'var(--color-vemio-teal-soft)',
+      href: '/devices',
     },
     {
       label: 'Online',
@@ -23,6 +27,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       icon: CheckCircle2,
       color: 'var(--color-status-up)',
       bg: 'rgba(34, 197, 94, 0.1)',
+      href: '/devices?status=up',
     },
     {
       label: 'Offline',
@@ -31,6 +36,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       color: 'var(--color-status-down)',
       bg: 'rgba(239, 68, 68, 0.1)',
       pulse: (devices?.down ?? 0) > 0,
+      href: '/devices?status=down',
     },
     {
       label: 'Degraded',
@@ -38,6 +44,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       icon: AlertTriangle,
       color: 'var(--color-status-degraded)',
       bg: 'rgba(245, 158, 11, 0.1)',
+      href: '/devices?status=degraded',
     },
     {
       label: 'Active Alerts',
@@ -46,6 +53,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       color: 'var(--color-severity-high)',
       bg: 'rgba(249, 115, 22, 0.1)',
       pulse: (alerts?.active ?? 0) > 0,
+      href: '/alerts',
     },
     {
       label: 'Sites',
@@ -53,6 +61,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       icon: MapPin,
       color: 'var(--color-vemio-text-muted)',
       bg: 'rgba(148, 163, 184, 0.08)',
+      href: '/sites',
     },
   ];
 
@@ -66,6 +75,15 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
               key={card.label}
               variants={cardVariants}
               className="dsc-card"
+              onClick={() => router.push(card.href)}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  router.push(card.href);
+                }
+              }}
             >
               <div className="dsc-card-top">
                 <div className="dsc-icon-wrap" style={{ background: card.bg }}>
@@ -87,9 +105,6 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       </div>
 
       <style>{`
-        /* 3-col on desktop (matches the 2fr column in OverviewPage row-1),
-           3-col on tablet (sidebar gone → more room),
-           2-col on mobile */
         .dsc-grid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
@@ -116,6 +131,19 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
           min-height: 90px;
+          cursor: pointer;
+          transition: border-color 0.15s, background 0.15s;
+          outline: none;
+        }
+
+        .dsc-card:hover {
+          border-color: var(--color-vemio-text-dim);
+          background: var(--color-vemio-surface-raised);
+        }
+
+        .dsc-card:focus-visible {
+          border-color: var(--color-vemio-amber);
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-vemio-amber) 25%, transparent);
         }
 
         @media (max-width: 479px) {
@@ -143,7 +171,6 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
           height: 16px;
         }
 
-        /* Pulse dot — visible on all devices (not just hover) */
         .dsc-pulse-dot {
           width: 8px;
           height: 8px;

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Server, Search, RefreshCw, ChevronLeft, ChevronRight,
   Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
@@ -42,10 +42,27 @@ function timeAgo(date) {
 
 export default function DevicesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ type: '', status: '', search: '' });
-  const [page, setPage]       = useState(1);
+  const [filters, setFilters] = useState({
+    type:   searchParams.get('type')   || '',
+    status: searchParams.get('status') || '',
+    search: searchParams.get('search') || '',
+  });
+  const [page, setPage] = useState(1);
+
+  // Sync URL when filters change (shallow update, no navigation)
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filters.status) params.set('status', filters.status);
+    if (filters.type)   params.set('type',   filters.type);
+    if (filters.search) params.set('search', filters.search);
+    const qs = params.toString();
+    const newUrl = qs ? `/devices?${qs}` : '/devices';
+    router.replace(newUrl, { scroll: false });
+  }, [filters, router]);
 
   const fetchDevices = useCallback(async () => {
     setLoading(true);
@@ -282,7 +299,7 @@ export default function DevicesPage() {
         }
         .dv-refresh-btn:hover { background: var(--color-vemio-surface-raised); }
 
-        /* Pills — overflow scroll on mobile so they never wrap to 2 rows */
+        /* Pills */
         .dv-pills {
           display: flex;
           gap: 8px;
@@ -312,7 +329,7 @@ export default function DevicesPage() {
           flex-shrink: 0;
         }
 
-        /* Search + filter row: search fills space, select fixed width */
+        /* Search + filter row */
         .dv-filters {
           display: flex;
           gap: 10px;
@@ -357,7 +374,6 @@ export default function DevicesPage() {
           outline: none;
           cursor: pointer;
           flex-shrink: 0;
-          /* Fixed width on desktop, shrinks on mobile */
           width: 160px;
         }
         @media (max-width: 479px) {
@@ -378,7 +394,6 @@ export default function DevicesPage() {
         .dv-table {
           width: 100%;
           border-collapse: collapse;
-          /* min-width keeps the table readable when scrolled on mobile */
           min-width: 420px;
         }
         .dv-thead-row { border-bottom: 1px solid var(--color-vemio-border); }
@@ -393,7 +408,6 @@ export default function DevicesPage() {
           white-space: nowrap;
         }
 
-        /* Column visibility */
         .dv-th--md-only, .dv-td--md-only { display: none; }
         @media (min-width: 640px) {
           .dv-th--md-only, .dv-td--md-only { display: table-cell; }
@@ -424,7 +438,6 @@ export default function DevicesPage() {
         .dv-td--dim       { font-size: 11px; color: var(--color-vemio-text-dim); }
         .dv-td--capitalize { text-transform: capitalize; }
 
-        /* Status badge */
         .dv-status-badge {
           display: inline-flex;
           align-items: center;
@@ -451,8 +464,7 @@ export default function DevicesPage() {
           50%       { opacity: 0.35; }
         }
 
-        /* Name cell */
-        .dv-td--wide { max-width: 0; } /* forces truncation inside flex */
+        .dv-td--wide { max-width: 0; }
         .dv-name-cell {
           display: flex;
           align-items: center;
@@ -472,14 +484,13 @@ export default function DevicesPage() {
           white-space: nowrap;
         }
 
-        /* Mobile sub-line: type + IP shown below device name on small screens */
         .dv-name-sub {
           display: none;
           gap: 8px;
           font-size: 11px;
           color: var(--color-vemio-text-dim);
           margin-top: 2px;
-          padding-left: 23px; /* align with name after icon */
+          padding-left: 23px;
         }
         @media (max-width: 639px) {
           .dv-name-sub { display: flex; flex-wrap: wrap; }
@@ -493,7 +504,6 @@ export default function DevicesPage() {
           color: var(--vemio-text-muted);
         }
 
-        /* Pagination */
         .dv-pagination {
           display: flex;
           align-items: center;

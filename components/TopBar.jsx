@@ -22,12 +22,13 @@ const PAGE_TITLES = {
 
 export default function TopBar({ onMenuClick, isMobile }) {
   const pathname = usePathname();
-  const sessionData = useSession();
-  const session = sessionData?.data;
+  const { data: session, status } = useSession();
   const branding = useBranding();
 
   const title = PAGE_TITLES[pathname] ?? 'VEMIO';
   const tenantDisplay = branding.company_name || session?.user?.tenantName || '';
+  const user = session?.user;
+  const isLoading = status === 'loading';
 
   return (
     <header
@@ -75,7 +76,19 @@ export default function TopBar({ onMenuClick, isMobile }) {
 
       {/* Right: user info */}
       <div className="flex items-center shrink-0">
-        {session?.user?.name && (
+        {isLoading ? (
+          /* Skeleton placeholder while session loads */
+          <div className="flex items-center gap-2">
+            <div
+              className="w-8 h-8 rounded-full animate-pulse"
+              style={{ background: 'var(--color-vemio-surface-raised)' }}
+            />
+            <div
+              className="h-3 w-16 rounded animate-pulse max-sm:hidden"
+              style={{ background: 'var(--color-vemio-surface-raised)' }}
+            />
+          </div>
+        ) : user?.name ? (
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-full text-[13px] font-bold
@@ -85,13 +98,13 @@ export default function TopBar({ onMenuClick, isMobile }) {
                 color: '#000',
               }}
             >
-              {session.user.name.charAt(0).toUpperCase()}
+              {user.name.charAt(0).toUpperCase()}
             </div>
             <span className="text-[13px] max-sm:hidden text-vemio-text-muted">
-              {session.user.name}
+              {user.name}
             </span>
           </div>
-        )}
+        ) : null}
       </div>
     </header>
   );

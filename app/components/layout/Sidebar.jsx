@@ -1,125 +1,335 @@
-'use client';
+// app/components/Sidebar.jsx
+"use client";
 
-import Link from 'next/link';
-import { motion } from 'framer-motion';
+import Link from "next/link";
+import Image from "next/image";
+import { usePathname } from "next/navigation";
+import { signOut, useSession } from "next-auth/react";
+import { useBranding } from "@/hooks/useBranding";
 import {
   LayoutDashboard,
-  Server,
-  Ticket,
-  MapPin,
-  FileText,
-  Shield,
-  Settings,
   Activity,
-  Gauge,
+  Monitor,
+  Ticket,
   Bell,
-} from 'lucide-react';
+  MapPin,
+  FileSearch,
+  FileBarChart,
+  LogOut,
+  Zap,
+  Clock
+} from "lucide-react";
 
-const navItems = [
-  { href: '/overview', label: 'Overview', icon: LayoutDashboard },
-  { href: '/intelligence', label: 'Intelligence', icon: Gauge },
-  { href: '/devices', label: 'Device Health', icon: Server },
-  { href: '/tickets', label: 'Tickets & SLA', icon: Ticket },
-  { href: '/alerts', label: 'Alerts', icon: Bell },
-  // Phase 2+
-  { href: '/sites', label: 'Sites', icon: MapPin },
-  { href: '/rca', label: 'RCA Reports', icon: FileText },
-  { href: '/reports', label: 'Reports', icon: FileText },
+const NAV_ITEMS = [
+  { href: "/overview",      label: "Overview",       icon: LayoutDashboard },
+  { href: "/intelligence",  label: "Intelligence",   icon: Activity },
+  { href: "/devices",       label: "Device Health",  icon: Monitor },
+  { href: "/tickets",       label: "Tickets & SLA",  icon: Ticket },
+  { href: "/alerts",        label: "Alerts",         icon: Bell },
+  { href: "/sites",         label: "Sites",          icon: MapPin },
+  { href: "/rca",           label: "RCA Reports",    icon: FileSearch },
+  { href: "/reports",       label: "Reports",        icon: FileBarChart },
+  { href: '/settings/notifications', label: 'Notifications', icon: Bell     },
+  { href: '/settings/reports',       label: 'Report Schedule', icon: Clock },
 ];
 
-export default function Sidebar({ currentPath }) {
+export default function Sidebar({ isRail = false, onNavigate }) {
+  const pathname = usePathname();
+  const sessionData = useSession();
+  const session = sessionData?.data;
+  const branding = useBranding();
+
+  function isActive(href) {
+    return pathname === href || pathname.startsWith(href + "/");
+  }
+
+  const hasLogo = branding.loaded && branding.logo_url;
+
   return (
-    <aside
-      className="fixed left-0 top-0 bottom-0 w-[260px] flex flex-col z-40"
-      style={{
-        background: 'var(--color-vemio-surface)',
-        borderRight: '1px solid var(--color-vemio-border)',
-      }}
-    >
-      {/* Brand */}
-      <div className="px-6 py-5 flex items-center gap-3">
-        <div
-          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-          style={{
-            background: 'linear-gradient(135deg, rgba(245,158,11,0.15), rgba(20,184,166,0.1))',
-            border: '1px solid rgba(245,158,11,0.2)',
-          }}
-        >
-          <Shield className="w-5 h-5 text-vemio-amber" />
-        </div>
-        <div>
-          <h1 className="text-base font-bold tracking-tight leading-none">
-            <span className="text-vemio-amber">VEMIO</span>
-            <span className="text-vemio-text-dim text-[10px] font-medium align-super ml-0.5">™</span>
-          </h1>
-          <p className="text-[10px] text-vemio-text-dim uppercase tracking-widest mt-0.5">
-            Network Intelligence
-          </p>
-        </div>
+    <nav className={`sidebar ${isRail ? "sidebar--rail" : ""}`}>
+      {/* Logo */}
+      <div className="sidebar-logo">
+        {hasLogo ? (
+          <Image
+            src={branding.logo_url}
+            alt={branding.company_name || "Logo"}
+            width={isRail ? 28 : 24}
+            height={isRail ? 28 : 24}
+            className="logo-img"
+            unoptimized
+          />
+        ) : (
+          <Zap size={isRail ? 20 : 18} className="logo-icon" />
+        )}
+        {!isRail && (
+          <span className="logo-text">
+            {branding.loaded ? branding.company_name || "VEMIO" : "VEMIO"}
+          </span>
+        )}
       </div>
 
-      {/* Divider */}
-      <div className="mx-4 h-px" style={{ background: 'var(--color-vemio-border)' }} />
-
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map((item) => {
-          const isActive = currentPath === item.href || currentPath?.startsWith(item.href + '/');
-          const Icon = item.icon;
-
-          return (
+      {/* Nav items */}
+      <ul className="sidebar-nav">
+        {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
+          <li key={href}>
             <Link
-              key={item.href}
-              href={item.href}
-              className="relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group"
-              style={{
-                color: isActive ? 'var(--color-vemio-text)' : 'var(--color-vemio-text-muted)',
-                background: isActive ? 'var(--color-vemio-surface-raised)' : 'transparent',
-              }}
+              href={href}
+              onClick={onNavigate}
+              className={`nav-item ${isActive(href) ? "nav-item--active" : ""}`}
+              title={isRail ? label : undefined}
             >
-              {isActive && (
-                <motion.div
-                  layoutId="sidebar-active"
-                  className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
-                  style={{ background: 'var(--color-vemio-amber)' }}
-                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-                />
+              <Icon size={18} className="nav-icon" />
+              {!isRail && <span className="nav-label">{label}</span>}
+              {isRail && isActive(href) && (
+                <span className="rail-active-dot" aria-hidden="true" />
               )}
-              <Icon
-                className="w-[18px] h-[18px] shrink-0 transition-colors duration-150"
-                style={{
-                  color: isActive ? 'var(--color-vemio-amber)' : undefined,
-                }}
-              />
-              <span className="group-hover:text-vemio-text transition-colors duration-150">
-                {item.label}
-              </span>
             </Link>
-          );
-        })}
-      </nav>
-
-      {/* System status indicator */}
-      <div className="px-4 py-4">
-        <div
-          className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
-          style={{
-            background: 'var(--color-vemio-surface-raised)',
-            border: '1px solid var(--color-vemio-border)',
-          }}
-        >
-          <Activity className="w-3.5 h-3.5 text-status-up" />
-          <span className="text-vemio-text-muted">System</span>
-          <span className="text-status-up font-medium ml-auto">Operational</span>
-        </div>
-      </div>
+          </li>
+        ))}
+      </ul>
 
       {/* Footer */}
-      <div className="px-6 py-3" style={{ borderTop: '1px solid var(--color-vemio-border)' }}>
-        <p className="text-[10px] text-vemio-text-dim">
-          Powered by Vinay Enterprises
-        </p>
+      <div className="sidebar-footer">
+        {/* Powered by */}
+        {!isRail && branding.show_powered_by && branding.powered_by_text && (
+          <p className="powered-by">{branding.powered_by_text}</p>
+        )}
+
+        {!isRail && session?.user && (
+          <div className="sidebar-user">
+            <div className="user-avatar">
+              {session.user.name?.charAt(0).toUpperCase()}
+            </div>
+            <div className="user-info">
+              <p className="user-name">{session.user.name}</p>
+              <p className="user-role">{session.user.role ?? "viewer"}</p>
+            </div>
+          </div>
+        )}
+        <button
+          className={`signout-btn ${isRail ? "signout-btn--rail" : ""}`}
+          onClick={() => signOut({ callbackUrl: "/login" })}
+          title="Sign out"
+        >
+          <LogOut size={16} />
+          {!isRail && <span>Sign out</span>}
+        </button>
       </div>
-    </aside>
+
+      <style>{`
+        .sidebar {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          overflow: hidden;
+        }
+
+        /* ── Logo ── */
+        .sidebar-logo {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0 20px;
+          height: 56px;
+          border-bottom: 1px solid var(--vemio-border);
+          flex-shrink: 0;
+        }
+
+        .sidebar--rail .sidebar-logo {
+          justify-content: center;
+          padding: 0;
+        }
+
+        .logo-icon {
+          color: var(--vemio-amber);
+          flex-shrink: 0;
+        }
+
+        .logo-img {
+          flex-shrink: 0;
+          object-fit: contain;
+          border-radius: 4px;
+        }
+
+        .logo-text {
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+          color: var(--vemio-text);
+        }
+
+        /* ── Nav ── */
+        .sidebar-nav {
+          list-style: none;
+          margin: 0;
+          padding: 12px 10px;
+          flex: 1;
+          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .sidebar--rail .sidebar-nav {
+          padding: 12px 6px;
+          align-items: center;
+        }
+
+        .nav-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 9px 12px;
+          border-radius: 8px;
+          color: var(--vemio-text-muted);
+          text-decoration: none;
+          font-size: 13.5px;
+          font-weight: 500;
+          transition: background 0.15s, color 0.15s;
+          white-space: nowrap;
+          position: relative;
+          min-height: 44px;
+        }
+
+        .sidebar--rail .nav-item {
+          padding: 10px;
+          justify-content: center;
+          width: 48px;
+          height: 48px;
+          min-height: unset;
+          border-radius: 10px;
+          gap: 0;
+        }
+
+        .nav-item:hover {
+          background: var(--vemio-surface-raised);
+          color: var(--vemio-text);
+        }
+
+        .nav-item--active {
+          background: color-mix(in srgb, var(--vemio-amber) 12%, transparent);
+          color: var(--vemio-amber);
+        }
+
+        .nav-item--active:hover {
+          background: color-mix(in srgb, var(--vemio-amber) 18%, transparent);
+          color: var(--vemio-amber);
+        }
+
+        .nav-icon {
+          flex-shrink: 0;
+        }
+
+        .nav-label {
+          flex: 1;
+        }
+
+        .rail-active-dot {
+          position: absolute;
+          right: 4px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: var(--vemio-amber);
+        }
+
+        /* ── Footer ── */
+        .sidebar-footer {
+          padding: 12px 10px;
+          border-top: 1px solid var(--vemio-border);
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+
+        .sidebar--rail .sidebar-footer {
+          align-items: center;
+          padding: 12px 6px;
+        }
+
+        .powered-by {
+          font-size: 10px;
+          color: var(--vemio-text-dim);
+          text-align: center;
+          margin: 0 0 4px;
+          opacity: 0.6;
+        }
+
+        .sidebar-user {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 6px 4px;
+        }
+
+        .user-avatar {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: var(--vemio-amber);
+          color: #000;
+          font-size: 13px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+
+        .user-info {
+          min-width: 0;
+        }
+
+        .user-name {
+          font-size: 12.5px;
+          font-weight: 600;
+          color: var(--vemio-text);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          margin: 0;
+        }
+
+        .user-role {
+          font-size: 11px;
+          color: var(--vemio-text-dim);
+          text-transform: capitalize;
+          margin: 0;
+        }
+
+        .signout-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          padding: 8px 12px;
+          border-radius: 8px;
+          background: transparent;
+          border: 1px solid var(--vemio-border);
+          color: var(--vemio-text-muted);
+          font-size: 13px;
+          cursor: pointer;
+          width: 100%;
+          min-height: 36px;
+          transition: background 0.15s, color 0.15s;
+        }
+
+        .signout-btn:hover {
+          background: var(--vemio-surface-raised);
+          color: var(--vemio-text);
+        }
+
+        .signout-btn--rail {
+          width: 40px;
+          height: 40px;
+          min-height: unset;
+          padding: 0;
+          border-radius: 10px;
+        }
+      `}</style>
+    </nav>
   );
 }

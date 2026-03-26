@@ -101,8 +101,8 @@ export const PATCH = withAuth(async (req, session, { params }) => {
       return Response.json({ error: 'RCA report not found' }, { status: 404 });
     }
     return Response.json({ success: true, rca: result.rows[0] });
-  } catch (err) {
-    console.error('[API /rca/id PATCH] Error:', err.message);
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
-  }
+} catch (err) {
+  console.error('RCA API error:', err);
+  return Response.json({ error: err.message }, { status: 500 });
+}
 });

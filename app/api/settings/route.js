@@ -100,9 +100,9 @@ export const PATCH = withAuth(async (req, session) => {
     const merged   = deepMerge(existing, settings);
 
     await queryWithTenant(tenantId,
-      `UPDATE tenants SET settings = $2, updated_at = NOW() WHERE id = $1`,
-      [tenantId, JSON.stringify(merged)]
-    );
+  `UPDATE tenants SET settings = $2::jsonb, updated_at = NOW() WHERE id = $1`,
+  [tenantId, JSON.stringify(merged)]
+);
 
     return Response.json({ success: true, settings: merged });
 

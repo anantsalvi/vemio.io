@@ -62,10 +62,10 @@ export const GET = withAuth(async (req, session) => {
         offset,
       },
     });
-  } catch (err) {
-    console.error('[API /rca] Error:', err.message);
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
-  }
+} catch (err) {
+  console.error('RCA error:', err);
+  return Response.json({ error: err.message, stack: err.stack }, { status: 500 });
+}
 });
 
 export const POST = withAuth(async (req, session) => {

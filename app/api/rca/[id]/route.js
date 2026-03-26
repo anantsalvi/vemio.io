@@ -48,10 +48,10 @@ export const GET = withAuth(async (req, session, { params }) => {
     }
 
     return Response.json({ rca, linked_tickets, related_alerts });
-  } catch (err) {
-    console.error('[API /rca/id] Error:', err.message);
-    return Response.json({ error: 'Internal server error' }, { status: 500 });
-  }
+} catch (err) {
+  console.error('RCA error:', err);
+  return Response.json({ error: err.message, stack: err.stack }, { status: 500 });
+}
 });
 
 export const PATCH = withAuth(async (req, session, { params }) => {

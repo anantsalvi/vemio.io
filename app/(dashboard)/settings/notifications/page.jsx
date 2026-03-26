@@ -97,11 +97,11 @@ export default function NotificationsSettingsPage() {
     update('email_recipients', settings.email_recipients.filter(e => e !== email));
   }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <RefreshCw className="w-5 h-5 text-vemio-amber animate-spin" />
-    </div>
-  );
+  if (loading || !settings) return (
+  <div className="flex items-center justify-center h-64">
+    <RefreshCw className="w-5 h-5 text-vemio-amber animate-spin" />
+  </div>
+);
 
   return (
     <>

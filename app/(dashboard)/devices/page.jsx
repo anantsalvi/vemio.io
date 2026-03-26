@@ -34,10 +34,10 @@ const fadeUp = {
 
 function timeAgo(date) {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (s < 60)    return 'just now';
-  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+if (s < 60)    return 'just now';
+if (s < 3600)  return `${Math.floor(s / 60)}m`;
+if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
 export default function DevicesPage() {
@@ -100,7 +100,7 @@ export default function DevicesPage() {
         allData.devices || [],
         'vemio-devices',
         ['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt'],
-        { ipAddress: 'IP Address', lastSeenAt: 'Last Seen', siteName: 'Site', make: 'Manufacturer' }
+        { ipAddress: 'IP Address', lastSeenAt: 'Status Since', siteName: 'Site', make: 'Manufacturer' }
       );
     } catch (err) { console.error('Export failed:', err); }
     finally { setExporting(false); }
@@ -211,7 +211,7 @@ export default function DevicesPage() {
                   <th className="dv-th dv-th--md-only">IP Address</th>
                   <th className="dv-th dv-th--lg-only">Make / Model</th>
                   <th className="dv-th dv-th--lg-only">Site</th>
-                  <th className="dv-th dv-th--sm-only">Last Seen</th>
+                  <th className="dv-th dv-th--sm-only">Duration</th>
                 </tr>
               </thead>
               <tbody>
@@ -265,10 +265,11 @@ export default function DevicesPage() {
                       {/* Site — hidden below 1024px */}
                       <td className="dv-td dv-td--lg-only dv-td--muted">{device.siteName || '—'}</td>
 
-                      {/* Last Seen — hidden on very small screens */}
                       <td className="dv-td dv-td--sm-only dv-td--dim">
-                        {device.lastSeenAt ? timeAgo(new Date(device.lastSeenAt)) : '—'}
-                      </td>
+  {device.lastSeenAt
+    ? `${device.status === 'up' ? 'Up' : device.status === 'down' ? 'Down' : 'Idle'} ${timeAgo(new Date(device.lastSeenAt))}`
+    : '—'}
+</td>
                     </tr>
                   );
                 }) : (

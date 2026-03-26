@@ -7,6 +7,7 @@ import {
   Server, Search, RefreshCw, ChevronLeft, ChevronRight,
   Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
 } from 'lucide-react';
+import ExportButton from '@/app/components/ExportButton';
 
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'   },
@@ -102,9 +103,17 @@ export default function DevicesPage() {
               {summary ? `${summary.total} devices across your network` : 'Loading…'}
             </p>
           </div>
-          <button onClick={fetchDevices} className="dv-refresh-btn" aria-label="Refresh">
-            <RefreshCw className={`w-4 h-4 text-vemio-text-muted ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="dv-header-actions">
+            <ExportButton
+              data={devices}
+              filename="vemio-devices"
+              columns={['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt']}
+              headers={{ ipAddress: 'IP Address', lastSeenAt: 'Last Seen', siteName: 'Site', make: 'Manufacturer' }}
+            />
+            <button onClick={fetchDevices} className="dv-refresh-btn" aria-label="Refresh">
+              <RefreshCw className={`w-4 h-4 text-vemio-text-muted ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </motion.div>
 
         {/* ── Status pills — scrollable row on mobile ── */}
@@ -285,6 +294,12 @@ export default function DevicesPage() {
         }
         .dv-title    { font-size: 18px; font-weight: 700; color: var(--vemio-text); margin: 0; }
         .dv-subtitle { font-size: 13px; color: var(--vemio-text-muted); margin: 3px 0 0; }
+        .dv-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+        }
         .dv-refresh-btn {
           padding: 8px;
           border-radius: 8px;

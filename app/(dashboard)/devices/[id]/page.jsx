@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, RefreshCw, AlertTriangle, Shield } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -14,6 +14,26 @@ const STATUS_CONFIG = {
   degraded: { label: 'Degraded', color: 'var(--color-status-degraded)', bg: 'rgba(245,158,11,0.1)' },
   unknown:  { label: 'Unknown',  color: 'var(--color-status-unknown)',  bg: 'rgba(107,114,128,0.1)'},
 };
+
+function isExpired(dateStr) {
+  if (!dateStr) return false;
+  return new Date(dateStr) < new Date();
+}
+
+function isExpiringSoon(dateStr, daysThreshold = 90) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diff = (d - now) / (1000 * 60 * 60 * 24);
+  return diff > 0 && diff <= daysThreshold;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  });
+}
 
 export default function DeviceDetailPage() {
   const { id } = useParams();
@@ -61,6 +81,20 @@ export default function DeviceDetailPage() {
     status: h.status,
   }));
 
+  // Build info cards dynamically based on available data
+  const infoCards = [
+    { label: 'IP Address',      value: device.ipAddress || '—', mono: true },
+    { label: 'Manufacturer',    value: device.make      || '—' },
+    { label: 'Model',           value: device.model     || '—' },
+    { label: 'Serial Number',   value: device.serialNumber || '—', mono: true },
+    { label: 'Firmware',        value: device.firmwareVersion || '—', mono: true },
+    { label: 'Last Seen',       value: device.lastSeenAt
+        ? new Date(device.lastSeenAt).toLocaleString('en-IN') : '—' },
+  ];
+
+  // Lifecycle cards — only show if data exists
+  const hasLifecycle = device.eolDate || device.warrantyExpiry;
+
   return (
     <>
       <motion.div
@@ -90,19 +124,18 @@ export default function DeviceDetailPage() {
               {device.siteName && (
                 <span className="dd-meta-chip">{device.siteName}</span>
               )}
+              {device.isCritical && (
+                <span className="dd-meta-chip dd-meta-chip--critical">
+                  <Shield className="w-3 h-3" /> Critical
+                </span>
+              )}
             </div>
           </div>
         </div>
 
         {/* ── Info cards ── */}
         <div className="dd-info-grid">
-          {[
-            { label: 'IP Address',    value: device.ipAddress || '—', mono: true },
-            { label: 'Manufacturer',  value: device.make      || '—' },
-            { label: 'Model',         value: device.model     || '—' },
-            { label: 'Last Seen',     value: device.lastSeenAt
-                ? new Date(device.lastSeenAt).toLocaleString('en-IN') : '—' },
-          ].map(item => (
+          {infoCards.map(item => (
             <div key={item.label} className="dd-info-card">
               <p className="dd-info-label">{item.label}</p>
               <p className={`dd-info-value ${item.mono ? 'dd-info-value--mono' : ''}`}>
@@ -112,9 +145,52 @@ export default function DeviceDetailPage() {
           ))}
         </div>
 
+        {/* ── Lifecycle panel — EOL + Warranty ── */}
+        {hasLifecycle && (
+          <div className="dd-lifecycle-row">
+            {device.eolDate && (
+              <div className={`dd-lifecycle-card ${
+                isExpired(device.eolDate) ? 'dd-lifecycle-card--expired' :
+                isExpiringSoon(device.eolDate) ? 'dd-lifecycle-card--warning' : ''
+              }`}>
+                <p className="dd-lifecycle-label">End of Life</p>
+                <p className="dd-lifecycle-value">{formatDate(device.eolDate)}</p>
+                {isExpired(device.eolDate) && (
+                  <p className="dd-lifecycle-tag dd-lifecycle-tag--expired">
+                    <AlertTriangle className="w-3 h-3" /> Past EOL
+                  </p>
+                )}
+                {isExpiringSoon(device.eolDate) && (
+                  <p className="dd-lifecycle-tag dd-lifecycle-tag--warning">
+                    <AlertTriangle className="w-3 h-3" /> EOL approaching
+                  </p>
+                )}
+              </div>
+            )}
+            {device.warrantyExpiry && (
+              <div className={`dd-lifecycle-card ${
+                isExpired(device.warrantyExpiry) ? 'dd-lifecycle-card--expired' :
+                isExpiringSoon(device.warrantyExpiry) ? 'dd-lifecycle-card--warning' : ''
+              }`}>
+                <p className="dd-lifecycle-label">Warranty Expiry</p>
+                <p className="dd-lifecycle-value">{formatDate(device.warrantyExpiry)}</p>
+                {isExpired(device.warrantyExpiry) && (
+                  <p className="dd-lifecycle-tag dd-lifecycle-tag--expired">
+                    <AlertTriangle className="w-3 h-3" /> Warranty expired
+                  </p>
+                )}
+                {isExpiringSoon(device.warrantyExpiry) && (
+                  <p className="dd-lifecycle-tag dd-lifecycle-tag--warning">
+                    <AlertTriangle className="w-3 h-3" /> Expiring soon
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Uptime panel ── */}
         <div className="dd-panel">
-          {/* Panel header — stacks on mobile */}
           <div className="dd-uptime-header">
             <div className="dd-uptime-header-left">
               <h3 className="dd-panel-title">Uptime History</h3>
@@ -287,19 +363,27 @@ export default function DeviceDetailPage() {
           padding: 2px 8px;
           border-radius: 6px;
           text-transform: capitalize;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .dd-meta-chip--critical {
+          color: var(--color-severity-high);
+          background: rgba(249, 115, 22, 0.08);
+          border: 1px solid rgba(249, 115, 22, 0.15);
         }
 
-        /* ── Info grid: 4-col desktop, 2-col tablet/mobile ── */
+        /* ── Info grid: 3-col desktop, 2-col mobile ── */
         .dd-info-grid {
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(3, 1fr);
           gap: 12px;
         }
-        @media (max-width: 1023px) {
+        @media (max-width: 767px) {
           .dd-info-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 479px) {
-          .dd-info-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+          .dd-info-grid { gap: 8px; }
         }
 
         .dd-info-card {
@@ -324,7 +408,63 @@ export default function DeviceDetailPage() {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        .dd-info-value--mono { font-family: monospace; }
+        .dd-info-value--mono { font-family: var(--font-mono); font-size: 12px; }
+
+        /* ── Lifecycle cards ── */
+        .dd-lifecycle-row {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 12px;
+        }
+        @media (max-width: 479px) {
+          .dd-lifecycle-row { grid-template-columns: 1fr; }
+        }
+
+        .dd-lifecycle-card {
+          border-radius: 12px;
+          padding: 16px;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+        }
+        .dd-lifecycle-card--expired {
+          background: rgba(239, 68, 68, 0.04);
+          border-color: rgba(239, 68, 68, 0.15);
+        }
+        .dd-lifecycle-card--warning {
+          background: rgba(245, 158, 11, 0.04);
+          border-color: rgba(245, 158, 11, 0.15);
+        }
+        .dd-lifecycle-label {
+          font-size: 10px;
+          color: var(--color-vemio-text-dim);
+          text-transform: uppercase;
+          letter-spacing: 0.07em;
+          margin: 0;
+        }
+        .dd-lifecycle-value {
+          font-size: 16px;
+          font-weight: 600;
+          color: var(--color-vemio-text);
+          margin: 6px 0 0;
+        }
+        .dd-lifecycle-tag {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 11px;
+          font-weight: 500;
+          margin: 8px 0 0;
+          padding: 2px 8px;
+          border-radius: 6px;
+        }
+        .dd-lifecycle-tag--expired {
+          color: var(--color-severity-high);
+          background: rgba(239, 68, 68, 0.08);
+        }
+        .dd-lifecycle-tag--warning {
+          color: var(--color-vemio-amber);
+          background: rgba(245, 158, 11, 0.08);
+        }
 
         /* ── Shared panel ── */
         .dd-panel {
@@ -347,7 +487,6 @@ export default function DeviceDetailPage() {
           margin: 3px 0 0;
         }
 
-        /* ── Uptime header: side-by-side on tablet+, stacked on mobile ── */
         .dd-uptime-header {
           display: flex;
           align-items: flex-start;
@@ -421,7 +560,7 @@ export default function DeviceDetailPage() {
           padding: 7px 12px;
           border-radius: 8px;
           transition: background 0.12s;
-          flex-wrap: wrap;          /* wraps timestamp on very small screens */
+          flex-wrap: wrap;
         }
         .dd-log-row:hover { background: var(--color-vemio-surface-raised); }
         .dd-log-dot {

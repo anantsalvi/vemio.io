@@ -21,8 +21,8 @@ const PAGE_TITLES = {
 
 export default function TopBar({ onMenuClick, isMobile }) {
   const pathname = usePathname();
-  const { data: session } = useSession();
-
+  const sessionData = useSession();
+  const session = sessionData?.data;
   const title = PAGE_TITLES[pathname] ?? "VEMIO";
   const tenant = session?.user?.tenantName ?? "";
 

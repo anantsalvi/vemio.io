@@ -271,14 +271,16 @@ export default function LoginPage() {
         }
 
         .login-grid {
-          position: absolute;
-          inset: 0;
-          opacity: 0.03;
-          background-image:
-            linear-gradient(rgba(245, 158, 11, 0.3) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(245, 158, 11, 0.3) 1px, transparent 1px);
-          background-size: 60px 60px;
-        }
+  position: absolute;
+  inset: 0;
+  opacity: 0.2;
+  background-image:
+    radial-gradient(circle at center, var(--color-vemio-amber) 1px, transparent 1px),
+    linear-gradient(to right, rgba(245, 158, 11, 0.15) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(245, 158, 11, 0.15) 1px, transparent 1px);
+  background-size: 40px 40px, 80px 80px, 80px 80px;
+  background-position: 20px 20px, 0 0, 0 0;
+}
 
         .login-glow {
           position: absolute;
@@ -519,6 +521,9 @@ export default function LoginPage() {
         .login-footer-link:hover {
           color: var(--color-vemio-amber);
         }
+          [data-theme="light"] .login-grid {
+  opacity: 0.55;
+}
       `}</style>
     </>
   );

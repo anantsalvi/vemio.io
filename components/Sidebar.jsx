@@ -26,6 +26,8 @@ const NAV_ITEMS = [
   { href: "/sites",         label: "Sites",          icon: MapPin },
   { href: "/rca",           label: "RCA Reports",    icon: FileSearch },
   { href: "/reports",       label: "Reports",        icon: FileBarChart },
+  { href: '/settings/notifications', label: 'Notifications', icon: Bell     },
+  { href: '/settings/reports',       label: 'Report Schedule', icon: CalendarClock },
 ];
 
 export default function Sidebar({ isRail = false, onNavigate }) {

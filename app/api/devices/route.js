@@ -3,7 +3,7 @@
  * GET /api/devices
  * 
  * Returns tenant-scoped device list with filters.
- * Query params: type, status, site, search, sort, page, limit
+ * Query params: type, status, site, search, sort, page, limit, include_retired
  */
 
 import { withAuth } from '@/lib/auth';
@@ -23,11 +23,17 @@ export const GET = withAuth(async (req, session) => {
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
   const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50')));
   const offset = (page - 1) * limit;
+  const includeRetired = url.searchParams.get('include_retired') === 'true';
 
   // Build query
   const conditions = [];
   const params = [];
   let paramIndex = 1;
+
+  // Exclude retired devices by default
+  if (!includeRetired) {
+    conditions.push(`d.is_retired = false`);
+  }
 
   if (type) {
     conditions.push(`d.device_type = $${paramIndex++}`);
@@ -71,7 +77,7 @@ export const GET = withAuth(async (req, session) => {
       `SELECT 
          d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
          d.ip_address, d.current_status, d.last_seen_at, d.uptime_percent_30d,
-         d.created_at,
+         d.created_at, d.is_retired,
          s.name AS site_name, s.id AS site_id
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id
@@ -81,7 +87,7 @@ export const GET = withAuth(async (req, session) => {
       [...params, limit, offset]
     );
 
-    // Get summary counts
+    // Get summary counts (exclude retired)
     const summaryResult = await queryWithTenant(tenantId,
       `SELECT 
          COUNT(*) AS total,
@@ -89,13 +95,15 @@ export const GET = withAuth(async (req, session) => {
          COUNT(*) FILTER (WHERE current_status = 'down') AS down,
          COUNT(*) FILTER (WHERE current_status = 'degraded') AS degraded,
          COUNT(*) FILTER (WHERE current_status = 'unknown') AS unknown
-       FROM devices`
+       FROM devices
+       WHERE is_retired = false`
     );
 
-    // Get device type breakdown
+    // Get device type breakdown (exclude retired)
     const typeResult = await queryWithTenant(tenantId,
       `SELECT device_type, COUNT(*) AS count
        FROM devices
+       WHERE is_retired = false
        GROUP BY device_type
        ORDER BY count DESC`
     );
@@ -116,6 +124,7 @@ export const GET = withAuth(async (req, session) => {
         uptime30d: row.uptime_percent_30d ? parseFloat(row.uptime_percent_30d) : null,
         siteName: row.site_name,
         siteId: row.site_id,
+        isRetired: row.is_retired,
       })),
       summary: {
         total: parseInt(summaryResult.rows[0].total),

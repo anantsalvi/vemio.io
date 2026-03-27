@@ -29,7 +29,7 @@ export const GET = withAuth(async (req, session) => {
 
   try {
     // ── Nodes ──
-    const nodeConditions = ['d.is_monitored = true'];
+    const nodeConditions = ['d.is_monitored = true', 'd.is_retired = false'];
     const nodeParams = [];
     let pi = 1;
 

@@ -24,6 +24,7 @@ export const GET = withAuth(async (req, session, { params }) => {
               d.eol_date, d.warranty_expiry,
               d.is_critical, d.has_redundancy,
               d.firmware_is_current, d.config_last_validated,
+              d.is_retired,
               s.name AS site_name,
               d.description
        FROM devices d
@@ -119,6 +120,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         firmwareIsCurrent: device.firmware_is_current,
         configLastValidated: device.config_last_validated,
         description: device.description,
+        isRetired: device.is_retired,
       },
       history: history.map(h => ({
         status: h.status,

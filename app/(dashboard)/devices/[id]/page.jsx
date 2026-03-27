@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { ArrowLeft, RefreshCw, AlertTriangle, Shield } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ArrowLeft, RefreshCw, AlertTriangle, Shield, Archive, RotateCcw } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -38,9 +38,11 @@ function formatDate(dateStr) {
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const router  = useRouter();
-  const [data, setData]     = useState(null);
-  const [days, setDays]     = useState(30);
-  const [loading, setLoading] = useState(true);
+  const [data, setData]             = useState(null);
+  const [days, setDays]             = useState(30);
+  const [loading, setLoading]       = useState(true);
+  const [retiring, setRetiring]     = useState(false);
+  const [showRetireConfirm, setShowRetireConfirm] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -63,6 +65,39 @@ export default function DeviceDetailPage() {
   const uptime    = data?.uptime;
   const history   = data?.history || [];
   const statusCfg = device ? (STATUS_CONFIG[device.status] || STATUS_CONFIG.unknown) : null;
+
+  /* ── Retire / Reactivate handler ── */
+  const handleRetireToggle = async () => {
+    if (!device) return;
+    const newRetired = !device.isRetired;
+
+    // Require confirmation only when retiring (not reactivating)
+    if (newRetired && !showRetireConfirm) {
+      setShowRetireConfirm(true);
+      return;
+    }
+
+    setRetiring(true);
+    setShowRetireConfirm(false);
+    try {
+      const res = await fetch(`/api/devices/${id}/retire`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ retired: newRetired }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      // Update local state
+      setData(prev => ({
+        ...prev,
+        device: { ...prev.device, isRetired: result.isRetired },
+      }));
+    } catch (err) {
+      console.error('Failed to update device:', err);
+    } finally {
+      setRetiring(false);
+    }
+  };
 
   if (loading && !data) {
     return (
@@ -103,6 +138,14 @@ export default function DeviceDetailPage() {
         transition={{ duration: 0.4 }}
         className="dd-root"
       >
+        {/* ── Retired banner ── */}
+        {device.isRetired && (
+          <div className="dd-retired-banner">
+            <Archive className="w-4 h-4" />
+            <span>This device is retired and hidden from all dashboards, topology, alerts, and BCS calculations.</span>
+          </div>
+        )}
+
         {/* ── Back + header ── */}
         <div className="dd-header">
           <button
@@ -114,7 +157,10 @@ export default function DeviceDetailPage() {
           </button>
 
           <div className="dd-header-body">
-            <h1 className="dd-title">{device.name}</h1>
+            <h1 className="dd-title">
+              {device.name}
+              {device.isRetired && <span className="dd-retired-tag">Retired</span>}
+            </h1>
             <div className="dd-badges">
               <span className="dd-status-badge" style={{ background: statusCfg.bg, color: statusCfg.color }}>
                 <span className="dd-status-dot" style={{ background: statusCfg.color }} />
@@ -131,7 +177,69 @@ export default function DeviceDetailPage() {
               )}
             </div>
           </div>
+
+          {/* ── Retire / Reactivate button ── */}
+          <div className="dd-header-actions">
+            <button
+              onClick={handleRetireToggle}
+              disabled={retiring}
+              className={`dd-retire-btn ${device.isRetired ? 'dd-retire-btn--reactivate' : ''}`}
+              title={device.isRetired ? 'Reactivate this device' : 'Retire this device'}
+            >
+              {retiring ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : device.isRetired ? (
+                <RotateCcw className="w-3.5 h-3.5" />
+              ) : (
+                <Archive className="w-3.5 h-3.5" />
+              )}
+              <span className="dd-retire-label">
+                {retiring ? 'Updating…' : device.isRetired ? 'Reactivate' : 'Retire'}
+              </span>
+            </button>
+          </div>
         </div>
+
+        {/* ── Retire confirmation ── */}
+        <AnimatePresence>
+          {showRetireConfirm && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.2 }}
+              className="dd-retire-confirm"
+            >
+              <div className="dd-retire-confirm-inner">
+                <div className="dd-retire-confirm-text">
+                  <AlertTriangle className="w-4 h-4" style={{ color: 'var(--color-vemio-amber)', flexShrink: 0 }} />
+                  <div>
+                    <p className="dd-retire-confirm-title">Retire {device.name}?</p>
+                    <p className="dd-retire-confirm-desc">
+                      This device will be hidden from Device Health, Topology, Alerts, Overview stats,
+                      and BCS calculations. You can reactivate it at any time.
+                    </p>
+                  </div>
+                </div>
+                <div className="dd-retire-confirm-actions">
+                  <button
+                    onClick={() => setShowRetireConfirm(false)}
+                    className="dd-retire-cancel-btn"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleRetireToggle}
+                    disabled={retiring}
+                    className="dd-retire-confirm-btn"
+                  >
+                    {retiring ? 'Retiring…' : 'Yes, Retire'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* ── Description (if available from Auvik) ── */}
         {device.description && (
@@ -306,6 +414,20 @@ export default function DeviceDetailPage() {
         }
         @media (max-width: 767px) { .dd-root { gap: 14px; } }
 
+        /* ── Retired banner ── */
+        .dd-retired-banner {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px 16px;
+          border-radius: 12px;
+          background: rgba(107, 114, 128, 0.08);
+          border: 1px solid rgba(107, 114, 128, 0.2);
+          color: var(--color-vemio-text-muted);
+          font-size: 13px;
+          line-height: 1.4;
+        }
+
         /* ── Header ── */
         .dd-header {
           display: flex;
@@ -326,7 +448,15 @@ export default function DeviceDetailPage() {
         }
         .dd-back-btn:hover { background: var(--color-vemio-surface-raised); }
 
-        .dd-header-body { min-width: 0; }
+        .dd-header-body { min-width: 0; flex: 1; }
+
+        .dd-header-actions {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-top: 3px;
+        }
 
         .dd-title {
           font-size: 18px;
@@ -337,8 +467,23 @@ export default function DeviceDetailPage() {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
         @media (max-width: 479px) { .dd-title { font-size: 16px; } }
+
+        .dd-retired-tag {
+          font-size: 9px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          padding: 2px 7px;
+          border-radius: 4px;
+          background: rgba(107, 114, 128, 0.15);
+          color: var(--color-vemio-text-dim);
+          flex-shrink: 0;
+        }
 
         .dd-badges {
           display: flex;
@@ -380,6 +525,100 @@ export default function DeviceDetailPage() {
           background: rgba(249, 115, 22, 0.08);
           border: 1px solid rgba(249, 115, 22, 0.15);
         }
+
+        /* ── Retire / Reactivate button ── */
+        .dd-retire-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 7px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          white-space: nowrap;
+          border: 1px solid rgba(107, 114, 128, 0.25);
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text-dim);
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .dd-retire-btn:hover:not(:disabled) {
+          background: rgba(239, 68, 68, 0.06);
+          border-color: rgba(239, 68, 68, 0.25);
+          color: var(--color-status-down);
+        }
+        .dd-retire-btn--reactivate:hover:not(:disabled) {
+          background: rgba(34, 197, 94, 0.06);
+          border-color: rgba(34, 197, 94, 0.25);
+          color: var(--color-status-up);
+        }
+        .dd-retire-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        @media (max-width: 479px) {
+          .dd-retire-label { display: none; }
+          .dd-retire-btn { padding: 7px 8px; }
+        }
+
+        /* ── Retire confirmation ── */
+        .dd-retire-confirm {
+          overflow: hidden;
+        }
+        .dd-retire-confirm-inner {
+          padding: 16px;
+          border-radius: 12px;
+          background: rgba(245, 158, 11, 0.04);
+          border: 1px solid rgba(245, 158, 11, 0.15);
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+        .dd-retire-confirm-text {
+          display: flex;
+          gap: 10px;
+          align-items: flex-start;
+        }
+        .dd-retire-confirm-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--color-vemio-text);
+          margin: 0;
+        }
+        .dd-retire-confirm-desc {
+          font-size: 12px;
+          color: var(--color-vemio-text-muted);
+          margin: 4px 0 0;
+          line-height: 1.5;
+        }
+        .dd-retire-confirm-actions {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        .dd-retire-cancel-btn {
+          padding: 6px 14px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          border: 1px solid var(--color-vemio-border);
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text-muted);
+          transition: background 0.15s;
+        }
+        .dd-retire-cancel-btn:hover { background: var(--color-vemio-surface-raised); }
+        .dd-retire-confirm-btn {
+          padding: 6px 14px;
+          border-radius: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          background: rgba(239, 68, 68, 0.12);
+          color: var(--color-status-down);
+          transition: background 0.15s;
+        }
+        .dd-retire-confirm-btn:hover { background: rgba(239, 68, 68, 0.2); }
+        .dd-retire-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* ── Description block ── */
         .dd-description {

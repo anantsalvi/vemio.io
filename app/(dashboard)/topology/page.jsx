@@ -1,15 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Network, X, RefreshCw, Filter,
+  Network, X, RefreshCw, Globe,
   Shield, MonitorSpeaker, Wifi, HardDrive, Radio, Cpu, Server,
-  Printer, Camera, Lock, Zap, Globe, CircleDot,
+  Printer, Camera, Lock, Zap, CircleDot,
 } from 'lucide-react';
 import * as d3 from 'd3';
 
-/* ── Status config (matches devices page) ── */
+/* ── Status config ── */
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: '#22c55e', bg: 'rgba(34,197,94,0.12)'  },
   down:     { label: 'Offline',  color: '#ef4444', bg: 'rgba(239,68,68,0.12)'  },
@@ -17,7 +17,7 @@ const STATUS_CONFIG = {
   unknown:  { label: 'Unknown',  color: '#6b7280', bg: 'rgba(107,114,128,0.12)'},
 };
 
-/* ── Device type → Lucide icon component ── */
+/* ── Device type → icon component ── */
 const TYPE_ICONS = {
   firewall:       Shield,
   core_switch:    MonitorSpeaker,
@@ -34,16 +34,42 @@ const TYPE_ICONS = {
   other:          CircleDot,
 };
 
-/* ── Device type → node radius ── */
-const TYPE_RADIUS = {
-  firewall:     22,
-  core_switch:  20,
-  router:       18,
-  server:       16,
-  access_switch:14,
-  access_point: 12,
+/* ── Tier definitions: device_type → tier index ──
+   Lower tier = higher in the diagram (closer to Internet) */
+const TIER_ORDER = {
+  firewall:       0,
+  router:         0,
+  core_switch:    1,
+  access_switch:  2,
+  access_point:   3,
+  server:         3,
+  p2p_link:       1,
+  nas:            3,
+  ups:            4,
+  printer:        4,
+  cctv:           4,
+  access_control: 4,
+  other:          4,
 };
-const DEFAULT_RADIUS = 13;
+
+const TIER_LABELS = [
+  'Firewalls & Routers',
+  'Core / L3 Switches',
+  'Access / L2 Switches',
+  'APs · Servers · Endpoints',
+  'Peripherals',
+];
+
+/* ── Node sizing by tier ── */
+const TIER_RADIUS = { 0: 24, 1: 20, 2: 16, 3: 13, 4: 11 };
+
+/* ── Type abbreviations ── */
+const TYPE_ABBR = {
+  firewall: 'FW', core_switch: 'CS', access_switch: 'AS',
+  access_point: 'AP', router: 'RT', server: 'SV',
+  nas: 'NA', ups: 'UP', cctv: 'CC', printer: 'PR',
+  access_control: 'AC', p2p_link: 'P2', other: '?',
+};
 
 const fadeUp = {
   hidden:  { opacity: 0, y: 16 },
@@ -51,23 +77,22 @@ const fadeUp = {
 };
 
 /* ================================================================
-   TOPOLOGY PAGE
+   TOPOLOGY PAGE — Hierarchical Tiered Layout
    ================================================================ */
 export default function TopologyPage() {
   const svgRef     = useRef(null);
   const wrapRef    = useRef(null);
-  const simRef     = useRef(null);
 
   const [data, setData]             = useState(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
   const [sites, setSites]           = useState([]);
   const [selectedSite, setSelectedSite] = useState('');
-  const [selected, setSelected]     = useState(null);   // clicked node
-  const [hovered, setHovered]       = useState(null);    // hovered node id
-  const [dimensions, setDimensions] = useState({ w: 900, h: 600 });
+  const [category, setCategory]     = useState('network');
+  const [selected, setSelected]     = useState(null);
+  const [dimensions, setDimensions] = useState({ w: 1200, h: 700 });
 
-  /* ── Fetch sites for filter dropdown ── */
+  /* ── Fetch sites ── */
   useEffect(() => {
     fetch('/api/sites')
       .then(r => r.ok ? r.json() : Promise.reject())
@@ -82,6 +107,7 @@ export default function TopologyPage() {
     try {
       const params = new URLSearchParams();
       if (selectedSite) params.set('site', selectedSite);
+      if (category !== 'network') params.set('category', category);
       const res = await fetch(`/api/topology?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
@@ -93,7 +119,7 @@ export default function TopologyPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedSite]);
+  }, [selectedSite, category]);
 
   useEffect(() => { fetchTopology(); }, [fetchTopology]);
 
@@ -109,9 +135,27 @@ export default function TopologyPage() {
     return () => ro.disconnect();
   }, []);
 
-  /* ── D3 Force Simulation ── */
+  /* ── Compute tiers ── */
+  const tierData = useMemo(() => {
+    if (!data?.nodes) return null;
+
+    // Group nodes by tier
+    const tiers = {};
+    for (const node of data.nodes) {
+      const tierIdx = TIER_ORDER[node.type] ?? 4;
+      if (!tiers[tierIdx]) tiers[tierIdx] = [];
+      tiers[tierIdx].push({ ...node, tier: tierIdx });
+    }
+
+    // Get sorted tier indices that actually have nodes
+    const activeTiers = Object.keys(tiers).map(Number).sort((a, b) => a - b);
+
+    return { tiers, activeTiers };
+  }, [data]);
+
+  /* ── D3 Hierarchical Render ── */
   useEffect(() => {
-    if (!data || !svgRef.current) return;
+    if (!data || !tierData || !svgRef.current) return;
     const { nodes: rawNodes, edges: rawEdges } = data;
     if (!rawNodes.length) return;
 
@@ -119,64 +163,157 @@ export default function TopologyPage() {
     svg.selectAll('*').remove();
 
     const { w, h } = dimensions;
+    const { tiers, activeTiers } = tierData;
 
-    // Deep copy for D3 mutation
-    const nodes = rawNodes.map(n => ({ ...n, radius: TYPE_RADIUS[n.type] || DEFAULT_RADIUS }));
-    const edges = rawEdges.map(e => ({ ...e }));
+    // Layout parameters
+    const tierCount = activeTiers.length;
+    const topPad = 60;
+    const bottomPad = 40;
+    const tierSpacing = (h - topPad - bottomPad) / Math.max(tierCount, 1);
+    const sidePad = 60;
+
+    // Assign x,y positions to each node
+    const nodeMap = new Map();
+    const allNodes = [];
+
+    for (let ti = 0; ti < activeTiers.length; ti++) {
+      const tierIdx = activeTiers[ti];
+      const tierNodes = tiers[tierIdx];
+      const y = topPad + ti * tierSpacing + tierSpacing / 2;
+      const nodeCount = tierNodes.length;
+      const availableWidth = w - sidePad * 2;
+      const spacing = Math.min(availableWidth / Math.max(nodeCount, 1), 80);
+      const startX = (w - (nodeCount - 1) * spacing) / 2;
+
+      for (let ni = 0; ni < tierNodes.length; ni++) {
+        const node = tierNodes[ni];
+        node.x = startX + ni * spacing;
+        node.y = y;
+        node.radius = TIER_RADIUS[tierIdx] || 11;
+        nodeMap.set(node.id, node);
+        allNodes.push(node);
+      }
+    }
+
+    // Resolve edges to positioned nodes
+    const edges = rawEdges
+      .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
+      .map(e => ({
+        source: nodeMap.get(e.source),
+        target: nodeMap.get(e.target),
+      }));
 
     // Container group for zoom/pan
     const g = svg.append('g');
 
-    // Zoom behavior
     const zoom = d3.zoom()
-      .scaleExtent([0.15, 4])
+      .scaleExtent([0.2, 3])
       .on('zoom', (event) => g.attr('transform', event.transform));
     svg.call(zoom);
 
-    // Initial centering
-    svg.call(zoom.transform, d3.zoomIdentity.translate(w / 2, h / 2).scale(0.8));
+    // Fit content with initial transform
+    const initialScale = Math.min(1, w / (w + 100));
+    svg.call(zoom.transform, d3.zoomIdentity.translate(0, 0).scale(initialScale));
 
-    // Simulation
-    const sim = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(edges).id(d => d.id).distance(100).strength(0.4))
-      .force('charge', d3.forceManyBody().strength(-300).distanceMax(500))
-      .force('center', d3.forceCenter(0, 0))
-      .force('collision', d3.forceCollide().radius(d => d.radius + 6));
+    // ── Internet icon at top ──
+    const internetY = topPad - 10;
+    const internetG = g.append('g').attr('transform', `translate(${w / 2}, ${internetY})`);
+    internetG.append('circle')
+      .attr('r', 18)
+      .attr('fill', 'rgba(59,130,246,0.12)')
+      .attr('stroke', '#3b82f6')
+      .attr('stroke-width', 1.5);
+    internetG.append('text')
+      .attr('text-anchor', 'middle')
+      .attr('dominant-baseline', 'central')
+      .attr('font-size', 9)
+      .attr('font-weight', 700)
+      .attr('fill', '#3b82f6')
+      .text('WAN');
+    internetG.append('text')
+      .attr('y', 28)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', 8)
+      .attr('fill', 'rgba(148,163,184,0.6)')
+      .text('Internet');
 
-    simRef.current = sim;
+    // Draw line from Internet to first tier center
+    if (activeTiers.length > 0) {
+      const firstTier = activeTiers[0];
+      const firstNodes = tiers[firstTier];
+      // Connect to each firewall/router
+      for (const fn of firstNodes) {
+        g.append('line')
+          .attr('x1', w / 2).attr('y1', internetY + 18)
+          .attr('x2', fn.x).attr('y2', fn.y - fn.radius - 4)
+          .attr('stroke', 'rgba(59,130,246,0.2)')
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '4,3');
+      }
+    }
+
+    // ── Tier labels ──
+    for (let ti = 0; ti < activeTiers.length; ti++) {
+      const tierIdx = activeTiers[ti];
+      const y = topPad + ti * tierSpacing + tierSpacing / 2;
+      g.append('text')
+        .attr('x', 12)
+        .attr('y', y - tierSpacing / 2 + 14)
+        .attr('font-size', 8)
+        .attr('fill', 'rgba(148,163,184,0.4)')
+        .attr('text-transform', 'uppercase')
+        .attr('letter-spacing', '0.08em')
+        .attr('font-weight', 600)
+        .text(TIER_LABELS[tierIdx] || `Tier ${tierIdx}`);
+
+      // Tier separator line
+      if (ti > 0) {
+        g.append('line')
+          .attr('x1', 10).attr('x2', w - 10)
+          .attr('y1', y - tierSpacing / 2)
+          .attr('y2', y - tierSpacing / 2)
+          .attr('stroke', 'rgba(148,163,184,0.08)')
+          .attr('stroke-width', 1);
+      }
+    }
 
     // ── Edges ──
-    const linkG = g.append('g').attr('class', 'topo-links');
-    const link = linkG.selectAll('line')
+    const linkG = g.append('g');
+    linkG.selectAll('path')
       .data(edges)
-      .join('line')
-      .attr('stroke', 'rgba(148,163,184,0.15)')
-      .attr('stroke-width', 1.2);
+      .join('path')
+      .attr('d', e => {
+        const sx = e.source.x, sy = e.source.y;
+        const tx = e.target.x, ty = e.target.y;
+        // Curved edges for cross-tier, straight for same-tier
+        if (Math.abs(sy - ty) < 5) {
+          // Same tier — arc
+          const mx = (sx + tx) / 2;
+          const my = sy - 30;
+          return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
+        }
+        // Different tier — gentle curve
+        const my = (sy + ty) / 2;
+        return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
+      })
+      .attr('fill', 'none')
+      .attr('stroke', 'rgba(148,163,184,0.12)')
+      .attr('stroke-width', 1);
 
-    // ── Node groups ──
-    const nodeG = g.append('g').attr('class', 'topo-nodes');
+    // ── Nodes ──
+    const nodeG = g.append('g');
     const node = nodeG.selectAll('g')
-      .data(nodes)
+      .data(allNodes)
       .join('g')
-      .attr('cursor', 'pointer')
-      .call(d3.drag()
-        .on('start', (event, d) => {
-          if (!event.active) sim.alphaTarget(0.3).restart();
-          d.fx = d.x; d.fy = d.y;
-        })
-        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-        .on('end', (event, d) => {
-          if (!event.active) sim.alphaTarget(0);
-          d.fx = null; d.fy = null;
-        })
-      );
+      .attr('transform', d => `translate(${d.x},${d.y})`)
+      .attr('cursor', 'pointer');
 
-    // Outer glow ring
+    // Outer glow
     node.append('circle')
-      .attr('r', d => d.radius + 4)
+      .attr('r', d => d.radius + 3)
       .attr('fill', 'none')
       .attr('stroke', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
-      .attr('stroke-width', 2)
+      .attr('stroke-width', 1.5)
       .attr('stroke-opacity', 0.2);
 
     // Main circle
@@ -184,38 +321,29 @@ export default function TopologyPage() {
       .attr('r', d => d.radius)
       .attr('fill', d => {
         const c = (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
-        // Muted fill for non-core devices
-        return d.radius >= 18 ? c + '30' : c + '18';
+        return d.tier <= 1 ? c + '25' : c + '15';
       })
       .attr('stroke', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
       .attr('stroke-width', 1.5);
 
-    // Device type icon (as text glyph — first letter fallback)
+    // Type abbreviation
     node.append('text')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
-      .attr('font-size', d => Math.max(9, d.radius * 0.6))
-      .attr('font-weight', 600)
+      .attr('font-size', d => Math.max(8, d.radius * 0.55))
+      .attr('font-weight', 700)
       .attr('fill', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
       .attr('pointer-events', 'none')
-      .text(d => {
-        const abbr = {
-          firewall: 'FW', core_switch: 'CS', access_switch: 'AS',
-          access_point: 'AP', router: 'RT', server: 'SV',
-          nas: 'NA', ups: 'UP', cctv: 'CC', printer: 'PR',
-          access_control: 'AC', p2p_link: 'P2', other: '?',
-        };
-        return abbr[d.type] || '?';
-      });
+      .text(d => TYPE_ABBR[d.type] || '?');
 
     // Label below node
     node.append('text')
-      .attr('y', d => d.radius + 14)
+      .attr('y', d => d.radius + 12)
       .attr('text-anchor', 'middle')
-      .attr('font-size', 9)
-      .attr('fill', 'rgba(148,163,184,0.7)')
+      .attr('font-size', 8)
+      .attr('fill', 'rgba(148,163,184,0.6)')
       .attr('pointer-events', 'none')
-      .text(d => d.name?.length > 20 ? d.name.slice(0, 18) + '…' : d.name);
+      .text(d => d.name?.length > 18 ? d.name.slice(0, 16) + '…' : d.name);
 
     // Click → inspector
     node.on('click', (event, d) => {
@@ -225,13 +353,11 @@ export default function TopologyPage() {
 
     // Hover highlight
     node.on('mouseenter', (event, d) => {
-      setHovered(d.id);
-      // Highlight connected edges
-      link
+      linkG.selectAll('path')
         .attr('stroke', e =>
           (e.source.id === d.id || e.target.id === d.id)
             ? (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color
-            : 'rgba(148,163,184,0.08)'
+            : 'rgba(148,163,184,0.06)'
         )
         .attr('stroke-width', e =>
           (e.source.id === d.id || e.target.id === d.id) ? 2 : 0.8
@@ -239,25 +365,15 @@ export default function TopologyPage() {
     });
 
     node.on('mouseleave', () => {
-      setHovered(null);
-      link
-        .attr('stroke', 'rgba(148,163,184,0.15)')
-        .attr('stroke-width', 1.2);
+      linkG.selectAll('path')
+        .attr('stroke', 'rgba(148,163,184,0.12)')
+        .attr('stroke-width', 1);
     });
 
     // Click background → deselect
     svg.on('click', () => setSelected(null));
 
-    // Tick
-    sim.on('tick', () => {
-      link
-        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-      node.attr('transform', d => `translate(${d.x},${d.y})`);
-    });
-
-    return () => { sim.stop(); };
-  }, [data, dimensions]);
+  }, [data, tierData, dimensions]);
 
   /* ── Counts for legend ── */
   const statusCounts = {};
@@ -274,8 +390,8 @@ export default function TopologyPage() {
   if (selected && data) {
     const neighborIds = new Set();
     for (const e of data.edges) {
-      if (e.source === selected.id || e.source?.id === selected.id) neighborIds.add(e.target?.id || e.target);
-      if (e.target === selected.id || e.target?.id === selected.id) neighborIds.add(e.source?.id || e.source);
+      if (e.source === selected.id) neighborIds.add(e.target);
+      if (e.target === selected.id) neighborIds.add(e.source);
     }
     for (const n of data.nodes) {
       if (neighborIds.has(n.id)) neighbors.push(n);
@@ -298,6 +414,20 @@ export default function TopologyPage() {
             </p>
           </div>
           <div className="tp-header-actions">
+            <div className="tp-category-toggle">
+              <button
+                onClick={() => setCategory('network')}
+                className={`tp-cat-btn ${category === 'network' ? 'tp-cat-btn--active' : ''}`}
+              >
+                Network
+              </button>
+              <button
+                onClick={() => setCategory('all')}
+                className={`tp-cat-btn ${category === 'all' ? 'tp-cat-btn--active' : ''}`}
+              >
+                All Devices
+              </button>
+            </div>
             {sites.length > 0 && (
               <select
                 value={selectedSite}
@@ -370,15 +500,10 @@ export default function TopologyPage() {
               <div className="tp-legend-section">
                 <span className="tp-legend-title">Types</span>
                 {Object.entries(typeCounts)
-                  .sort((a, b) => b[1] - a[1])
-                  .slice(0, 6)
+                  .sort((a, b) => (TIER_ORDER[a[0]] ?? 9) - (TIER_ORDER[b[0]] ?? 9))
                   .map(([type, count]) => (
                     <span key={type} className="tp-legend-item">
-                      <span className="tp-legend-abbr">
-                        {{ firewall:'FW', core_switch:'CS', access_switch:'AS', access_point:'AP',
-                           router:'RT', server:'SV', nas:'NA', ups:'UP', cctv:'CC', printer:'PR',
-                           access_control:'AC', p2p_link:'P2', other:'?' }[type] || '?'}
-                      </span>
+                      <span className="tp-legend-abbr">{TYPE_ABBR[type] || '?'}</span>
                       {type.replace(/_/g, ' ')} ({count})
                     </span>
                   ))
@@ -388,7 +513,7 @@ export default function TopologyPage() {
           )}
         </motion.div>
 
-        {/* ── Inspector Panel (slides in from right) ── */}
+        {/* ── Inspector Panel ── */}
         <AnimatePresence>
           {selected && (
             <motion.div
@@ -453,7 +578,6 @@ export default function TopologyPage() {
       </motion.div>
 
       <style>{`
-        /* ── Root ── */
         .tp-root {
           display: flex;
           flex-direction: column;
@@ -462,7 +586,6 @@ export default function TopologyPage() {
           position: relative;
         }
 
-        /* ── Header ── */
         .tp-header {
           display: flex;
           align-items: flex-start;
@@ -476,6 +599,33 @@ export default function TopologyPage() {
           align-items: center;
           gap: 8px;
           flex-shrink: 0;
+          flex-wrap: wrap;
+        }
+        .tp-category-toggle {
+          display: flex;
+          border-radius: 8px;
+          overflow: hidden;
+          border: 1px solid var(--color-vemio-border);
+        }
+        .tp-cat-btn {
+          padding: 7px 12px;
+          font-size: 11px;
+          font-weight: 500;
+          cursor: pointer;
+          border: none;
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text-dim);
+          transition: background 0.15s, color 0.15s;
+          white-space: nowrap;
+        }
+        .tp-cat-btn:first-child { border-right: 1px solid var(--color-vemio-border); }
+        .tp-cat-btn--active {
+          background: rgba(245,158,11,0.12);
+          color: var(--color-vemio-amber);
+        }
+        .tp-cat-btn:hover:not(.tp-cat-btn--active) {
+          background: var(--color-vemio-surface-raised);
+          color: var(--color-vemio-text-muted);
         }
         .tp-site-select {
           padding: 8px 12px;
@@ -500,7 +650,6 @@ export default function TopologyPage() {
         }
         .tp-refresh-btn:hover { background: var(--color-vemio-surface-raised); }
 
-        /* ── Graph panel ── */
         .tp-graph-panel {
           border-radius: 16px;
           overflow: hidden;
@@ -510,30 +659,19 @@ export default function TopologyPage() {
         }
         .tp-graph-wrap {
           width: 100%;
-          height: clamp(400px, 60vh, 720px);
+          height: clamp(500px, 70vh, 900px);
           position: relative;
           overflow: hidden;
         }
-        .tp-graph-wrap svg {
-          display: block;
-          background: transparent;
-        }
+        .tp-graph-wrap svg { display: block; }
 
-        /* Loading */
         .tp-loading {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 12px;
-          font-size: 13px;
-          color: var(--color-vemio-text-dim);
+          position: absolute; inset: 0;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 12px; font-size: 13px; color: var(--color-vemio-text-dim);
         }
         .tp-loading-spinner {
-          width: 28px;
-          height: 28px;
+          width: 28px; height: 28px;
           border: 2.5px solid rgba(148,163,184,0.15);
           border-top-color: rgba(245,158,11,0.6);
           border-radius: 50%;
@@ -541,240 +679,92 @@ export default function TopologyPage() {
         }
         @keyframes tp-spin { to { transform: rotate(360deg); } }
 
-        /* Empty / error */
         .tp-empty {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          font-size: 13px;
-          color: var(--color-vemio-text-muted);
+          position: absolute; inset: 0;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 6px; font-size: 13px; color: var(--color-vemio-text-muted);
         }
         .tp-retry-btn {
-          margin-top: 8px;
-          padding: 6px 16px;
-          border-radius: 8px;
-          font-size: 12px;
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
-          color: var(--color-vemio-text);
-          cursor: pointer;
+          margin-top: 8px; padding: 6px 16px; border-radius: 8px; font-size: 12px;
+          background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border);
+          color: var(--color-vemio-text); cursor: pointer;
         }
-        .tp-retry-btn:hover { border-color: var(--color-vemio-text-dim); }
 
-        /* ── Legend ── */
         .tp-legend {
-          display: flex;
-          gap: 24px;
-          padding: 10px 16px;
-          border-top: 1px solid var(--color-vemio-border);
-          flex-wrap: wrap;
+          display: flex; gap: 24px; padding: 10px 16px;
+          border-top: 1px solid var(--color-vemio-border); flex-wrap: wrap;
         }
-        .tp-legend-section {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
+        .tp-legend-section { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .tp-legend-title {
-          font-size: 9px;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          font-weight: 600;
-          color: var(--color-vemio-text-dim);
-          margin-right: 2px;
+          font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+          font-weight: 600; color: var(--color-vemio-text-dim); margin-right: 2px;
         }
         .tp-legend-item {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 11px;
-          color: var(--color-vemio-text-muted);
-          white-space: nowrap;
+          display: inline-flex; align-items: center; gap: 4px;
+          font-size: 11px; color: var(--color-vemio-text-muted); white-space: nowrap;
         }
-        .tp-legend-dot {
-          width: 7px;
-          height: 7px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
+        .tp-legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
         .tp-legend-abbr {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 18px;
-          height: 14px;
-          border-radius: 3px;
-          font-size: 8px;
-          font-weight: 700;
-          background: rgba(148,163,184,0.1);
-          color: var(--color-vemio-text-dim);
-          flex-shrink: 0;
-          text-transform: uppercase;
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 18px; height: 14px; border-radius: 3px; font-size: 8px; font-weight: 700;
+          background: rgba(148,163,184,0.1); color: var(--color-vemio-text-dim);
+          flex-shrink: 0; text-transform: uppercase;
         }
 
-        /* ── Inspector Panel ── */
         .tp-inspector {
-          position: absolute;
-          top: 52px;
-          right: 0;
-          width: 320px;
-          max-height: calc(100% - 64px);
-          overflow-y: auto;
-          background: var(--color-vemio-bg);
-          border: 1px solid var(--color-vemio-border);
-          border-radius: 14px;
-          padding: 16px;
-          z-index: 20;
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
+          position: absolute; top: 52px; right: 0; width: 320px;
+          max-height: calc(100% - 64px); overflow-y: auto;
+          background: var(--color-vemio-bg); border: 1px solid var(--color-vemio-border);
+          border-radius: 14px; padding: 16px; z-index: 20;
+          display: flex; flex-direction: column; gap: 14px;
           box-shadow: 0 8px 32px rgba(0,0,0,0.35);
         }
         @media (max-width: 639px) {
           .tp-inspector {
-            position: fixed;
-            top: auto;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            width: 100%;
-            max-height: 55vh;
-            border-radius: 16px 16px 0 0;
+            position: fixed; top: auto; bottom: 0; left: 0; right: 0;
+            width: 100%; max-height: 55vh; border-radius: 16px 16px 0 0;
           }
         }
-        .tp-insp-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-        }
+        .tp-insp-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .tp-insp-title {
-          font-size: 14px;
-          font-weight: 600;
-          color: var(--vemio-text);
-          margin: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          font-size: 14px; font-weight: 600; color: var(--vemio-text); margin: 0;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .tp-insp-close {
-          padding: 4px;
-          border-radius: 6px;
-          border: none;
-          background: transparent;
-          color: var(--color-vemio-text-dim);
-          cursor: pointer;
-          display: flex;
-          flex-shrink: 0;
+          padding: 4px; border-radius: 6px; border: none; background: transparent;
+          color: var(--color-vemio-text-dim); cursor: pointer; display: flex; flex-shrink: 0;
         }
         .tp-insp-close:hover { background: rgba(255,255,255,0.05); }
 
         .tp-insp-status { display: flex; }
         .tp-insp-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          padding: 3px 10px;
-          border-radius: 20px;
-          font-size: 10px;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
+          display: inline-flex; align-items: center; gap: 5px;
+          padding: 3px 10px; border-radius: 20px; font-size: 10px;
+          font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
         }
-        .tp-insp-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
+        .tp-insp-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
-        .tp-insp-fields {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .tp-field {
-          display: flex;
-          justify-content: space-between;
-          align-items: baseline;
-          gap: 8px;
-        }
-        .tp-field-label {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          flex-shrink: 0;
-        }
+        .tp-insp-fields { display: flex; flex-direction: column; gap: 8px; }
+        .tp-field { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+        .tp-field-label { font-size: 11px; color: var(--color-vemio-text-dim); flex-shrink: 0; }
         .tp-field-value {
-          font-size: 12px;
-          color: var(--color-vemio-text-muted);
-          text-align: right;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          text-transform: capitalize;
+          font-size: 12px; color: var(--color-vemio-text-muted); text-align: right;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: capitalize;
         }
-        .tp-field-value--mono {
-          font-family: monospace;
-          font-size: 11px;
-          text-transform: none;
-        }
+        .tp-field-value--mono { font-family: monospace; font-size: 11px; text-transform: none; }
 
-        /* Neighbors */
-        .tp-insp-neighbors {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          border-top: 1px solid var(--color-vemio-border);
-          padding-top: 12px;
-        }
-        .tp-insp-nbr-title {
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          font-weight: 600;
-          color: var(--color-vemio-text-dim);
-        }
-        .tp-insp-nbr-list {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          max-height: 200px;
-          overflow-y: auto;
-        }
+        .tp-insp-neighbors { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--color-vemio-border); padding-top: 12px; }
+        .tp-insp-nbr-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; color: var(--color-vemio-text-dim); }
+        .tp-insp-nbr-list { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
         .tp-insp-nbr-item {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 5px 8px;
-          border-radius: 6px;
-          border: none;
-          background: transparent;
-          cursor: pointer;
-          text-align: left;
-          transition: background 0.12s;
-          color: inherit;
+          display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+          border-radius: 6px; border: none; background: transparent; cursor: pointer;
+          text-align: left; transition: background 0.12s; color: inherit;
         }
         .tp-insp-nbr-item:hover { background: rgba(255,255,255,0.04); }
-        .tp-insp-nbr-name {
-          font-size: 12px;
-          color: var(--vemio-text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          flex: 1;
-        }
-        .tp-insp-nbr-type {
-          font-size: 10px;
-          color: var(--color-vemio-text-dim);
-          text-transform: capitalize;
-          flex-shrink: 0;
-        }
+        .tp-insp-nbr-name { font-size: 12px; color: var(--vemio-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .tp-insp-nbr-type { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: capitalize; flex-shrink: 0; }
 
-        /* ── Mobile adjustments ── */
         @media (max-width: 479px) {
           .tp-site-select { min-width: 100px; font-size: 12px; }
           .tp-legend { padding: 8px 10px; gap: 12px; }
@@ -784,7 +774,6 @@ export default function TopologyPage() {
   );
 }
 
-/* ── Tiny field component ── */
 function Field({ label, value, mono }) {
   if (!value) return null;
   return (

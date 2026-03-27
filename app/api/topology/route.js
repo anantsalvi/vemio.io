@@ -6,19 +6,29 @@
  * Nodes come from the devices table; edges from device_neighbors,
  * deduplicated so A→B and B→A collapse into one edge.
  *
- * Query params: site (filter by site_id)
+ * Query params:
+ *   site     — filter by site_id
+ *   category — 'network' (default) or 'all'
+ *              network = firewall, core_switch, access_switch, access_point, router, server, p2p_link
+ *              all     = includes printer, cctv, ups, access_control, nas, other
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
 
+const NETWORK_TYPES = [
+  'firewall', 'core_switch', 'access_switch', 'access_point',
+  'router', 'server', 'p2p_link',
+];
+
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
   const url = new URL(req.url);
   const siteId = url.searchParams.get('site');
+  const category = url.searchParams.get('category') || 'network';
 
   try {
-    // ── Nodes: all monitored infra devices ──
+    // ── Nodes ──
     const nodeConditions = ['d.is_monitored = true'];
     const nodeParams = [];
     let pi = 1;
@@ -28,9 +38,13 @@ export const GET = withAuth(async (req, session) => {
       nodeParams.push(siteId);
     }
 
-    const nodeWhere = nodeConditions.length
-      ? 'WHERE ' + nodeConditions.join(' AND ')
-      : '';
+    // Default to network-only; 'all' shows everything
+    if (category !== 'all') {
+      nodeConditions.push(`d.device_type = ANY($${pi++})`);
+      nodeParams.push(NETWORK_TYPES);
+    }
+
+    const nodeWhere = 'WHERE ' + nodeConditions.join(' AND ');
 
     const nodesResult = await queryWithTenant(tenantId,
       `SELECT
@@ -94,7 +108,7 @@ export const GET = withAuth(async (req, session) => {
       siteName: row.site_name,
     }));
 
-    return Response.json({ nodes, edges });
+    return Response.json({ nodes, edges, category });
   } catch (err) {
     console.error('[VEMIO API] Topology query error:', err.message);
     return Response.json({ error: 'Failed to fetch topology data' }, { status: 500 });

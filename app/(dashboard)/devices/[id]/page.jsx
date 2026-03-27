@@ -88,7 +88,6 @@ export default function DeviceDetailPage() {
     { label: 'Model',           value: device.model     || '—' },
     { label: 'Serial Number',   value: device.serialNumber || '—', mono: true },
     { label: 'Firmware',        value: device.firmwareVersion || '—', mono: true },
-    { label: 'Software Version', value: device.softwareVersion || '—', mono: true },
     { label: 'Status Since',       value: device.lastSeenAt
         ? new Date(device.lastSeenAt).toLocaleString('en-IN') : '—' },
   ];

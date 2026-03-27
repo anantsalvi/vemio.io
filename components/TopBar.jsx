@@ -12,6 +12,7 @@ const PAGE_TITLES = {
   '/overview':              'Overview',
   '/intelligence':          'Business Continuity Score',
   '/devices':               'Device Health',
+  '/topology':              'Network Topology',
   '/tickets':               'Tickets & SLA',
   '/alerts':                'Alerts',
   '/sites':                 'Sites',

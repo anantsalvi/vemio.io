@@ -24,7 +24,7 @@ export const GET = withAuth(async (req, session, { params }) => {
               d.eol_date, d.warranty_expiry,
               d.is_critical, d.has_redundancy,
               d.firmware_is_current, d.config_last_validated,
-              s.name AS site_name
+              s.name AS site_name,
               d.software_version, d.description, d.auvik_dashboard_url
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id

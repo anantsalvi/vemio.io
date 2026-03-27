@@ -305,7 +305,6 @@ export default function DeviceDetailPage() {
                           {iface.vlanId && (
                             <span className="dd-iface-badge">VLAN {iface.vlanId}</span>
                           )}
-                          <span className="dd-iface-source">{iface.source}</span>
                         </div>
                       </div>
                     ))}

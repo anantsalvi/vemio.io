@@ -8,7 +8,7 @@ import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
 import UptimeChart from '@/app/components/dashboard/UptimeChart';
 import RecentEvents from '@/app/components/dashboard/RecentEvents';
 import { AlertTriangle } from 'lucide-react';
-
+import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.08 } },
@@ -19,7 +19,9 @@ const fadeUp = {
 };
 
 export default function OverviewPage() {
-  const { data, loading, error, refresh } = useSWRFetch('/api/overview', {
+  const { category } = useDeviceCategory();
+  
+  const { data, loading, error, refresh } = useSWRFetch(`/api/overview?category=${category}`, {
     refreshInterval: 60000,
     dedupingInterval: 5000,
   });

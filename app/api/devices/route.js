@@ -3,11 +3,16 @@
  * GET /api/devices
  * 
  * Returns tenant-scoped device list with filters.
- * Query params: type, status, site, search, sort, page, limit, include_retired
+ * Query params: type, status, site, search, sort, page, limit, include_retired, category
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+
+const NETWORK_TYPES = [
+  'firewall', 'core_switch', 'access_switch', 'access_point',
+  'router', 'server', 'p2p_link',
+];
 
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
@@ -24,6 +29,7 @@ export const GET = withAuth(async (req, session) => {
   const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50')));
   const offset = (page - 1) * limit;
   const includeRetired = url.searchParams.get('include_retired') === 'true';
+  const category = url.searchParams.get('category') || 'network';
 
   // Build query
   const conditions = [];
@@ -33,6 +39,12 @@ export const GET = withAuth(async (req, session) => {
   // Exclude retired devices by default
   if (!includeRetired) {
     conditions.push(`d.is_retired = false`);
+  }
+
+  // Category filter: network-only by default unless a specific type is requested
+  if (category !== 'all' && !type) {
+    conditions.push(`d.device_type = ANY($${paramIndex++})`);
+    params.push(NETWORK_TYPES);
   }
 
   if (type) {
@@ -87,7 +99,12 @@ export const GET = withAuth(async (req, session) => {
       [...params, limit, offset]
     );
 
-    // Get summary counts (exclude retired)
+    // Get summary counts (exclude retired, respect category)
+    const summaryTypeFilter = category !== 'all' && !type
+      ? 'AND device_type = ANY($1)'
+      : '';
+    const summaryParams = category !== 'all' && !type ? [NETWORK_TYPES] : [];
+
     const summaryResult = await queryWithTenant(tenantId,
       `SELECT 
          COUNT(*) AS total,
@@ -96,16 +113,18 @@ export const GET = withAuth(async (req, session) => {
          COUNT(*) FILTER (WHERE current_status = 'degraded') AS degraded,
          COUNT(*) FILTER (WHERE current_status = 'unknown') AS unknown
        FROM devices
-       WHERE is_retired = false`
+       WHERE is_retired = false ${summaryTypeFilter}`,
+      summaryParams
     );
 
-    // Get device type breakdown (exclude retired)
+    // Get device type breakdown (exclude retired, respect category)
     const typeResult = await queryWithTenant(tenantId,
       `SELECT device_type, COUNT(*) AS count
        FROM devices
-       WHERE is_retired = false
+       WHERE is_retired = false ${summaryTypeFilter}
        GROUP BY device_type
-       ORDER BY count DESC`
+       ORDER BY count DESC`,
+      summaryParams
     );
 
     const total = parseInt(countResult.rows[0].total);

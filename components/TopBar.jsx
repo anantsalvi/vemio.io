@@ -6,6 +6,7 @@ import { useSession } from 'next-auth/react';
 import { useBranding } from '@/hooks/useBranding';
 import ThemeToggle from '@/app/components/ThemeToggle';
 import AlertNotificationToggle from '@/app/components/AlertNotificationToggle';
+import DeviceCategoryToggle from '@/app/components/DeviceCategoryToggle';
 
 const PAGE_TITLES = {
   '/':                      'Overview',
@@ -77,8 +78,9 @@ export default function TopBar({ onMenuClick, isMobile }) {
         </div>
       </div>
 
-      {/* Right: notification toggle + theme toggle + user info */}
+      {/* Right: category toggle + notification toggle + theme toggle + user info */}
       <div className="flex items-center gap-2 shrink-0">
+        <DeviceCategoryToggle />
         <AlertNotificationToggle />
         <ThemeToggle compact />
 

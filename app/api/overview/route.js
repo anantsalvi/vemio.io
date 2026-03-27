@@ -5,17 +5,32 @@
  * Returns dashboard overview data: BCS score, device summary,
  * alert count, SLA gauge, uptime trend.
  * 
- * Phase 1: Returns demo data alongside any real data from the DB.
- * Phase 2: Fully live data from Auvik sync.
+ * Query params:
+ *   category — 'network' (default) or 'all'
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
 
+const NETWORK_TYPES = [
+  'firewall', 'core_switch', 'access_switch', 'access_point',
+  'router', 'server', 'p2p_link',
+];
+
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
+  const url = new URL(req.url);
+  const category = url.searchParams.get('category') || 'network';
 
-  // Attempt to fetch real data; fall back to demo if tables are empty
+  // Build device type filter
+  const deviceTypeFilter = category !== 'all'
+    ? 'AND device_type = ANY($1)'
+    : '';
+  const deviceTypeFilterD = category !== 'all'
+    ? 'AND d.device_type = ANY($1)'
+    : '';
+  const typeParams = category !== 'all' ? [NETWORK_TYPES] : [];
+
   let overview;
 
   try {
@@ -27,11 +42,13 @@ export const GET = withAuth(async (req, session) => {
          COUNT(*) FILTER (WHERE current_status = 'down') AS down,
          COUNT(*) FILTER (WHERE current_status = 'degraded') AS degraded,
          COUNT(*) FILTER (WHERE current_status = 'unknown') AS unknown
-       FROM devices`
+       FROM devices
+       WHERE is_retired = false ${deviceTypeFilter}`,
+      typeParams
     );
 
     // Latest BCS score
-     const bcsResult = await queryWithTenant(tenantId,
+    const bcsResult = await queryWithTenant(tenantId,
       `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
        FROM bcs_scores
        ORDER BY computed_at DESC
@@ -59,6 +76,7 @@ export const GET = withAuth(async (req, session) => {
       const bcs = bcsResult.rows[0] || null;
       overview = {
         source: 'live',
+        category,
         bcs: bcs ? {
           overall: parseFloat(bcs.score),
           deviceHealth: parseFloat(bcs.visibility_coverage),
@@ -107,8 +125,13 @@ export const GET = withAuth(async (req, session) => {
         console.error('[VEMIO API] Uptime trend query error:', err.message);
       }
 
-      // Recent events from device_status_history (proper device names + status transitions)
+      // Recent events from device_status_history
       try {
+        const eventsParams = category !== 'all' ? [NETWORK_TYPES] : [];
+        const eventsTypeFilter = category !== 'all'
+          ? 'AND d.device_type = ANY($1)'
+          : '';
+
         const eventsResult = await queryWithTenant(tenantId,
           `SELECT 
              dsh.status,
@@ -123,13 +146,15 @@ export const GET = withAuth(async (req, session) => {
            JOIN devices d ON d.id = dsh.device_id
            LEFT JOIN sites s ON s.id = d.site_id
            WHERE dsh.recorded_at > NOW() - INTERVAL '24 hours'
+             AND d.is_retired = false
+             ${eventsTypeFilter}
            ORDER BY dsh.recorded_at DESC
-           LIMIT 15`
+           LIMIT 15`,
+          eventsParams
         );
 
         if (eventsResult.rows.length > 0) {
           overview.recentEvents = eventsResult.rows.map(r => {
-            // Build a human-readable message from the status transition
             const name = r.device_name || 'Unknown device';
             const type = formatDeviceType(r.device_type);
             let message, eventType, severity;
@@ -176,7 +201,6 @@ export const GET = withAuth(async (req, session) => {
         console.error('[VEMIO API] Recent events query error:', err.message);
       }
     } else {
-      // Demo data — realistic for a mid-size textile company
       overview = getDemoOverview();
     }
   } catch (err) {
@@ -188,7 +212,6 @@ export const GET = withAuth(async (req, session) => {
 });
 
 
-/** Map device_type enum to human-readable short labels */
 function formatDeviceType(type) {
   const map = {
     firewall: 'Firewall',

@@ -6,11 +6,13 @@ import { BrandingProvider } from '@/hooks/useBranding';
 import Sidebar from '@/app/components/layout/Sidebar';
 import TopBar from '@/components/TopBar';
 import { ThemeProvider } from '@/hooks/useTheme';
+import { DeviceCategoryProvider } from '@/contexts/DeviceCategoryContext';
 export default function DashboardShell({ children }) {
   const sidebar = useSidebar();
 
   return (
     <SessionProvider>
+      <DeviceCategoryProvider>
        <ThemeProvider>
       <BrandingProvider>
         <div className="flex min-h-screen relative" style={{ background: 'var(--color-vemio-bg)' }}>
@@ -56,6 +58,7 @@ export default function DashboardShell({ children }) {
         </div>
       </BrandingProvider>
  </ThemeProvider>
+    </DeviceCategoryProvider>
     </SessionProvider>
   );
 }

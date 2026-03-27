@@ -7,11 +7,17 @@
  *   ?state=active|acknowledged|resolved|suppressed
  *   ?severity=critical|high|medium|low
  *   ?type=device_down|sla_breach|bcs_drop
+ *   ?category=network|all (default: network)
  *   ?limit=50&offset=0
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant, withTransaction } from '@/lib/db';
+
+const NETWORK_TYPES = [
+  'firewall', 'core_switch', 'access_switch', 'access_point',
+  'router', 'server', 'p2p_link',
+];
 
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
@@ -19,6 +25,7 @@ export const GET = withAuth(async (req, session) => {
   const state    = searchParams.get('state');
   const severity = searchParams.get('severity');
   const type     = searchParams.get('type');
+  const category = searchParams.get('category') || 'network';
   const limit    = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);
   const offset   = parseInt(searchParams.get('offset') || '0', 10);
 
@@ -44,11 +51,24 @@ export const GET = withAuth(async (req, session) => {
       paramIdx++;
     }
 
+    // Category filter: only include alerts for network device types
+    if (category !== 'all') {
+      conditions.push(`(d.device_type = ANY($${paramIdx}) OR d.device_type IS NULL)`);
+      params.push(NETWORK_TYPES);
+      paramIdx++;
+    }
+
+    // Exclude retired devices
+    conditions.push(`(d.is_retired = false OR d.id IS NULL)`);
+
     const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     // Count
     const countResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS total FROM alerts a ${whereClause}`, params
+      `SELECT COUNT(*) AS total
+       FROM alerts a
+       LEFT JOIN devices d ON d.id = a.device_id
+       ${whereClause}`, params
     );
 
     // Alerts with joins
@@ -71,19 +91,37 @@ export const GET = withAuth(async (req, session) => {
       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
     `, [...params, limit, offset]);
 
-    // Summary counts
+    // Summary counts (respect category filter)
+    const summaryConditions = [];
+    const summaryParams = [];
+    let summaryIdx = 1;
+
+    if (category !== 'all') {
+      summaryConditions.push(`(d.device_type = ANY($${summaryIdx}) OR d.device_type IS NULL)`);
+      summaryParams.push(NETWORK_TYPES);
+      summaryIdx++;
+    }
+    summaryConditions.push(`(d.is_retired = false OR d.id IS NULL)`);
+
+    const summaryWhere = summaryConditions.length > 0
+      ? 'WHERE ' + summaryConditions.join(' AND ')
+      : '';
+
     const summary = await queryWithTenant(tenantId, `
       SELECT
-        COUNT(*) FILTER (WHERE state = 'active')       AS active,
-        COUNT(*) FILTER (WHERE state = 'acknowledged')  AS acknowledged,
-        COUNT(*) FILTER (WHERE state = 'resolved' AND resolved_at > NOW() - INTERVAL '24 hours') AS resolved_24h,
-        COUNT(*) FILTER (WHERE state = 'suppressed')    AS suppressed,
-        COUNT(*) FILTER (WHERE severity = 'critical' AND state = 'active') AS critical_active
-      FROM alerts
-    `);
+        COUNT(*) FILTER (WHERE a.state = 'active')       AS active,
+        COUNT(*) FILTER (WHERE a.state = 'acknowledged')  AS acknowledged,
+        COUNT(*) FILTER (WHERE a.state = 'resolved' AND a.resolved_at > NOW() - INTERVAL '24 hours') AS resolved_24h,
+        COUNT(*) FILTER (WHERE a.state = 'suppressed')    AS suppressed,
+        COUNT(*) FILTER (WHERE a.severity = 'critical' AND a.state = 'active') AS critical_active
+      FROM alerts a
+      LEFT JOIN devices d ON d.id = a.device_id
+      ${summaryWhere}
+    `, summaryParams);
 
     return Response.json({
       alerts: alerts.rows,
+      category,
       summary: {
         active:          parseInt(summary.rows[0].active),
         acknowledged:    parseInt(summary.rows[0].acknowledged),

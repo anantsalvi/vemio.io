@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, CheckCircle2 } from 'lucide-react';
 import ExportButton from '@/app/components/ExportButton';
+import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.05 } },
@@ -19,6 +20,7 @@ const SEVERITY_STYLES = {
   medium:   { dot: 'bg-vemio-amber',       text: 'text-vemio-amber',       bg: 'rgba(245,158,11,0.08)',  border: 'rgba(245,158,11,0.2)' },
   low:      { dot: 'bg-status-up',         text: 'text-status-up',         bg: 'rgba(20,184,166,0.08)',  border: 'rgba(20,184,166,0.2)' },
 };
+
 
 function getTimeAgo(dateStr) {
   const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
@@ -118,6 +120,7 @@ function AlertRow({ alert, onAction }) {
 }
 
 export default function AlertsPage() {
+  const { category } = useDeviceCategory();
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ state: '', severity: '', type: '' });
@@ -129,13 +132,14 @@ export default function AlertsPage() {
       if (filters.state)    params.set('state',    filters.state);
       if (filters.severity) params.set('severity', filters.severity);
       if (filters.type)     params.set('type',     filters.type);
+      params.set('category', category);
       params.set('limit', '50');
       const res = await fetch(`/api/alerts?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (err) { console.error('Alerts fetch:', err); }
     finally { setLoading(false); }
-  }, [filters]);
+  }, [filters, category]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
   useEffect(() => {

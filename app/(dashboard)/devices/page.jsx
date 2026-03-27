@@ -7,7 +7,7 @@ import {
   Server, Search, RefreshCw, ChevronLeft, ChevronRight, Download,
   Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
 } from 'lucide-react';
-
+import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'   },
   down:     { label: 'Offline',  color: 'var(--color-status-down)',     bg: 'rgba(239,68,68,0.1)'   },
@@ -43,7 +43,7 @@ return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 export default function DevicesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-
+  const { category } = useDeviceCategory();
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
@@ -73,6 +73,7 @@ export default function DevicesPage() {
       if (filters.type)   params.set('type',   filters.type);
       if (filters.status) params.set('status', filters.status);
       if (filters.search) params.set('search', filters.search);
+      params.set('category', category);
       params.set('page',  page.toString());
       params.set('limit', pageSize.toString());
       const res = await fetch(`/api/devices?${params}`);
@@ -80,7 +81,7 @@ export default function DevicesPage() {
       setData(await res.json());
     } catch (err) { console.error('Failed to fetch devices:', err); }
     finally { setLoading(false); }
-  }, [filters, page, pageSize]);
+  }, [filters, page, pageSize, category]);
 
   // Export all devices (fetches without pagination limit)
   const handleExportAll = useCallback(async () => {

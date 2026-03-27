@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Network, X, RefreshCw, Globe,
   Shield, MonitorSpeaker, Wifi, HardDrive, Radio, Cpu, Server,
-  Printer, Camera, Lock, Zap, CircleDot,
+  Printer, Camera, Lock, Zap, CircleDot, ChevronDown, ChevronRight,
+  Minus, Plus, Maximize2,
 } from 'lucide-react';
 import * as d3 from 'd3';
 
@@ -34,8 +35,7 @@ const TYPE_ICONS = {
   other:          CircleDot,
 };
 
-/* ── Tier definitions: device_type → tier index ──
-   Lower tier = higher in the diagram (closer to Internet) */
+/* ── Tier definitions: device_type → tier index ── */
 const TIER_ORDER = {
   firewall:       0,
   router:         0,
@@ -61,7 +61,8 @@ const TIER_LABELS = [
 ];
 
 /* ── Node sizing by tier ── */
-const TIER_RADIUS = { 0: 24, 1: 20, 2: 16, 3: 13, 4: 11 };
+const TIER_RADIUS = { 0: 24, 1: 22, 2: 14, 3: 11, 4: 9 };
+const CLUSTER_HEAD_RADIUS = 28; // Collapsed cluster node size
 
 /* ── Type abbreviations ── */
 const TYPE_ABBR = {
@@ -71,26 +72,161 @@ const TYPE_ABBR = {
   access_control: 'AC', p2p_link: 'P2', other: '?',
 };
 
+/* ── Network device types (tier 0–1 stay in top rows) ── */
+const TOP_TIER_TYPES = new Set([
+  'firewall', 'router', 'core_switch', 'p2p_link',
+]);
+
 const fadeUp = {
   hidden:  { opacity: 0, y: 16 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: [0.22, 1, 0.36, 1] } },
 };
 
 /* ================================================================
-   TOPOLOGY PAGE — Hierarchical Tiered Layout
+   CLUSTER TREE BUILDER
+   ================================================================
+   Builds parent→children relationships from edges.
+   - Tier 0–1 nodes stay as top-row nodes.
+   - Each tier-1 node (core switch) becomes a cluster head.
+   - Tier 2 nodes attach to their tier-1 parent via edges.
+   - Tier 3+ nodes attach to their tier-2 parent via edges.
+   - Orphans (no parent in higher tier) go to "Unassigned" cluster.
+   ================================================================ */
+function buildClusterTree(nodes, edges) {
+  const nodeMap = new Map();
+  for (const n of nodes) {
+    nodeMap.set(n.id, { ...n, tier: TIER_ORDER[n.type] ?? 4 });
+  }
+
+  // Adjacency list
+  const adj = new Map();
+  for (const n of nodes) adj.set(n.id, new Set());
+  for (const e of edges) {
+    if (adj.has(e.source) && adj.has(e.target)) {
+      adj.get(e.source).add(e.target);
+      adj.get(e.target).add(e.source);
+    }
+  }
+
+  // Separate top-tier (0–1) from clusterable (2+)
+  const topNodes = [];  // tier 0 and 1 — rendered in horizontal rows
+  const clusterHeads = []; // tier 1 specifically — these become cluster parents
+  const lowerNodes = []; // tier 2+
+
+  for (const n of nodeMap.values()) {
+    if (n.tier <= 1) {
+      topNodes.push(n);
+      if (n.tier === 1) clusterHeads.push(n);
+    } else {
+      lowerNodes.push(n);
+    }
+  }
+
+  // Assign tier-2 nodes to their tier-1 parent (direct edge)
+  const clusterMap = new Map(); // clusterHeadId → { head, children: [] }
+  const assigned = new Set();
+
+  for (const head of clusterHeads) {
+    clusterMap.set(head.id, { head, children: [], grandchildren: new Map() });
+  }
+
+  // First pass: assign tier-2 nodes to tier-1 parents
+  for (const node of lowerNodes) {
+    if (node.tier !== 2) continue;
+    const neighbors = adj.get(node.id) || new Set();
+    let bestParent = null;
+
+    for (const nbId of neighbors) {
+      const nb = nodeMap.get(nbId);
+      if (nb && nb.tier === 1 && clusterMap.has(nb.id)) {
+        bestParent = nb.id;
+        break;
+      }
+    }
+
+    if (bestParent) {
+      clusterMap.get(bestParent).children.push(node);
+      assigned.add(node.id);
+    }
+  }
+
+  // Second pass: assign tier-3+ nodes to their tier-2 parent within clusters
+  for (const node of lowerNodes) {
+    if (node.tier < 3) continue;
+    const neighbors = adj.get(node.id) || new Set();
+    let parentAccessSwitch = null;
+
+    for (const nbId of neighbors) {
+      const nb = nodeMap.get(nbId);
+      if (nb && nb.tier === 2 && assigned.has(nb.id)) {
+        parentAccessSwitch = nbId;
+        break;
+      }
+    }
+
+    if (parentAccessSwitch) {
+      // Find which cluster this access switch belongs to
+      for (const [headId, cluster] of clusterMap) {
+        if (cluster.children.some(c => c.id === parentAccessSwitch)) {
+          if (!cluster.grandchildren.has(parentAccessSwitch)) {
+            cluster.grandchildren.set(parentAccessSwitch, []);
+          }
+          cluster.grandchildren.get(parentAccessSwitch).push(node);
+          assigned.add(node.id);
+          break;
+        }
+      }
+    }
+  }
+
+  // Orphans: tier 2+ not assigned to any cluster
+  const orphans = lowerNodes.filter(n => !assigned.has(n.id));
+
+  // Build clusters array
+  const clusters = [];
+  for (const [headId, cluster] of clusterMap) {
+    const totalDescendants = cluster.children.length +
+      Array.from(cluster.grandchildren.values()).reduce((s, arr) => s + arr.length, 0);
+    if (totalDescendants > 0) {
+      clusters.push({
+        id: headId,
+        head: cluster.head,
+        children: cluster.children,
+        grandchildren: cluster.grandchildren,
+        totalDevices: totalDescendants,
+      });
+    }
+  }
+
+  // Sort clusters by total devices descending (largest first for better layout)
+  clusters.sort((a, b) => b.totalDevices - a.totalDevices);
+
+  return {
+    topNodes,         // Tier 0–1 nodes (rendered in horizontal rows)
+    clusters,         // Each core switch + its sub-tree
+    orphans,          // Unassigned tier 2+ nodes
+    nodeMap,
+    adj,
+  };
+}
+
+/* ================================================================
+   TOPOLOGY PAGE — Clustered Sub-Tree Layout
    ================================================================ */
 export default function TopologyPage() {
-  const svgRef     = useRef(null);
-  const wrapRef    = useRef(null);
+  const svgRef  = useRef(null);
+  const wrapRef = useRef(null);
+  const zoomRef = useRef(null);
 
-  const [data, setData]             = useState(null);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState(null);
-  const [sites, setSites]           = useState([]);
-  const [selectedSite, setSelectedSite] = useState('');
-  const [category, setCategory]     = useState('network');
-  const [selected, setSelected]     = useState(null);
-  const [dimensions, setDimensions] = useState({ w: 1200, h: 700 });
+  const [data, setData]                   = useState(null);
+  const [loading, setLoading]             = useState(true);
+  const [error, setError]                 = useState(null);
+  const [sites, setSites]                 = useState([]);
+  const [selectedSite, setSelectedSite]   = useState('');
+  const [category, setCategory]           = useState('network');
+  const [selected, setSelected]           = useState(null);
+  const [dimensions, setDimensions]       = useState({ w: 1200, h: 700 });
+  const [expandedClusters, setExpandedClusters] = useState(new Set());
 
   /* ── Fetch sites ── */
   useEffect(() => {
@@ -113,6 +249,7 @@ export default function TopologyPage() {
       const json = await res.json();
       setData(json);
       setSelected(null);
+      setExpandedClusters(new Set());
     } catch (err) {
       console.error('Topology fetch error:', err);
       setError('Failed to load topology data');
@@ -135,175 +272,496 @@ export default function TopologyPage() {
     return () => ro.disconnect();
   }, []);
 
-  /* ── Compute tiers ── */
-  const tierData = useMemo(() => {
+  /* ── Build cluster tree ── */
+  const tree = useMemo(() => {
     if (!data?.nodes) return null;
-
-    // Group nodes by tier
-    const tiers = {};
-    for (const node of data.nodes) {
-      const tierIdx = TIER_ORDER[node.type] ?? 4;
-      if (!tiers[tierIdx]) tiers[tierIdx] = [];
-      tiers[tierIdx].push({ ...node, tier: tierIdx });
-    }
-
-    // Get sorted tier indices that actually have nodes
-    const activeTiers = Object.keys(tiers).map(Number).sort((a, b) => a - b);
-
-    return { tiers, activeTiers };
+    return buildClusterTree(data.nodes, data.edges);
   }, [data]);
 
-  /* ── D3 Hierarchical Render ── */
+  /* ── Toggle cluster expand/collapse ── */
+  const toggleCluster = useCallback((clusterId) => {
+    setExpandedClusters(prev => {
+      const next = new Set(prev);
+      if (next.has(clusterId)) {
+        next.delete(clusterId);
+      } else {
+        next.add(clusterId);
+      }
+      return next;
+    });
+  }, []);
+
+  /* ── Expand / Collapse all ── */
+  const expandAll = useCallback(() => {
+    if (!tree) return;
+    const allIds = new Set(tree.clusters.map(c => c.id));
+    if (tree.orphans.length > 0) allIds.add('__orphans__');
+    setExpandedClusters(allIds);
+  }, [tree]);
+
+  const collapseAll = useCallback(() => {
+    setExpandedClusters(new Set());
+  }, []);
+
+  /* ── Zoom controls ── */
+  const handleZoomIn = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.4);
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 0.7);
+  }, []);
+
+  const handleFitView = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    const svg = d3.select(svgRef.current);
+    const g = svg.select('g.tp-main-group');
+    if (g.empty()) return;
+    const bounds = g.node().getBBox();
+    const { w, h } = dimensions;
+    const pad = 60;
+    const scale = Math.min(
+      (w - pad * 2) / (bounds.width || 1),
+      (h - pad * 2) / (bounds.height || 1),
+      1.2
+    );
+    const tx = (w - bounds.width * scale) / 2 - bounds.x * scale;
+    const ty = (h - bounds.height * scale) / 2 - bounds.y * scale;
+    svg.transition().duration(500).call(
+      zoomRef.current.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(scale)
+    );
+  }, [dimensions]);
+
+  /* ================================================================
+     D3 RENDER — Clustered Sub-Tree Layout
+     ================================================================ */
   useEffect(() => {
-    if (!data || !tierData || !svgRef.current) return;
-    const { nodes: rawNodes, edges: rawEdges } = data;
-    if (!rawNodes.length) return;
+    if (!data || !tree || !svgRef.current) return;
+    if (!data.nodes.length) return;
 
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
 
     const { w, h } = dimensions;
-    const { tiers, activeTiers } = tierData;
+    const { topNodes, clusters, orphans, nodeMap, adj } = tree;
 
-    // Layout parameters
-    const tierCount = activeTiers.length;
-    const topPad = 60;
-    const bottomPad = 40;
-    const tierSpacing = (h - topPad - bottomPad) / Math.max(tierCount, 1);
-    const sidePad = 60;
+    /* ── Layout constants ── */
+    const TOP_PAD = 60;
+    const TIER_GAP = 80;       // vertical gap between tier rows
+    const CLUSTER_GAP_X = 40;  // horizontal gap between clusters
+    const CLUSTER_PAD = 20;    // internal padding in cluster box
+    const NODE_GAP_X = 44;     // horizontal gap between child nodes in cluster
+    const NODE_GAP_Y = 50;     // vertical gap between tier-2 and tier-3 rows
+    const CHILD_ROW_MAX = 12;  // max children per row before wrapping
 
-    // Assign x,y positions to each node
-    const nodeMap = new Map();
-    const allNodes = [];
+    /* ── Position top-tier nodes (tier 0, tier 1) ── */
+    const tier0 = topNodes.filter(n => n.tier === 0);
+    const tier1 = topNodes.filter(n => n.tier === 1);
 
-    for (let ti = 0; ti < activeTiers.length; ti++) {
-      const tierIdx = activeTiers[ti];
-      const tierNodes = tiers[tierIdx];
-      const y = topPad + ti * tierSpacing + tierSpacing / 2;
-      const nodeCount = tierNodes.length;
-      const availableWidth = w - sidePad * 2;
-      const spacing = Math.min(availableWidth / Math.max(nodeCount, 1), 80);
-      const startX = (w - (nodeCount - 1) * spacing) / 2;
+    const allPositioned = new Map(); // nodeId → { x, y, radius, ...node }
 
-      for (let ni = 0; ni < tierNodes.length; ni++) {
-        const node = tierNodes[ni];
-        node.x = startX + ni * spacing;
-        node.y = y;
-        node.radius = TIER_RADIUS[tierIdx] || 11;
-        nodeMap.set(node.id, node);
-        allNodes.push(node);
+    // Internet icon position
+    const internetY = TOP_PAD;
+    const tier0Y = TOP_PAD + TIER_GAP;
+    const tier1Y = tier0Y + TIER_GAP;
+
+    // Center tier-0 nodes
+    const tier0Spacing = Math.min(90, (w - 120) / Math.max(tier0.length, 1));
+    const tier0StartX = (w - (tier0.length - 1) * tier0Spacing) / 2;
+    for (let i = 0; i < tier0.length; i++) {
+      const n = tier0[i];
+      allPositioned.set(n.id, {
+        ...n, x: tier0StartX + i * tier0Spacing, y: tier0Y,
+        radius: TIER_RADIUS[0],
+      });
+    }
+
+    // Center tier-1 nodes
+    const tier1Spacing = Math.min(100, (w - 120) / Math.max(tier1.length, 1));
+    const tier1StartX = (w - (tier1.length - 1) * tier1Spacing) / 2;
+    for (let i = 0; i < tier1.length; i++) {
+      const n = tier1[i];
+      allPositioned.set(n.id, {
+        ...n, x: tier1StartX + i * tier1Spacing, y: tier1Y,
+        radius: TIER_RADIUS[1],
+      });
+    }
+
+    /* ── Position clusters below tier 1 ── */
+    const clusterStartY = tier1Y + TIER_GAP + 20;
+    let clusterCursorX = CLUSTER_GAP_X;
+    const clusterBounds = []; // { id, x, y, w, h, headX, headY }
+
+    // Include orphans as a virtual cluster
+    const allClusterGroups = [...clusters];
+    if (orphans.length > 0) {
+      allClusterGroups.push({
+        id: '__orphans__',
+        head: { id: '__orphans__', name: 'Unassigned', type: 'other', status: 'unknown', tier: 1 },
+        children: orphans.filter(o => o.tier === 2 || o.tier === 3 || o.tier === 4),
+        grandchildren: new Map(),
+        totalDevices: orphans.length,
+        isOrphan: true,
+      });
+    }
+
+    for (const cluster of allClusterGroups) {
+      const isExpanded = expandedClusters.has(cluster.id);
+
+      if (!isExpanded) {
+        // ── COLLAPSED: single node with badge ──
+        const cx = clusterCursorX + CLUSTER_HEAD_RADIUS + 10;
+        const cy = clusterStartY + CLUSTER_HEAD_RADIUS + 10;
+        const nodeData = {
+          ...cluster.head,
+          x: cx, y: cy,
+          radius: CLUSTER_HEAD_RADIUS,
+          isClusterHead: true,
+          clusterId: cluster.id,
+          childCount: cluster.totalDevices,
+          isCollapsed: true,
+          isOrphan: cluster.isOrphan || false,
+        };
+        allPositioned.set(`cluster_${cluster.id}`, nodeData);
+        clusterBounds.push({
+          id: cluster.id,
+          x: clusterCursorX,
+          y: clusterStartY,
+          w: CLUSTER_HEAD_RADIUS * 2 + 20,
+          h: CLUSTER_HEAD_RADIUS * 2 + 40,
+          headX: cx,
+          headY: cy,
+        });
+        clusterCursorX += CLUSTER_HEAD_RADIUS * 2 + 20 + CLUSTER_GAP_X;
+      } else {
+        // ── EXPANDED: head + children grid + grandchildren ──
+        const children = cluster.children;
+        const grandchildren = cluster.grandchildren;
+
+        // Calculate rows for children
+        const cols = Math.min(children.length, CHILD_ROW_MAX);
+        const rows = Math.ceil(children.length / cols);
+        const clusterWidth = Math.max(cols * NODE_GAP_X, 100);
+
+        const clusterX = clusterCursorX;
+        const clusterY = clusterStartY;
+
+        // Cluster head at top center of its box
+        const headX = clusterX + CLUSTER_PAD + clusterWidth / 2;
+        const headY = clusterY + CLUSTER_PAD + 20;
+        const headData = {
+          ...cluster.head,
+          x: headX, y: headY,
+          radius: TIER_RADIUS[1],
+          isClusterHead: true,
+          clusterId: cluster.id,
+          childCount: cluster.totalDevices,
+          isCollapsed: false,
+          isOrphan: cluster.isOrphan || false,
+        };
+        // Don't double-position the real tier-1 node if it's already in topNodes
+        if (!cluster.isOrphan) {
+          allPositioned.set(`cluster_${cluster.id}`, headData);
+        } else {
+          allPositioned.set(`cluster_${cluster.id}`, headData);
+        }
+
+        // Position children (tier 2) in grid below head
+        const childStartY = headY + 50;
+        const childStartX = clusterX + CLUSTER_PAD + (clusterWidth - (cols - 1) * NODE_GAP_X) / 2;
+        let maxChildY = childStartY;
+        let maxGrandY = childStartY;
+
+        for (let ci = 0; ci < children.length; ci++) {
+          const child = children[ci];
+          const row = Math.floor(ci / cols);
+          const col = ci % cols;
+          const cx = childStartX + col * NODE_GAP_X;
+          const cy = childStartY + row * NODE_GAP_Y;
+          allPositioned.set(child.id, {
+            ...child, x: cx, y: cy,
+            radius: TIER_RADIUS[2],
+            parentCluster: cluster.id,
+          });
+          maxChildY = Math.max(maxChildY, cy);
+
+          // Position grandchildren (tier 3+) below their parent access switch
+          const gc = grandchildren.get(child.id);
+          if (gc && gc.length > 0) {
+            const gcStartY = cy + NODE_GAP_Y * 0.7;
+            const gcSpacing = Math.min(NODE_GAP_X * 0.7, 30);
+            const gcStartX = cx - ((gc.length - 1) * gcSpacing) / 2;
+            for (let gi = 0; gi < gc.length; gi++) {
+              const gNode = gc[gi];
+              const gx = gcStartX + gi * gcSpacing;
+              const gy = gcStartY;
+              allPositioned.set(gNode.id, {
+                ...gNode, x: gx, y: gy,
+                radius: TIER_RADIUS[gNode.tier] || 9,
+                parentCluster: cluster.id,
+              });
+              maxGrandY = Math.max(maxGrandY, gy);
+            }
+          }
+        }
+
+        const totalHeight = Math.max(maxChildY, maxGrandY) - clusterY + 50;
+        const totalWidth = clusterWidth + CLUSTER_PAD * 2;
+
+        clusterBounds.push({
+          id: cluster.id,
+          x: clusterX,
+          y: clusterY,
+          w: totalWidth,
+          h: totalHeight,
+          headX,
+          headY,
+          isExpanded: true,
+        });
+
+        clusterCursorX += totalWidth + CLUSTER_GAP_X;
       }
     }
 
-    // Resolve edges to positioned nodes
-    const edges = rawEdges
-      .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
-      .map(e => ({
-        source: nodeMap.get(e.source),
-        target: nodeMap.get(e.target),
-      }));
-
-    // Container group for zoom/pan
-    const g = svg.append('g');
+    /* ── Draw ── */
+    const g = svg.append('g').attr('class', 'tp-main-group');
 
     const zoom = d3.zoom()
-      .scaleExtent([0.2, 3])
+      .scaleExtent([0.15, 3])
       .on('zoom', (event) => g.attr('transform', event.transform));
     svg.call(zoom);
+    zoomRef.current = zoom;
 
-    // Fit content with initial transform
-    const initialScale = Math.min(1, w / (w + 100));
-    svg.call(zoom.transform, d3.zoomIdentity.translate(0, 0).scale(initialScale));
+    // Auto-fit on render
+    requestAnimationFrame(() => {
+      const bounds = g.node()?.getBBox();
+      if (!bounds || bounds.width === 0) return;
+      const pad = 50;
+      const scale = Math.min(
+        (w - pad * 2) / (bounds.width || 1),
+        (h - pad * 2) / (bounds.height || 1),
+        1.0
+      );
+      const tx = (w - bounds.width * scale) / 2 - bounds.x * scale;
+      const ty = (h - bounds.height * scale) / 2 - bounds.y * scale;
+      svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+    });
 
-    // ── Internet icon at top ──
-    const internetY = topPad - 10;
+    /* ── Internet icon ── */
     const internetG = g.append('g').attr('transform', `translate(${w / 2}, ${internetY})`);
     internetG.append('circle')
       .attr('r', 18)
-      .attr('fill', 'rgba(59,130,246,0.12)')
+      .attr('fill', 'rgba(59,130,246,0.10)')
       .attr('stroke', '#3b82f6')
       .attr('stroke-width', 1.5);
     internetG.append('text')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
-      .attr('font-size', 9)
-      .attr('font-weight', 700)
-      .attr('fill', '#3b82f6')
+      .attr('font-size', 9).attr('font-weight', 700).attr('fill', '#3b82f6')
       .text('WAN');
     internetG.append('text')
-      .attr('y', 28)
-      .attr('text-anchor', 'middle')
-      .attr('font-size', 8)
-      .attr('fill', 'rgba(148,163,184,0.6)')
+      .attr('y', 28).attr('text-anchor', 'middle')
+      .attr('font-size', 8).attr('fill', 'rgba(148,163,184,0.6)')
       .text('Internet');
 
-    // Draw line from Internet to first tier center
-    if (activeTiers.length > 0) {
-      const firstTier = activeTiers[0];
-      const firstNodes = tiers[firstTier];
-      // Connect to each firewall/router
-      for (const fn of firstNodes) {
-        g.append('line')
-          .attr('x1', w / 2).attr('y1', internetY + 18)
-          .attr('x2', fn.x).attr('y2', fn.y - fn.radius - 4)
-          .attr('stroke', 'rgba(59,130,246,0.2)')
-          .attr('stroke-width', 1.5)
-          .attr('stroke-dasharray', '4,3');
-      }
+    // Lines from WAN to tier 0
+    for (const n of tier0) {
+      const pos = allPositioned.get(n.id);
+      if (!pos) continue;
+      g.append('line')
+        .attr('x1', w / 2).attr('y1', internetY + 18)
+        .attr('x2', pos.x).attr('y2', pos.y - pos.radius - 4)
+        .attr('stroke', 'rgba(59,130,246,0.18)')
+        .attr('stroke-width', 1.5)
+        .attr('stroke-dasharray', '4,3');
     }
 
-    // ── Tier labels ──
-    for (let ti = 0; ti < activeTiers.length; ti++) {
-      const tierIdx = activeTiers[ti];
-      const y = topPad + ti * tierSpacing + tierSpacing / 2;
+    /* ── Tier labels ── */
+    if (tier0.length > 0) {
       g.append('text')
-        .attr('x', 12)
-        .attr('y', y - tierSpacing / 2 + 14)
-        .attr('font-size', 8)
-        .attr('fill', 'rgba(148,163,184,0.4)')
-        .attr('text-transform', 'uppercase')
-        .attr('letter-spacing', '0.08em')
-        .attr('font-weight', 600)
-        .text(TIER_LABELS[tierIdx] || `Tier ${tierIdx}`);
+        .attr('x', 12).attr('y', tier0Y - 28)
+        .attr('font-size', 8).attr('fill', 'rgba(148,163,184,0.35)')
+        .attr('text-transform', 'uppercase').attr('letter-spacing', '0.08em').attr('font-weight', 600)
+        .text(TIER_LABELS[0]);
+    }
+    if (tier1.length > 0) {
+      g.append('text')
+        .attr('x', 12).attr('y', tier1Y - 28)
+        .attr('font-size', 8).attr('fill', 'rgba(148,163,184,0.35)')
+        .attr('text-transform', 'uppercase').attr('letter-spacing', '0.08em').attr('font-weight', 600)
+        .text(TIER_LABELS[1]);
+      // Separator
+      g.append('line')
+        .attr('x1', 10).attr('x2', w - 10)
+        .attr('y1', tier1Y - 38).attr('y2', tier1Y - 38)
+        .attr('stroke', 'rgba(148,163,184,0.06)').attr('stroke-width', 1);
+    }
 
-      // Tier separator line
-      if (ti > 0) {
-        g.append('line')
-          .attr('x1', 10).attr('x2', w - 10)
-          .attr('y1', y - tierSpacing / 2)
-          .attr('y2', y - tierSpacing / 2)
-          .attr('stroke', 'rgba(148,163,184,0.08)')
-          .attr('stroke-width', 1);
+    // Separator above clusters
+    if (allClusterGroups.length > 0) {
+      g.append('line')
+        .attr('x1', 10).attr('x2', Math.max(w, clusterCursorX) - 10)
+        .attr('y1', clusterStartY - 15).attr('y2', clusterStartY - 15)
+        .attr('stroke', 'rgba(148,163,184,0.06)').attr('stroke-width', 1);
+      g.append('text')
+        .attr('x', 12).attr('y', clusterStartY - 22)
+        .attr('font-size', 8).attr('fill', 'rgba(148,163,184,0.35)')
+        .attr('text-transform', 'uppercase').attr('letter-spacing', '0.08em').attr('font-weight', 600)
+        .text('Device Clusters');
+    }
+
+    /* ── Cluster bounding boxes ── */
+    for (const cb of clusterBounds) {
+      const cluster = allClusterGroups.find(c => c.id === cb.id);
+      const isExpanded = cb.isExpanded;
+
+      // Background rect
+      g.append('rect')
+        .attr('x', cb.x)
+        .attr('y', cb.y)
+        .attr('width', cb.w)
+        .attr('height', cb.h)
+        .attr('rx', 12)
+        .attr('fill', isExpanded ? 'rgba(148,163,184,0.03)' : 'rgba(148,163,184,0.02)')
+        .attr('stroke', isExpanded ? 'rgba(148,163,184,0.10)' : 'rgba(148,163,184,0.06)')
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', isExpanded ? 'none' : '4,3')
+        .attr('cursor', 'pointer')
+        .on('click', (event) => {
+          event.stopPropagation();
+          toggleCluster(cb.id);
+        });
+
+      // Cluster label below box
+      const labelText = cluster?.isOrphan
+        ? `Unassigned (${cluster.totalDevices})`
+        : `${cluster?.head?.name || 'Cluster'} (${cluster?.totalDevices || 0})`;
+
+      g.append('text')
+        .attr('x', cb.x + cb.w / 2)
+        .attr('y', cb.y + cb.h + 14)
+        .attr('text-anchor', 'middle')
+        .attr('font-size', 9)
+        .attr('fill', 'rgba(148,163,184,0.5)')
+        .attr('font-weight', 500)
+        .text(labelText.length > 30 ? labelText.slice(0, 28) + '…' : labelText);
+
+      // Expand/collapse icon
+      const iconX = cb.x + cb.w - 14;
+      const iconY = cb.y + 12;
+      g.append('text')
+        .attr('x', iconX)
+        .attr('y', iconY)
+        .attr('text-anchor', 'middle')
+        .attr('dominant-baseline', 'central')
+        .attr('font-size', 12)
+        .attr('fill', 'rgba(148,163,184,0.4)')
+        .attr('cursor', 'pointer')
+        .text(isExpanded ? '−' : '+')
+        .on('click', (event) => {
+          event.stopPropagation();
+          toggleCluster(cb.id);
+        });
+    }
+
+    /* ── Edges between top-tier nodes ── */
+    const linkG = g.append('g').attr('class', 'tp-links');
+
+    // Collect all edges between nodes that are positioned
+    const visibleEdges = [];
+    for (const e of data.edges) {
+      const src = allPositioned.get(e.source);
+      const tgt = allPositioned.get(e.target);
+      if (src && tgt) {
+        visibleEdges.push({ source: src, target: tgt });
       }
     }
 
-    // ── Edges ──
-    const linkG = g.append('g');
+    // Also draw edges from tier-1 to cluster heads (for expanded clusters)
+    for (const cb of clusterBounds) {
+      if (!cb.isExpanded) continue;
+      const cluster = allClusterGroups.find(c => c.id === cb.id);
+      if (!cluster || cluster.isOrphan) continue;
+
+      // Draw edge from the real tier-1 position to cluster head position
+      const tier1Pos = allPositioned.get(cluster.head.id);
+      const clusterHeadPos = allPositioned.get(`cluster_${cluster.id}`);
+      if (tier1Pos && clusterHeadPos && tier1Pos !== clusterHeadPos) {
+        visibleEdges.push({ source: tier1Pos, target: clusterHeadPos, isDashed: true });
+      }
+
+      // Draw edges from cluster head to children
+      for (const child of cluster.children) {
+        const childPos = allPositioned.get(child.id);
+        if (childPos && clusterHeadPos) {
+          visibleEdges.push({ source: clusterHeadPos, target: childPos, isInternal: true });
+        }
+      }
+
+      // Draw edges from children to grandchildren
+      for (const [parentId, gcs] of cluster.grandchildren) {
+        const parentPos = allPositioned.get(parentId);
+        if (!parentPos) continue;
+        for (const gc of gcs) {
+          const gcPos = allPositioned.get(gc.id);
+          if (gcPos) {
+            visibleEdges.push({ source: parentPos, target: gcPos, isInternal: true });
+          }
+        }
+      }
+    }
+
+    // Also for collapsed clusters: draw edge from tier-1 node to collapsed cluster node
+    for (const cb of clusterBounds) {
+      if (cb.isExpanded) continue;
+      const cluster = allClusterGroups.find(c => c.id === cb.id);
+      if (!cluster || cluster.isOrphan) continue;
+      const tier1Pos = allPositioned.get(cluster.head.id);
+      const collapsedPos = allPositioned.get(`cluster_${cluster.id}`);
+      if (tier1Pos && collapsedPos) {
+        visibleEdges.push({ source: tier1Pos, target: collapsedPos, isDashed: true });
+      }
+    }
+
+    // Top-tier inter-node edges
+    for (const e of data.edges) {
+      const src = allPositioned.get(e.source);
+      const tgt = allPositioned.get(e.target);
+      if (src && tgt && src.tier <= 1 && tgt.tier <= 1) {
+        // Already in visibleEdges from the general pass — skip duplicates
+      }
+    }
+
     linkG.selectAll('path')
-      .data(edges)
+      .data(visibleEdges)
       .join('path')
       .attr('d', e => {
         const sx = e.source.x, sy = e.source.y;
         const tx = e.target.x, ty = e.target.y;
-        // Curved edges for cross-tier, straight for same-tier
         if (Math.abs(sy - ty) < 5) {
-          // Same tier — arc
           const mx = (sx + tx) / 2;
-          const my = sy - 30;
+          const my = sy - 25;
           return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
         }
-        // Different tier — gentle curve
         const my = (sy + ty) / 2;
         return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
       })
       .attr('fill', 'none')
-      .attr('stroke', 'rgba(148,163,184,0.12)')
-      .attr('stroke-width', 1);
+      .attr('stroke', e => e.isDashed ? 'rgba(245,158,11,0.15)' :
+                           e.isInternal ? 'rgba(148,163,184,0.10)' :
+                           'rgba(148,163,184,0.12)')
+      .attr('stroke-width', e => e.isInternal ? 0.8 : 1)
+      .attr('stroke-dasharray', e => e.isDashed ? '4,3' : 'none');
 
-    // ── Nodes ──
-    const nodeG = g.append('g');
+    /* ── Render nodes ── */
+    const nodeG = g.append('g').attr('class', 'tp-nodes');
+    const allNodeEntries = Array.from(allPositioned.values());
+
     const node = nodeG.selectAll('g')
-      .data(allNodes)
+      .data(allNodeEntries, d => d.id || `cluster_${d.clusterId}`)
       .join('g')
       .attr('transform', d => `translate(${d.x},${d.y})`)
       .attr('cursor', 'pointer');
@@ -312,7 +770,10 @@ export default function TopologyPage() {
     node.append('circle')
       .attr('r', d => d.radius + 3)
       .attr('fill', 'none')
-      .attr('stroke', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
+      .attr('stroke', d => {
+        if (d.isCollapsed) return 'rgba(245,158,11,0.25)';
+        return (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
+      })
       .attr('stroke-width', 1.5)
       .attr('stroke-opacity', 0.2);
 
@@ -320,60 +781,117 @@ export default function TopologyPage() {
     node.append('circle')
       .attr('r', d => d.radius)
       .attr('fill', d => {
+        if (d.isCollapsed) return 'rgba(245,158,11,0.10)';
         const c = (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
         return d.tier <= 1 ? c + '25' : c + '15';
       })
-      .attr('stroke', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
-      .attr('stroke-width', 1.5);
+      .attr('stroke', d => {
+        if (d.isCollapsed) return 'rgba(245,158,11,0.5)';
+        return (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
+      })
+      .attr('stroke-width', d => d.isClusterHead ? 2 : 1.5);
 
     // Type abbreviation
     node.append('text')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
-      .attr('font-size', d => Math.max(8, d.radius * 0.55))
+      .attr('font-size', d => {
+        if (d.isCollapsed) return 10;
+        return Math.max(8, d.radius * 0.55);
+      })
       .attr('font-weight', 700)
-      .attr('fill', d => (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color)
+      .attr('fill', d => {
+        if (d.isCollapsed) return 'rgba(245,158,11,0.8)';
+        return (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
+      })
       .attr('pointer-events', 'none')
-      .text(d => TYPE_ABBR[d.type] || '?');
+      .text(d => {
+        if (d.isOrphan) return '?';
+        return TYPE_ABBR[d.type] || '?';
+      });
+
+    // Child count badge for collapsed clusters
+    node.filter(d => d.isCollapsed && d.childCount > 0)
+      .append('g')
+      .attr('transform', d => `translate(${d.radius - 2}, ${-d.radius + 2})`)
+      .call(badge => {
+        badge.append('rect')
+          .attr('x', -12).attr('y', -8)
+          .attr('width', 24).attr('height', 16)
+          .attr('rx', 8)
+          .attr('fill', 'rgba(245,158,11,0.85)');
+        badge.append('text')
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'central')
+          .attr('font-size', 8)
+          .attr('font-weight', 700)
+          .attr('fill', '#000')
+          .attr('pointer-events', 'none')
+          .text(d => d.childCount);
+      });
 
     // Label below node
     node.append('text')
       .attr('y', d => d.radius + 12)
       .attr('text-anchor', 'middle')
-      .attr('font-size', 8)
+      .attr('font-size', d => d.isCollapsed ? 9 : d.tier >= 3 ? 7 : 8)
       .attr('fill', 'rgba(148,163,184,0.6)')
       .attr('pointer-events', 'none')
-      .text(d => d.name?.length > 18 ? d.name.slice(0, 16) + '…' : d.name);
+      .text(d => {
+        if (d.isOrphan && d.isCollapsed) return 'Unassigned';
+        const name = d.name || '';
+        const max = d.tier >= 3 ? 12 : 18;
+        return name.length > max ? name.slice(0, max - 2) + '…' : name;
+      });
 
-    // Click → inspector
+    // Click → inspector or toggle cluster
     node.on('click', (event, d) => {
+      event.stopPropagation();
+      if (d.isClusterHead && d.clusterId) {
+        toggleCluster(d.clusterId);
+      } else {
+        setSelected(prev => prev?.id === d.id ? null : d);
+      }
+    });
+
+    // Right-click on cluster head → inspector (so users can still inspect)
+    node.filter(d => d.isClusterHead).on('contextmenu', (event, d) => {
+      event.preventDefault();
       event.stopPropagation();
       setSelected(prev => prev?.id === d.id ? null : d);
     });
 
     // Hover highlight
     node.on('mouseenter', (event, d) => {
+      const nodeId = d.id;
       linkG.selectAll('path')
-        .attr('stroke', e =>
-          (e.source.id === d.id || e.target.id === d.id)
-            ? (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color
-            : 'rgba(148,163,184,0.06)'
-        )
-        .attr('stroke-width', e =>
-          (e.source.id === d.id || e.target.id === d.id) ? 2 : 0.8
-        );
+        .attr('stroke', e => {
+          if (e.source.id === nodeId || e.target.id === nodeId ||
+              (e.source.clusterId === nodeId) || (e.target.clusterId === nodeId)) {
+            return (STATUS_CONFIG[d.status] || STATUS_CONFIG.unknown).color;
+          }
+          return e.isDashed ? 'rgba(245,158,11,0.06)' :
+                 e.isInternal ? 'rgba(148,163,184,0.04)' :
+                 'rgba(148,163,184,0.06)';
+        })
+        .attr('stroke-width', e => {
+          if (e.source.id === nodeId || e.target.id === nodeId) return 2;
+          return e.isInternal ? 0.5 : 0.8;
+        });
     });
 
     node.on('mouseleave', () => {
       linkG.selectAll('path')
-        .attr('stroke', 'rgba(148,163,184,0.12)')
-        .attr('stroke-width', 1);
+        .attr('stroke', e => e.isDashed ? 'rgba(245,158,11,0.15)' :
+                             e.isInternal ? 'rgba(148,163,184,0.10)' :
+                             'rgba(148,163,184,0.12)')
+        .attr('stroke-width', e => e.isInternal ? 0.8 : 1);
     });
 
     // Click background → deselect
     svg.on('click', () => setSelected(null));
 
-  }, [data, tierData, dimensions]);
+  }, [data, tree, dimensions, expandedClusters, toggleCluster]);
 
   /* ── Counts for legend ── */
   const statusCounts = {};
@@ -398,6 +916,9 @@ export default function TopologyPage() {
     }
   }
 
+  /* ── Cluster summary for header ── */
+  const clusterSummary = tree ? `${tree.clusters.length} clusters · ${tree.orphans.length} unassigned` : '';
+
   return (
     <>
       <motion.div
@@ -410,10 +931,35 @@ export default function TopologyPage() {
           <div>
             <h1 className="tp-title">Network Topology</h1>
             <p className="tp-subtitle">
-              {data ? `${data.nodes.length} devices · ${data.edges.length} connections` : 'Loading…'}
+              {data
+                ? `${data.nodes.length} devices · ${data.edges.length} connections` +
+                  (tree && tree.clusters.length > 0 ? ` · ${clusterSummary}` : '')
+                : 'Loading…'}
             </p>
           </div>
           <div className="tp-header-actions">
+            {/* Expand/Collapse all */}
+            {tree && tree.clusters.length > 0 && (
+              <div className="tp-cluster-controls">
+                <button
+                  onClick={expandAll}
+                  className="tp-ctrl-btn"
+                  title="Expand all clusters"
+                >
+                  <Plus className="w-3.5 h-3.5" style={{ color: 'var(--color-vemio-text-muted)' }} />
+                  <span>Expand All</span>
+                </button>
+                <button
+                  onClick={collapseAll}
+                  className="tp-ctrl-btn"
+                  title="Collapse all clusters"
+                >
+                  <Minus className="w-3.5 h-3.5" style={{ color: 'var(--color-vemio-text-muted)' }} />
+                  <span>Collapse All</span>
+                </button>
+              </div>
+            )}
+
             <div className="tp-category-toggle">
               <button
                 onClick={() => setCategory('network')}
@@ -481,6 +1027,21 @@ export default function TopologyPage() {
               height={dimensions.h}
               style={{ display: data && data.nodes.length ? 'block' : 'none' }}
             />
+
+            {/* Zoom controls overlay */}
+            {data && data.nodes.length > 0 && (
+              <div className="tp-zoom-controls">
+                <button onClick={handleZoomIn} className="tp-zoom-btn" title="Zoom in">
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={handleZoomOut} className="tp-zoom-btn" title="Zoom out">
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <button onClick={handleFitView} className="tp-zoom-btn" title="Fit to view">
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* ── Legend ── */}
@@ -508,6 +1069,13 @@ export default function TopologyPage() {
                     </span>
                   ))
                 }
+              </div>
+              <div className="tp-legend-section">
+                <span className="tp-legend-title">Clusters</span>
+                <span className="tp-legend-item">
+                  <span className="tp-legend-dot" style={{ background: 'rgba(245,158,11,0.6)', border: '1px solid rgba(245,158,11,0.8)' }} />
+                  Click cluster to expand/collapse
+                </span>
               </div>
             </div>
           )}
@@ -549,6 +1117,9 @@ export default function TopologyPage() {
                 <Field label="Make" value={selected.make} />
                 <Field label="Model" value={selected.model} />
                 <Field label="Site" value={selected.siteName} />
+                {selected.isClusterHead && selected.childCount > 0 && (
+                  <Field label="Cluster Size" value={`${selected.childCount} devices`} />
+                )}
               </div>
 
               {neighbors.length > 0 && (
@@ -600,6 +1171,32 @@ export default function TopologyPage() {
           gap: 8px;
           flex-shrink: 0;
           flex-wrap: wrap;
+        }
+        .tp-cluster-controls {
+          display: flex;
+          gap: 2px;
+          border-radius: 8px;
+          overflow: hidden;
+          border: 1px solid var(--color-vemio-border);
+        }
+        .tp-ctrl-btn {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 7px 10px;
+          font-size: 11px;
+          font-weight: 500;
+          cursor: pointer;
+          border: none;
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text-dim);
+          transition: background 0.15s, color 0.15s;
+          white-space: nowrap;
+        }
+        .tp-ctrl-btn:first-child { border-right: 1px solid var(--color-vemio-border); }
+        .tp-ctrl-btn:hover {
+          background: var(--color-vemio-surface-raised);
+          color: var(--color-vemio-text-muted);
         }
         .tp-category-toggle {
           display: flex;
@@ -664,6 +1261,31 @@ export default function TopologyPage() {
           overflow: hidden;
         }
         .tp-graph-wrap svg { display: block; }
+
+        .tp-zoom-controls {
+          position: absolute;
+          bottom: 12px;
+          right: 12px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          z-index: 10;
+        }
+        .tp-zoom-btn {
+          padding: 7px;
+          border-radius: 8px;
+          border: 1px solid var(--color-vemio-border);
+          background: var(--color-vemio-surface);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--color-vemio-text-muted);
+          transition: background 0.15s;
+        }
+        .tp-zoom-btn:hover {
+          background: var(--color-vemio-surface-raised);
+        }
 
         .tp-loading {
           position: absolute; inset: 0;
@@ -768,6 +1390,7 @@ export default function TopologyPage() {
         @media (max-width: 479px) {
           .tp-site-select { min-width: 100px; font-size: 12px; }
           .tp-legend { padding: 8px 10px; gap: 12px; }
+          .tp-cluster-controls { display: none; }
         }
       `}</style>
     </>

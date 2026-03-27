@@ -7,8 +7,10 @@ import BCSGauge from '@/app/components/dashboard/BCSGauge';
 import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
 import UptimeChart from '@/app/components/dashboard/UptimeChart';
 import RecentEvents from '@/app/components/dashboard/RecentEvents';
+import TopologyPreview from '@/app/components/dashboard/TopologyPreview';
 import { AlertTriangle } from 'lucide-react';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
+
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.08 } },
@@ -20,7 +22,7 @@ const fadeUp = {
 
 export default function OverviewPage() {
   const { category } = useDeviceCategory();
-  
+
   const { data, loading, error, refresh } = useSWRFetch(`/api/overview?category=${category}`, {
     refreshInterval: 60000,
     dedupingInterval: 5000,
@@ -88,6 +90,11 @@ export default function OverviewPage() {
           <RecentEvents events={data?.recentEvents} />
         </motion.div>
       </div>
+
+      {/* ── Row 3: Topology Preview ── */}
+      <motion.div variants={fadeUp}>
+        <TopologyPreview />
+      </motion.div>
 
       <style>{`
         .overview-root {

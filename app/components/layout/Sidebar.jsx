@@ -1,13 +1,13 @@
 // app/components/layout/Sidebar.jsx
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useBranding } from "@/hooks/useBranding";
 import VemioRibbonLogo from "@/app/components/VemioRibbonLogo";
-import ThemeToggle from '@/app/components/ThemeToggle';
 import {
   LayoutDashboard,
   Activity,
@@ -15,25 +15,50 @@ import {
   Network,
   Ticket,
   Bell,
+  BellDot,
   MapPin,
   FileSearch,
   FileBarChart,
   LogOut,
-  Clock
+  Clock,
+  ChevronDown,
+  Shield,
+  Settings,
+  Palette,
 } from "lucide-react";
 
-const NAV_ITEMS = [
-  { href: "/overview",      label: "Overview",       icon: LayoutDashboard },
-  { href: "/intelligence",  label: "Intelligence",   icon: Activity },
-  { href: "/devices",       label: "Device Health",  icon: Monitor },
-  { href: "/topology",      label: "Topology",       icon: Network },
-  { href: "/tickets",       label: "Tickets & SLA",  icon: Ticket },
-  { href: "/alerts",        label: "Alerts",         icon: Bell },
-  { href: "/sites",         label: "Sites",          icon: MapPin },
-  { href: "/rca",           label: "RCA Reports",    icon: FileSearch },
-  { href: "/reports",       label: "Reports",        icon: FileBarChart },
-  { href: '/settings/notifications', label: 'Notifications', icon: Bell     },
-  { href: '/settings/reports',       label: 'Report Schedule', icon: Clock },
+/* ── Nav structure with collapsible groups ── */
+const NAV_STRUCTURE = [
+  { href: "/overview",     label: "Overview",      icon: LayoutDashboard },
+  { href: "/intelligence", label: "Intelligence",  icon: Activity },
+  {
+    group: "Monitoring",
+    icon: Shield,
+    children: [
+      { href: "/devices", label: "Device Health", icon: Monitor },
+      { href: "/alerts",  label: "Alerts",        icon: BellDot },
+    ],
+  },
+  { href: "/topology",    label: "Topology",      icon: Network },
+  { href: "/tickets",     label: "Tickets & SLA", icon: Ticket },
+  { href: "/sites",       label: "Sites",         icon: MapPin },
+  { href: "/rca",         label: "RCA Reports",   icon: FileSearch },
+  {
+    group: "Reports",
+    icon: FileBarChart,
+    children: [
+      { href: "/reports",          label: "Reports",         icon: FileBarChart },
+      { href: "/settings/reports", label: "Report Schedule", icon: Clock },
+    ],
+  },
+  {
+    group: "Settings",
+    icon: Settings,
+    children: [
+      { href: "/settings/notifications", label: "Notifications", icon: Bell },
+      { href: "/settings/branding",      label: "Branding",      icon: Palette },
+    ],
+  },
 ];
 
 export default function Sidebar({ isRail = false, onNavigate }) {
@@ -42,58 +67,156 @@ export default function Sidebar({ isRail = false, onNavigate }) {
   const session = sessionData?.data;
   const branding = useBranding();
 
+  // Track which groups are expanded
+  const [expanded, setExpanded] = useState(() => {
+    // Auto-expand group that contains the active path
+    const openGroups = new Set();
+    for (const item of NAV_STRUCTURE) {
+      if (item.group && item.children?.some(c => pathname === c.href || pathname.startsWith(c.href + "/"))) {
+        openGroups.add(item.group);
+      }
+    }
+    return openGroups;
+  });
+
+  // Auto-expand group when navigating into it
+  useEffect(() => {
+    for (const item of NAV_STRUCTURE) {
+      if (item.group && item.children?.some(c => pathname === c.href || pathname.startsWith(c.href + "/"))) {
+        setExpanded(prev => {
+          const next = new Set(prev);
+          next.add(item.group);
+          return next;
+        });
+      }
+    }
+  }, [pathname]);
+
   function isActive(href) {
     return pathname === href || pathname.startsWith(href + "/");
   }
 
+  function toggleGroup(group) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(group)) next.delete(group);
+      else next.add(group);
+      return next;
+    });
+  }
+
   const hasLogo = branding.loaded && branding.logo_url;
+  const companyName = branding.loaded
+    ? branding.company_name || "VEMIO"
+    : null; // null while loading — prevents flash
 
   return (
     <nav className={`sidebar ${isRail ? "sidebar--rail" : ""}`}>
       {/* Logo */}
       <div className="sidebar-logo">
-        {hasLogo ? (
-          <Image
-            src={branding.logo_url}
-            alt={branding.company_name || "Logo"}
-            width={isRail ? 28 : 24}
-            height={isRail ? 28 : 24}
-            className="logo-img"
-            unoptimized
-          />
-        ) : (
-          <VemioRibbonLogo width={isRail ? 28 : 24} />
-        )}
+        <div className="logo-icon-wrap">
+          {hasLogo ? (
+            <Image
+              src={branding.logo_url}
+              alt={branding.company_name || "Logo"}
+              width={isRail ? 30 : 36}
+              height={isRail ? 30 : 36}
+              className="logo-img"
+              unoptimized
+            />
+          ) : (
+            <VemioRibbonLogo width={isRail ? 30 : 36} />
+          )}
+        </div>
         {!isRail && (
           <span className="logo-text">
-            {branding.loaded ? branding.company_name || "VEMIO" : "VEMIO"}
+            {companyName || (
+              <span className="logo-skeleton" />
+            )}
           </span>
         )}
       </div>
 
       {/* Nav items */}
       <ul className="sidebar-nav">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
-          <li key={href}>
-            <Link
-              href={href}
-              onClick={onNavigate}
-              className={`nav-item ${isActive(href) ? "nav-item--active" : ""}`}
-              title={isRail ? label : undefined}
-            >
-              <Icon size={18} className="nav-icon" />
-              {!isRail && <span className="nav-label">{label}</span>}
-              {isRail && isActive(href) && (
-                <span className="rail-active-dot" aria-hidden="true" />
-              )}
-            </Link>
-          </li>
-        ))}
+        {NAV_STRUCTURE.map((item) => {
+          // ── Collapsible group ──
+          if (item.group) {
+            const isOpen = expanded.has(item.group);
+            const GroupIcon = item.icon;
+            const hasActiveChild = item.children.some(c => isActive(c.href));
+
+            // Rail mode: show children as flat items
+            if (isRail) {
+              return item.children.map(({ href, label, icon: Icon }) => (
+                <li key={href}>
+                  <Link
+                    href={href}
+                    onClick={onNavigate}
+                    className={`nav-item ${isActive(href) ? "nav-item--active" : ""}`}
+                    title={label}
+                  >
+                    <Icon size={18} className="nav-icon" />
+                    {isActive(href) && <span className="rail-active-dot" aria-hidden="true" />}
+                  </Link>
+                </li>
+              ));
+            }
+
+            return (
+              <li key={item.group} className="nav-group">
+                <button
+                  className={`nav-group-btn ${hasActiveChild ? "nav-group-btn--active" : ""}`}
+                  onClick={() => toggleGroup(item.group)}
+                >
+                  <GroupIcon size={18} className="nav-icon" />
+                  <span className="nav-label">{item.group}</span>
+                  <ChevronDown
+                    size={14}
+                    className={`nav-group-chevron ${isOpen ? "nav-group-chevron--open" : ""}`}
+                  />
+                </button>
+                <ul className={`nav-group-children ${isOpen ? "nav-group-children--open" : ""}`}>
+                  {item.children.map(({ href, label, icon: Icon }) => (
+                    <li key={href}>
+                      <Link
+                        href={href}
+                        onClick={onNavigate}
+                        className={`nav-item nav-item--child ${isActive(href) ? "nav-item--active" : ""}`}
+                      >
+                        <Icon size={16} className="nav-icon" />
+                        <span className="nav-label">{label}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
+          }
+
+          // ── Regular nav item ──
+          const Icon = item.icon;
+          return (
+            <li key={item.href}>
+              <Link
+                href={item.href}
+                onClick={onNavigate}
+                className={`nav-item ${isActive(item.href) ? "nav-item--active" : ""}`}
+                title={isRail ? item.label : undefined}
+              >
+                <Icon size={18} className="nav-icon" />
+                {!isRail && <span className="nav-label">{item.label}</span>}
+                {isRail && isActive(item.href) && (
+                  <span className="rail-active-dot" aria-hidden="true" />
+                )}
+              </Link>
+            </li>
+          );
+        })}
       </ul>
 
       {/* Footer */}
       <div className="sidebar-footer">
-      {!isRail && <ThemeToggle />}
         {/* Powered by */}
         {!isRail && branding.show_powered_by && branding.powered_by_text && (
           <p className="powered-by">{branding.powered_by_text}</p>
@@ -128,19 +251,26 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           overflow: hidden;
         }
 
+        /* ── Logo area ── */
         .sidebar-logo {
           display: flex;
+          flex-direction: column;
           align-items: center;
-          gap: 10px;
-          padding: 0 20px;
-          height: 56px;
+          gap: 6px;
+          padding: 16px 20px 14px;
           border-bottom: 1px solid var(--vemio-border);
           flex-shrink: 0;
         }
 
         .sidebar--rail .sidebar-logo {
+          padding: 14px 6px 12px;
+        }
+
+        .logo-icon-wrap {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
           justify-content: center;
-          padding: 0;
         }
 
         .logo-img {
@@ -150,12 +280,32 @@ export default function Sidebar({ isRail = false, onNavigate }) {
         }
 
         .logo-text {
-          font-size: 15px;
-          font-weight: 700;
-          letter-spacing: 0.1em;
-          color: var(--vemio-text);
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          color: var(--vemio-text-muted);
+          text-align: center;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 100%;
+          min-height: 16px;
         }
 
+        .logo-skeleton {
+          display: inline-block;
+          width: 80px;
+          height: 12px;
+          border-radius: 4px;
+          background: var(--vemio-surface-raised);
+          animation: logo-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes logo-pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.15; }
+        }
+
+        /* ── Nav ── */
         .sidebar-nav {
           list-style: none;
           margin: 0;
@@ -185,7 +335,13 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           transition: background 0.15s, color 0.15s;
           white-space: nowrap;
           position: relative;
-          min-height: 44px;
+          min-height: 40px;
+        }
+
+        .nav-item--child {
+          padding: 7px 12px 7px 22px;
+          font-size: 13px;
+          min-height: 36px;
         }
 
         .sidebar--rail .nav-item {
@@ -232,6 +388,63 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           background: var(--vemio-amber);
         }
 
+        /* ── Collapsible groups ── */
+        .nav-group {
+          list-style: none;
+        }
+
+        .nav-group-btn {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 9px 12px;
+          border-radius: 8px;
+          color: var(--vemio-text-muted);
+          font-size: 13.5px;
+          font-weight: 500;
+          cursor: pointer;
+          border: none;
+          background: transparent;
+          width: 100%;
+          text-align: left;
+          min-height: 40px;
+          transition: background 0.15s, color 0.15s;
+        }
+
+        .nav-group-btn:hover {
+          background: var(--vemio-surface-raised);
+          color: var(--vemio-text);
+        }
+
+        .nav-group-btn--active {
+          color: var(--vemio-amber);
+        }
+
+        .nav-group-chevron {
+          margin-left: auto;
+          color: var(--vemio-text-dim);
+          transition: transform 0.2s ease;
+          flex-shrink: 0;
+        }
+
+        .nav-group-chevron--open {
+          transform: rotate(180deg);
+        }
+
+        .nav-group-children {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+          overflow: hidden;
+          max-height: 0;
+          transition: max-height 0.2s ease;
+        }
+
+        .nav-group-children--open {
+          max-height: 200px;
+        }
+
+        /* ── Footer ── */
         .sidebar-footer {
           padding: 12px 10px;
           border-top: 1px solid var(--vemio-border);

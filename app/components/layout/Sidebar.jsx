@@ -119,8 +119,8 @@ export default function Sidebar({ isRail = false, onNavigate }) {
             <Image
               src={branding.logo_url}
               alt={branding.company_name || "Logo"}
-              width={isRail ? 30 : 36}
-              height={isRail ? 30 : 36}
+              width={isRail ? 40 : 52}
+              height={isRail ? 40 : 52}
               className="logo-img"
               unoptimized
             />

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, RefreshCw, AlertTriangle, Shield, Archive, RotateCcw } from 'lucide-react';
+import { ArrowLeft, RefreshCw, AlertTriangle, Shield, Archive, RotateCcw, ChevronDown, ChevronUp, Globe } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -43,6 +43,7 @@ export default function DeviceDetailPage() {
   const [loading, setLoading]       = useState(true);
   const [retiring, setRetiring]     = useState(false);
   const [showRetireConfirm, setShowRetireConfirm] = useState(false);
+  const [showAllIPs, setShowAllIPs] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
@@ -61,17 +62,17 @@ export default function DeviceDetailPage() {
     fetchData();
   }, [id, days, router]);
 
-  const device    = data?.device;
-  const uptime    = data?.uptime;
-  const history   = data?.history || [];
-  const statusCfg = device ? (STATUS_CONFIG[device.status] || STATUS_CONFIG.unknown) : null;
+  const device     = data?.device;
+  const interfaces = data?.interfaces || [];
+  const uptime     = data?.uptime;
+  const history    = data?.history || [];
+  const statusCfg  = device ? (STATUS_CONFIG[device.status] || STATUS_CONFIG.unknown) : null;
 
   /* ── Retire / Reactivate handler ── */
   const handleRetireToggle = async () => {
     if (!device) return;
     const newRetired = !device.isRetired;
 
-    // Require confirmation only when retiring (not reactivating)
     if (newRetired && !showRetireConfirm) {
       setShowRetireConfirm(true);
       return;
@@ -87,7 +88,6 @@ export default function DeviceDetailPage() {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result = await res.json();
-      // Update local state
       setData(prev => ({
         ...prev,
         device: { ...prev.device, isRetired: result.isRetired },
@@ -116,19 +116,23 @@ export default function DeviceDetailPage() {
     status: h.status,
   }));
 
-  // Build info cards dynamically based on available data
+  // Info cards — show primary IP only (interfaces section handles the rest)
   const infoCards = [
     { label: 'IP Address',      value: device.ipAddress || '—', mono: true },
     { label: 'Manufacturer',    value: device.make      || '—' },
     { label: 'Model',           value: device.model     || '—' },
     { label: 'Serial Number',   value: device.serialNumber || '—', mono: true },
     { label: 'Firmware',        value: device.firmwareVersion || '—', mono: true },
-    { label: 'Status Since',       value: device.lastSeenAt
+    { label: 'Status Since',    value: device.lastSeenAt
         ? new Date(device.lastSeenAt).toLocaleString('en-IN') : '—' },
   ];
 
-  // Lifecycle cards — only show if data exists
   const hasLifecycle = device.eolDate || device.warrantyExpiry;
+
+  // Interfaces: separate primary from others
+  const primaryIP = interfaces.find(i => i.isPrimary);
+  const otherIPs = interfaces.filter(i => !i.isPrimary);
+  const hasMultipleIPs = interfaces.length > 1;
 
   return (
     <>
@@ -175,10 +179,14 @@ export default function DeviceDetailPage() {
                   <Shield className="w-3 h-3" /> Critical
                 </span>
               )}
+              {hasMultipleIPs && (
+                <span className="dd-meta-chip dd-meta-chip--ips">
+                  <Globe className="w-3 h-3" /> {interfaces.length} IPs
+                </span>
+              )}
             </div>
           </div>
 
-          {/* ── Retire / Reactivate button ── */}
           <div className="dd-header-actions">
             <button
               onClick={handleRetireToggle}
@@ -222,17 +230,8 @@ export default function DeviceDetailPage() {
                   </div>
                 </div>
                 <div className="dd-retire-confirm-actions">
-                  <button
-                    onClick={() => setShowRetireConfirm(false)}
-                    className="dd-retire-cancel-btn"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleRetireToggle}
-                    disabled={retiring}
-                    className="dd-retire-confirm-btn"
-                  >
+                  <button onClick={() => setShowRetireConfirm(false)} className="dd-retire-cancel-btn">Cancel</button>
+                  <button onClick={handleRetireToggle} disabled={retiring} className="dd-retire-confirm-btn">
                     {retiring ? 'Retiring…' : 'Yes, Retire'}
                   </button>
                 </div>
@@ -241,7 +240,7 @@ export default function DeviceDetailPage() {
           )}
         </AnimatePresence>
 
-        {/* ── Description (if available from Auvik) ── */}
+        {/* ── Description ── */}
         {device.description && (
           <div className="dd-description">
             <p className="dd-description-label">Description</p>
@@ -261,7 +260,63 @@ export default function DeviceDetailPage() {
           ))}
         </div>
 
-        {/* ── Lifecycle panel — EOL + Warranty ── */}
+        {/* ── IP Interfaces panel — only show if device has multiple IPs ── */}
+        {hasMultipleIPs && (
+          <div className="dd-panel dd-interfaces-panel">
+            <button
+              className="dd-interfaces-header"
+              onClick={() => setShowAllIPs(prev => !prev)}
+            >
+              <div className="dd-interfaces-header-left">
+                <h3 className="dd-panel-title">IP Addresses</h3>
+                <p className="dd-panel-sub">
+                  {interfaces.length} addresses assigned to this device
+                </p>
+              </div>
+              <div className="dd-interfaces-toggle">
+                {showAllIPs ? (
+                  <ChevronUp className="w-4 h-4" style={{ color: 'var(--color-vemio-text-dim)' }} />
+                ) : (
+                  <ChevronDown className="w-4 h-4" style={{ color: 'var(--color-vemio-text-dim)' }} />
+                )}
+              </div>
+            </button>
+
+            <AnimatePresence initial={false}>
+              {showAllIPs && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="dd-interfaces-body"
+                >
+                  <div className="dd-interfaces-list">
+                    {interfaces.map((iface, idx) => (
+                      <div key={idx} className={`dd-iface-row ${iface.isPrimary ? 'dd-iface-row--primary' : ''}`}>
+                        <span className="dd-iface-ip">{iface.ipAddress}</span>
+                        <div className="dd-iface-meta">
+                          {iface.isPrimary && (
+                            <span className="dd-iface-badge dd-iface-badge--primary">Primary</span>
+                          )}
+                          {iface.interfaceName && (
+                            <span className="dd-iface-badge">{iface.interfaceName}</span>
+                          )}
+                          {iface.vlanId && (
+                            <span className="dd-iface-badge">VLAN {iface.vlanId}</span>
+                          )}
+                          <span className="dd-iface-source">{iface.source}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* ── Lifecycle panel ── */}
         {hasLifecycle && (
           <div className="dd-lifecycle-row">
             {device.eolDate && (
@@ -525,8 +580,14 @@ export default function DeviceDetailPage() {
           background: rgba(249, 115, 22, 0.08);
           border: 1px solid rgba(249, 115, 22, 0.15);
         }
+        .dd-meta-chip--ips {
+          color: var(--color-vemio-amber);
+          background: rgba(245, 158, 11, 0.06);
+          border: 1px solid rgba(245, 158, 11, 0.12);
+          text-transform: none;
+        }
 
-        /* ── Retire / Reactivate button ── */
+        /* ── Retire button ── */
         .dd-retire-btn {
           display: inline-flex;
           align-items: center;
@@ -560,9 +621,7 @@ export default function DeviceDetailPage() {
         }
 
         /* ── Retire confirmation ── */
-        .dd-retire-confirm {
-          overflow: hidden;
-        }
+        .dd-retire-confirm { overflow: hidden; }
         .dd-retire-confirm-inner {
           padding: 16px;
           border-radius: 12px;
@@ -572,87 +631,40 @@ export default function DeviceDetailPage() {
           flex-direction: column;
           gap: 14px;
         }
-        .dd-retire-confirm-text {
-          display: flex;
-          gap: 10px;
-          align-items: flex-start;
-        }
-        .dd-retire-confirm-title {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--color-vemio-text);
-          margin: 0;
-        }
-        .dd-retire-confirm-desc {
-          font-size: 12px;
-          color: var(--color-vemio-text-muted);
-          margin: 4px 0 0;
-          line-height: 1.5;
-        }
-        .dd-retire-confirm-actions {
-          display: flex;
-          gap: 8px;
-          justify-content: flex-end;
-        }
+        .dd-retire-confirm-text { display: flex; gap: 10px; align-items: flex-start; }
+        .dd-retire-confirm-title { font-size: 13px; font-weight: 600; color: var(--color-vemio-text); margin: 0; }
+        .dd-retire-confirm-desc { font-size: 12px; color: var(--color-vemio-text-muted); margin: 4px 0 0; line-height: 1.5; }
+        .dd-retire-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
         .dd-retire-cancel-btn {
-          padding: 6px 14px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-          border: 1px solid var(--color-vemio-border);
-          background: var(--color-vemio-surface);
-          color: var(--color-vemio-text-muted);
-          transition: background 0.15s;
+          padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer;
+          border: 1px solid var(--color-vemio-border); background: var(--color-vemio-surface); color: var(--color-vemio-text-muted); transition: background 0.15s;
         }
         .dd-retire-cancel-btn:hover { background: var(--color-vemio-surface-raised); }
         .dd-retire-confirm-btn {
-          padding: 6px 14px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 600;
-          cursor: pointer;
-          border: none;
-          background: rgba(239, 68, 68, 0.12);
-          color: var(--color-status-down);
-          transition: background 0.15s;
+          padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+          border: none; background: rgba(239, 68, 68, 0.12); color: var(--color-status-down); transition: background 0.15s;
         }
         .dd-retire-confirm-btn:hover { background: rgba(239, 68, 68, 0.2); }
         .dd-retire-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* ── Description block ── */
+        /* ── Description ── */
         .dd-description {
           border-radius: 12px;
           padding: 14px;
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
         }
-        .dd-description-label {
-          font-size: 10px;
-          color: var(--color-vemio-text-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          margin: 0;
-        }
-        .dd-description-text {
-          font-size: 13px;
-          color: var(--color-vemio-text-muted);
-          margin: 6px 0 0;
-          line-height: 1.5;
-        }
+        .dd-description-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
+        .dd-description-text { font-size: 13px; color: var(--color-vemio-text-muted); margin: 6px 0 0; line-height: 1.5; }
 
-        /* ── Info grid: 3-col desktop, 2-col mobile ── */
+        /* ── Info grid ── */
         .dd-info-grid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 12px;
         }
-        @media (max-width: 767px) {
-          .dd-info-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        @media (max-width: 479px) {
-          .dd-info-grid { gap: 8px; }
-        }
+        @media (max-width: 767px) { .dd-info-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 479px) { .dd-info-grid { gap: 8px; } }
 
         .dd-info-card {
           border-radius: 12px;
@@ -660,23 +672,96 @@ export default function DeviceDetailPage() {
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
         }
-        .dd-info-label {
-          font-size: 10px;
+        .dd-info-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
+        .dd-info-value { font-size: 13px; font-weight: 500; color: var(--vemio-text); margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .dd-info-value--mono { font-family: var(--font-mono); font-size: 12px; }
+
+        /* ── IP Interfaces panel ── */
+        .dd-interfaces-panel { padding: 0; }
+        .dd-interfaces-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 16px 20px;
+          cursor: pointer;
+          border: none;
+          background: transparent;
+          width: 100%;
+          text-align: left;
+          color: inherit;
+          transition: background 0.12s;
+          border-radius: 16px;
+        }
+        .dd-interfaces-header:hover { background: rgba(255, 255, 255, 0.02); }
+        .dd-interfaces-header-left { min-width: 0; }
+        .dd-interfaces-toggle { flex-shrink: 0; }
+
+        .dd-interfaces-body { overflow: hidden; }
+        .dd-interfaces-list {
+          padding: 0 20px 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          max-height: 400px;
+          overflow-y: auto;
+        }
+
+        .dd-iface-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 8px 12px;
+          border-radius: 8px;
+          transition: background 0.12s;
+        }
+        .dd-iface-row:hover { background: rgba(255, 255, 255, 0.03); }
+        .dd-iface-row--primary { background: rgba(245, 158, 11, 0.03); }
+        .dd-iface-row--primary:hover { background: rgba(245, 158, 11, 0.06); }
+
+        .dd-iface-ip {
+          font-family: var(--font-mono);
+          font-size: 12px;
+          color: var(--color-vemio-text);
+          font-weight: 500;
+          flex-shrink: 0;
+        }
+        .dd-iface-meta {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        .dd-iface-badge {
+          font-size: 9px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          padding: 2px 6px;
+          border-radius: 4px;
+          background: rgba(148, 163, 184, 0.1);
+          color: var(--color-vemio-text-dim);
+        }
+        .dd-iface-badge--primary {
+          background: rgba(245, 158, 11, 0.12);
+          color: var(--color-vemio-amber);
+        }
+        .dd-iface-source {
+          font-size: 9px;
           color: var(--color-vemio-text-dim);
           text-transform: uppercase;
-          letter-spacing: 0.07em;
-          margin: 0;
+          letter-spacing: 0.06em;
+          opacity: 0.5;
         }
-        .dd-info-value {
-          font-size: 13px;
-          font-weight: 500;
-          color: var(--vemio-text);
-          margin: 4px 0 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+
+        @media (max-width: 479px) {
+          .dd-interfaces-header { padding: 12px 14px; }
+          .dd-interfaces-list { padding: 0 14px 12px; }
+          .dd-iface-row { flex-direction: column; align-items: flex-start; gap: 4px; }
+          .dd-iface-meta { justify-content: flex-start; }
         }
-        .dd-info-value--mono { font-family: var(--font-mono); font-size: 12px; }
 
         /* ── Lifecycle cards ── */
         .dd-lifecycle-row {
@@ -684,9 +769,7 @@ export default function DeviceDetailPage() {
           grid-template-columns: repeat(2, 1fr);
           gap: 12px;
         }
-        @media (max-width: 479px) {
-          .dd-lifecycle-row { grid-template-columns: 1fr; }
-        }
+        @media (max-width: 479px) { .dd-lifecycle-row { grid-template-columns: 1fr; } }
 
         .dd-lifecycle-card {
           border-radius: 12px;
@@ -694,45 +777,13 @@ export default function DeviceDetailPage() {
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
         }
-        .dd-lifecycle-card--expired {
-          background: rgba(239, 68, 68, 0.04);
-          border-color: rgba(239, 68, 68, 0.15);
-        }
-        .dd-lifecycle-card--warning {
-          background: rgba(245, 158, 11, 0.04);
-          border-color: rgba(245, 158, 11, 0.15);
-        }
-        .dd-lifecycle-label {
-          font-size: 10px;
-          color: var(--color-vemio-text-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-          margin: 0;
-        }
-        .dd-lifecycle-value {
-          font-size: 16px;
-          font-weight: 600;
-          color: var(--color-vemio-text);
-          margin: 6px 0 0;
-        }
-        .dd-lifecycle-tag {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 11px;
-          font-weight: 500;
-          margin: 8px 0 0;
-          padding: 2px 8px;
-          border-radius: 6px;
-        }
-        .dd-lifecycle-tag--expired {
-          color: var(--color-severity-high);
-          background: rgba(239, 68, 68, 0.08);
-        }
-        .dd-lifecycle-tag--warning {
-          color: var(--color-vemio-amber);
-          background: rgba(245, 158, 11, 0.08);
-        }
+        .dd-lifecycle-card--expired { background: rgba(239, 68, 68, 0.04); border-color: rgba(239, 68, 68, 0.15); }
+        .dd-lifecycle-card--warning { background: rgba(245, 158, 11, 0.04); border-color: rgba(245, 158, 11, 0.15); }
+        .dd-lifecycle-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
+        .dd-lifecycle-value { font-size: 16px; font-weight: 600; color: var(--color-vemio-text); margin: 6px 0 0; }
+        .dd-lifecycle-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; margin: 8px 0 0; padding: 2px 8px; border-radius: 6px; }
+        .dd-lifecycle-tag--expired { color: var(--color-severity-high); background: rgba(239, 68, 68, 0.08); }
+        .dd-lifecycle-tag--warning { color: var(--color-vemio-amber); background: rgba(245, 158, 11, 0.08); }
 
         /* ── Shared panel ── */
         .dd-panel {
@@ -743,118 +794,51 @@ export default function DeviceDetailPage() {
         }
         @media (max-width: 479px) { .dd-panel { padding: 14px; } }
 
-        .dd-panel-title {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--vemio-text);
-          margin: 0;
-        }
-        .dd-panel-sub {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          margin: 3px 0 0;
-        }
+        .dd-panel-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; }
+        .dd-panel-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 3px 0 0; }
 
         .dd-uptime-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 20px;
-          flex-wrap: wrap;
+          display: flex; align-items: flex-start; justify-content: space-between;
+          gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
         }
         .dd-uptime-header-left { min-width: 0; }
-        .dd-uptime-header-right {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          flex-shrink: 0;
-        }
+        .dd-uptime-header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         @media (max-width: 479px) {
           .dd-uptime-header { flex-direction: column; gap: 10px; }
           .dd-uptime-header-right { align-self: flex-start; }
         }
 
-        .dd-uptime-pct {
-          font-size: 18px;
-          font-weight: 700;
-          font-variant-numeric: tabular-nums;
-        }
-        .dd-range-btns {
-          display: flex;
-          gap: 2px;
-        }
+        .dd-uptime-pct { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .dd-range-btns { display: flex; gap: 2px; }
         .dd-range-btn {
-          padding: 4px 10px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-          border: none;
-          transition: background 0.15s, color 0.15s;
-          min-height: 30px;
+          padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 500;
+          cursor: pointer; border: none; transition: background 0.15s, color 0.15s; min-height: 30px;
         }
 
         .dd-empty-chart {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          height: 200px;
-          font-size: 13px;
-          color: var(--color-vemio-text-dim);
+          display: flex; align-items: center; justify-content: center;
+          height: 200px; font-size: 13px; color: var(--color-vemio-text-dim);
         }
 
         .dd-tooltip {
-          border-radius: 8px;
-          padding: 8px 12px;
-          font-size: 12px;
+          border-radius: 8px; padding: 8px 12px; font-size: 12px;
           box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-          background: var(--color-vemio-surface-raised);
-          border: 1px solid var(--color-vemio-border);
+          background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border);
         }
 
         /* ── Log ── */
-        .dd-log {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          max-height: 300px;
-          overflow-y: auto;
-        }
+        .dd-log { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
         .dd-log-row {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 7px 12px;
-          border-radius: 8px;
-          transition: background 0.12s;
-          flex-wrap: wrap;
+          display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+          border-radius: 8px; transition: background 0.12s; flex-wrap: wrap;
         }
         .dd-log-row:hover { background: var(--color-vemio-surface-raised); }
-        .dd-log-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
-        .dd-log-status {
-          font-size: 12px;
-          font-weight: 500;
-          min-width: 52px;
-        }
-        .dd-log-time {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          margin-left: auto;
-        }
-        .dd-log-source {
-          font-size: 10px;
-          color: var(--color-vemio-text-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
+        .dd-log-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .dd-log-status { font-size: 12px; font-weight: 500; min-width: 52px; }
+        .dd-log-time { font-size: 11px; color: var(--color-vemio-text-dim); margin-left: auto; }
+        .dd-log-source { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
         @media (max-width: 479px) {
-          .dd-log-time  { margin-left: 0; }
+          .dd-log-time { margin-left: 0; }
           .dd-log-source { display: none; }
         }
       `}</style>

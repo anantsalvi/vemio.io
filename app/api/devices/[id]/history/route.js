@@ -2,7 +2,7 @@
  * VEMIO™ — Device History API
  * GET /api/devices/[id]/history
  * 
- * Returns status history for a single device.
+ * Returns status history and all IP interfaces for a single device.
  * Query params: days (7, 30, 90)
  */
 
@@ -38,6 +38,15 @@ export const GET = withAuth(async (req, session, { params }) => {
     }
 
     const device = deviceResult.rows[0];
+
+    // Get all IP interfaces for this device
+    const interfacesResult = await queryWithTenant(tenantId,
+      `SELECT ip_address, interface_name, vlan_id, is_primary, source, updated_at
+       FROM device_interfaces
+       WHERE device_id = $1
+       ORDER BY is_primary DESC, ip_address ASC`,
+      [deviceId]
+    );
 
     // Get status history entries
     const historyResult = await queryWithTenant(tenantId,
@@ -122,6 +131,14 @@ export const GET = withAuth(async (req, session, { params }) => {
         description: device.description,
         isRetired: device.is_retired,
       },
+      interfaces: interfacesResult.rows.map(row => ({
+        ipAddress: row.ip_address,
+        interfaceName: row.interface_name,
+        vlanId: row.vlan_id,
+        isPrimary: row.is_primary,
+        source: row.source,
+        updatedAt: row.updated_at,
+      })),
       history: history.map(h => ({
         status: h.status,
         changedAt: h.changed_at,

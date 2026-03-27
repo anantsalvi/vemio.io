@@ -390,9 +390,8 @@ export default function TopologyPage() {
       });
     }
 
-    /* ── Position clusters below tier 1 ── */
+    /* ── Position clusters below tier 1 — aligned under parent ── */
     const clusterStartY = tier1Y + TIER_GAP + 20;
-    let clusterCursorX = CLUSTER_GAP_X;
     const clusterBounds = []; // { id, x, y, w, h, headX, headY }
 
     // Include orphans as a virtual cluster
@@ -408,12 +407,112 @@ export default function TopologyPage() {
       });
     }
 
+    // Phase 1: Calculate each cluster's width (without positioning)
+    const clusterWidths = new Map();
     for (const cluster of allClusterGroups) {
       const isExpanded = expandedClusters.has(cluster.id);
+      if (!isExpanded) {
+        clusterWidths.set(cluster.id, CLUSTER_HEAD_RADIUS * 2 + 20);
+      } else {
+        const cols = Math.min(cluster.children.length, CHILD_ROW_MAX);
+        const clusterWidth = Math.max(cols * NODE_GAP_X, 100) + CLUSTER_PAD * 2;
+        clusterWidths.set(cluster.id, clusterWidth);
+      }
+    }
+
+    // Phase 2: Assign target X for each cluster based on its parent tier-1 node
+    // Build a map: tier1NodeId → [clusters that belong to it]
+    const tier1ClusterMap = new Map();
+    const orphanClusters = [];
+    for (const cluster of allClusterGroups) {
+      if (cluster.isOrphan) {
+        orphanClusters.push(cluster);
+        continue;
+      }
+      const parentId = cluster.head.id;
+      const parentPos = allPositioned.get(parentId);
+      if (parentPos) {
+        if (!tier1ClusterMap.has(parentId)) tier1ClusterMap.set(parentId, []);
+        tier1ClusterMap.get(parentId).push(cluster);
+      } else {
+        orphanClusters.push(cluster);
+      }
+    }
+
+    // Phase 3: Position clusters centered under their parent's X
+    // For tier-1 nodes with multiple clusters, stack them horizontally centered under the parent
+    const clusterPositions = new Map(); // clusterId → targetCenterX
+
+    for (const [parentId, parentClusters] of tier1ClusterMap) {
+      const parentPos = allPositioned.get(parentId);
+      if (!parentPos) continue;
+      const parentX = parentPos.x;
+
+      if (parentClusters.length === 1) {
+        clusterPositions.set(parentClusters[0].id, parentX);
+      } else {
+        // Multiple clusters under same parent — spread them centered
+        const totalWidth = parentClusters.reduce((s, c) => s + clusterWidths.get(c.id), 0)
+          + (parentClusters.length - 1) * CLUSTER_GAP_X;
+        let cursorX = parentX - totalWidth / 2;
+        for (const c of parentClusters) {
+          const w = clusterWidths.get(c.id);
+          clusterPositions.set(c.id, cursorX + w / 2);
+          cursorX += w + CLUSTER_GAP_X;
+        }
+      }
+    }
+
+    // Orphan clusters go at the far right
+    if (orphanClusters.length > 0) {
+      // Find the rightmost positioned cluster
+      let maxRight = 0;
+      for (const [cId, cx] of clusterPositions) {
+        const hw = clusterWidths.get(cId) / 2;
+        maxRight = Math.max(maxRight, cx + hw);
+      }
+      // Also consider tier-1 positions
+      for (const n of tier1) {
+        const pos = allPositioned.get(n.id);
+        if (pos) maxRight = Math.max(maxRight, pos.x + 50);
+      }
+
+      let orphanCursor = maxRight + CLUSTER_GAP_X * 2;
+      for (const c of orphanClusters) {
+        const cw = clusterWidths.get(c.id);
+        clusterPositions.set(c.id, orphanCursor + cw / 2);
+        orphanCursor += cw + CLUSTER_GAP_X;
+      }
+    }
+
+    // Phase 4: Resolve overlaps — sort by X and push apart if overlapping
+    const sortedClusters = [...allClusterGroups].sort((a, b) =>
+      (clusterPositions.get(a.id) || 0) - (clusterPositions.get(b.id) || 0)
+    );
+
+    for (let i = 1; i < sortedClusters.length; i++) {
+      const prev = sortedClusters[i - 1];
+      const curr = sortedClusters[i];
+      const prevRight = clusterPositions.get(prev.id) + clusterWidths.get(prev.id) / 2;
+      const currLeft = clusterPositions.get(curr.id) - clusterWidths.get(curr.id) / 2;
+      const minGap = CLUSTER_GAP_X / 2;
+
+      if (currLeft < prevRight + minGap) {
+        const shift = prevRight + minGap - currLeft;
+        clusterPositions.set(curr.id, clusterPositions.get(curr.id) + shift);
+      }
+    }
+
+    // Phase 5: Now position all cluster nodes using the resolved X positions
+    for (const cluster of allClusterGroups) {
+      const isExpanded = expandedClusters.has(cluster.id);
+      const centerX = clusterPositions.get(cluster.id) || CLUSTER_GAP_X + 40;
+      const cw = clusterWidths.get(cluster.id);
+      const clusterX = centerX - cw / 2;
 
       if (!isExpanded) {
         // ── COLLAPSED: single node with badge ──
-        const cx = clusterCursorX + CLUSTER_HEAD_RADIUS + 10;
+        const cx = centerX;
         const cy = clusterStartY + CLUSTER_HEAD_RADIUS + 10;
         const nodeData = {
           ...cluster.head,
@@ -428,29 +527,24 @@ export default function TopologyPage() {
         allPositioned.set(`cluster_${cluster.id}`, nodeData);
         clusterBounds.push({
           id: cluster.id,
-          x: clusterCursorX,
+          x: clusterX,
           y: clusterStartY,
-          w: CLUSTER_HEAD_RADIUS * 2 + 20,
+          w: cw,
           h: CLUSTER_HEAD_RADIUS * 2 + 40,
           headX: cx,
           headY: cy,
         });
-        clusterCursorX += CLUSTER_HEAD_RADIUS * 2 + 20 + CLUSTER_GAP_X;
       } else {
         // ── EXPANDED: head + children grid + grandchildren ──
         const children = cluster.children;
         const grandchildren = cluster.grandchildren;
-
-        // Calculate rows for children
         const cols = Math.min(children.length, CHILD_ROW_MAX);
-        const rows = Math.ceil(children.length / cols);
-        const clusterWidth = Math.max(cols * NODE_GAP_X, 100);
+        const innerWidth = Math.max(cols * NODE_GAP_X, 100);
 
-        const clusterX = clusterCursorX;
         const clusterY = clusterStartY;
 
         // Cluster head at top center of its box
-        const headX = clusterX + CLUSTER_PAD + clusterWidth / 2;
+        const headX = centerX;
         const headY = clusterY + CLUSTER_PAD + 20;
         const headData = {
           ...cluster.head,
@@ -462,16 +556,11 @@ export default function TopologyPage() {
           isCollapsed: false,
           isOrphan: cluster.isOrphan || false,
         };
-        // Don't double-position the real tier-1 node if it's already in topNodes
-        if (!cluster.isOrphan) {
-          allPositioned.set(`cluster_${cluster.id}`, headData);
-        } else {
-          allPositioned.set(`cluster_${cluster.id}`, headData);
-        }
+        allPositioned.set(`cluster_${cluster.id}`, headData);
 
         // Position children (tier 2) in grid below head
         const childStartY = headY + 50;
-        const childStartX = clusterX + CLUSTER_PAD + (clusterWidth - (cols - 1) * NODE_GAP_X) / 2;
+        const childStartX = clusterX + CLUSTER_PAD + (innerWidth - (cols - 1) * NODE_GAP_X) / 2;
         let maxChildY = childStartY;
         let maxGrandY = childStartY;
 
@@ -509,20 +598,17 @@ export default function TopologyPage() {
         }
 
         const totalHeight = Math.max(maxChildY, maxGrandY) - clusterY + 50;
-        const totalWidth = clusterWidth + CLUSTER_PAD * 2;
 
         clusterBounds.push({
           id: cluster.id,
           x: clusterX,
           y: clusterY,
-          w: totalWidth,
+          w: cw,
           h: totalHeight,
           headX,
           headY,
           isExpanded: true,
         });
-
-        clusterCursorX += totalWidth + CLUSTER_GAP_X;
       }
     }
 
@@ -602,8 +688,9 @@ export default function TopologyPage() {
 
     // Separator above clusters
     if (allClusterGroups.length > 0) {
+      const maxClusterRight = clusterBounds.reduce((max, cb) => Math.max(max, cb.x + cb.w), 0);
       g.append('line')
-        .attr('x1', 10).attr('x2', Math.max(w, clusterCursorX) - 10)
+        .attr('x1', 10).attr('x2', Math.max(w, maxClusterRight + 40) - 10)
         .attr('y1', clusterStartY - 15).attr('y2', clusterStartY - 15)
         .attr('stroke', 'rgba(148,163,184,0.06)').attr('stroke-width', 1);
       g.append('text')

@@ -25,6 +25,7 @@ export const GET = withAuth(async (req, session, { params }) => {
               d.is_critical, d.has_redundancy,
               d.firmware_is_current, d.config_last_validated,
               s.name AS site_name
+              d.software_version, d.description, d.auvik_dashboard_url
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id
        WHERE d.id = $1`,
@@ -117,6 +118,9 @@ export const GET = withAuth(async (req, session, { params }) => {
         hasRedundancy: device.has_redundancy,
         firmwareIsCurrent: device.firmware_is_current,
         configLastValidated: device.config_last_validated,
+        softwareVersion: device.software_version,
+        description: device.description,
+        auvikDashboardUrl: device.auvik_dashboard_url,
       },
       history: history.map(h => ({
         status: h.status,

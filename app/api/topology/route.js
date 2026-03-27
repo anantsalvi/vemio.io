@@ -64,13 +64,13 @@ export const GET = withAuth(async (req, session) => {
 
     // ── Edges: from device_neighbors, deduplicated ──
     const edgesResult = await queryWithTenant(tenantId,
-      `SELECT DISTINCT ON (LEAST(dn.device_auvik_id, dn.neighbor_auvik_id),
-                           GREATEST(dn.device_auvik_id, dn.neighbor_auvik_id))
-         dn.device_auvik_id   AS source_auvik_id,
-         dn.neighbor_auvik_id AS target_auvik_id
+      `SELECT DISTINCT ON (LEAST(dn.device_id, dn.neighbor_device_id),
+                           GREATEST(dn.device_id, dn.neighbor_device_id))
+         dn.device_id          AS source_auvik_id,
+         dn.neighbor_device_id AS target_auvik_id
        FROM device_neighbors dn
-       ORDER BY LEAST(dn.device_auvik_id, dn.neighbor_auvik_id),
-                GREATEST(dn.device_auvik_id, dn.neighbor_auvik_id)`
+       ORDER BY LEAST(dn.device_id, dn.neighbor_device_id),
+                GREATEST(dn.device_id, dn.neighbor_device_id)`
     );
 
     // Filter edges to only include devices we have as nodes

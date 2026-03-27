@@ -25,6 +25,7 @@ import {
   Shield,
   Settings,
   Palette,
+  User,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -55,6 +56,7 @@ const NAV_STRUCTURE = [
     group: "Settings",
     icon: Settings,
     children: [
+      { href: "/settings/account",       label: "Account",       icon: User },
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/settings/branding",      label: "Branding",      icon: Palette },
     ],
@@ -66,6 +68,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
   const sessionData = useSession();
   const session = sessionData?.data;
   const branding = useBranding();
+  const [showSignout, setShowSignout] = useState(false);
 
   // Track which groups are expanded
   const [expanded, setExpanded] = useState(() => {
@@ -223,7 +226,10 @@ export default function Sidebar({ isRail = false, onNavigate }) {
         )}
 
         {!isRail && session?.user && (
-          <div className="sidebar-user">
+          <button
+            className="sidebar-user"
+            onClick={() => setShowSignout(prev => !prev)}
+          >
             <div className="user-avatar">
               {session.user.name?.charAt(0).toUpperCase()}
             </div>
@@ -231,16 +237,30 @@ export default function Sidebar({ isRail = false, onNavigate }) {
               <p className="user-name">{session.user.name}</p>
               <p className="user-role">{session.user.role ?? "viewer"}</p>
             </div>
-          </div>
+            <ChevronDown
+              size={14}
+              className={`user-chevron ${showSignout ? 'user-chevron--open' : ''}`}
+            />
+          </button>
         )}
-        <button
-          className={`signout-btn ${isRail ? "signout-btn--rail" : ""}`}
-          onClick={() => signOut({ callbackUrl: "/login" })}
-          title="Sign out"
-        >
-          <LogOut size={16} />
-          {!isRail && <span>Sign out</span>}
-        </button>
+        {showSignout && !isRail && (
+          <button
+            className="signout-btn"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+          >
+            <LogOut size={16} />
+            <span>Sign out</span>
+          </button>
+        )}
+        {isRail && (
+          <button
+            className="signout-btn signout-btn--rail"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            title="Sign out"
+          >
+            <LogOut size={16} />
+          </button>
+        )}
       </div>
 
       <style>{`
@@ -471,7 +491,29 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           display: flex;
           align-items: center;
           gap: 10px;
-          padding: 6px 4px;
+          padding: 8px 10px;
+          border-radius: 8px;
+          cursor: pointer;
+          border: none;
+          background: transparent;
+          width: 100%;
+          text-align: left;
+          color: inherit;
+          transition: background 0.15s;
+          font-family: inherit;
+        }
+        .sidebar-user:hover {
+          background: var(--vemio-surface-raised);
+        }
+
+        .user-chevron {
+          margin-left: auto;
+          color: var(--vemio-text-dim);
+          transition: transform 0.2s ease;
+          flex-shrink: 0;
+        }
+        .user-chevron--open {
+          transform: rotate(180deg);
         }
 
         .user-avatar {

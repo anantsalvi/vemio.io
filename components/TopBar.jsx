@@ -22,6 +22,7 @@ const PAGE_TITLES = {
   '/settings/notifications': 'Notification Preferences',
   '/settings/reports':       'Report Scheduling',
   '/settings/branding':      'Branding',
+  '/settings/account':       'Account Settings',
 };
 
 /* Shorter titles for mobile to prevent truncation */
@@ -29,6 +30,7 @@ const PAGE_TITLES_SHORT = {
   '/intelligence':          'BCS',
   '/settings/notifications': 'Notifications',
   '/settings/reports':       'Report Schedule',
+  '/settings/account':       'Account',
 };
 
 export default function TopBar({ onMenuClick, isMobile }) {
@@ -78,10 +80,10 @@ export default function TopBar({ onMenuClick, isMobile }) {
               <div
                 className="topbar-avatar"
                 style={{ background: branding.primary_color }}
+                title={user.name}
               >
                 {user.name.charAt(0).toUpperCase()}
               </div>
-              <span className="topbar-username">{user.name}</span>
             </div>
           ) : null}
         </div>

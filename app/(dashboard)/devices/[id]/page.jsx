@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, RefreshCw, AlertTriangle, Shield } from 'lucide-react';
+import { ArrowLeft, RefreshCw, AlertTriangle, Shield, ExternalLink } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
@@ -115,7 +115,21 @@ export default function DeviceDetailPage() {
           </button>
 
           <div className="dd-header-body">
-            <h1 className="dd-title">{device.name}</h1>
+            <div className="dd-title-row">
+              <h1 className="dd-title">{device.name}</h1>
+              {device.auvikDashboardUrl && (
+                <a
+                  href={device.auvikDashboardUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="dd-auvik-link"
+                  title="Open in Auvik"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="dd-auvik-link-label">Auvik</span>
+                </a>
+              )}
+            </div>
             <div className="dd-badges">
               <span className="dd-status-badge" style={{ background: statusCfg.bg, color: statusCfg.color }}>
                 <span className="dd-status-dot" style={{ background: statusCfg.color }} />
@@ -133,6 +147,14 @@ export default function DeviceDetailPage() {
             </div>
           </div>
         </div>
+
+        {/* ── Description (if available from Auvik) ── */}
+        {device.description && (
+          <div className="dd-description">
+            <p className="dd-description-label">Description</p>
+            <p className="dd-description-text">{device.description}</p>
+          </div>
+        )}
 
         {/* ── Info cards ── */}
         <div className="dd-info-grid">
@@ -321,6 +343,12 @@ export default function DeviceDetailPage() {
 
         .dd-header-body { min-width: 0; }
 
+        .dd-title-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
         .dd-title {
           font-size: 18px;
           font-weight: 700;
@@ -332,6 +360,30 @@ export default function DeviceDetailPage() {
           white-space: nowrap;
         }
         @media (max-width: 479px) { .dd-title { font-size: 16px; } }
+
+        .dd-auvik-link {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 500;
+          color: var(--color-vemio-text-dim);
+          background: var(--color-vemio-surface-raised);
+          border: 1px solid var(--color-vemio-border);
+          text-decoration: none;
+          transition: background 0.15s, color 0.15s;
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
+        .dd-auvik-link:hover {
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text-muted);
+        }
+        @media (max-width: 479px) {
+          .dd-auvik-link-label { display: none; }
+        }
 
         .dd-badges {
           display: flex;
@@ -372,6 +424,27 @@ export default function DeviceDetailPage() {
           color: var(--color-severity-high);
           background: rgba(249, 115, 22, 0.08);
           border: 1px solid rgba(249, 115, 22, 0.15);
+        }
+
+        /* ── Description block ── */
+        .dd-description {
+          border-radius: 12px;
+          padding: 14px;
+          background: var(--color-vemio-surface);
+          border: 1px solid var(--color-vemio-border);
+        }
+        .dd-description-label {
+          font-size: 10px;
+          color: var(--color-vemio-text-dim);
+          text-transform: uppercase;
+          letter-spacing: 0.07em;
+          margin: 0;
+        }
+        .dd-description-text {
+          font-size: 13px;
+          color: var(--color-vemio-text-muted);
+          margin: 6px 0 0;
+          line-height: 1.5;
         }
 
         /* ── Info grid: 3-col desktop, 2-col mobile ── */

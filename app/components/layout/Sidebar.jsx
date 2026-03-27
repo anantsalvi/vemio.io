@@ -119,13 +119,13 @@ export default function Sidebar({ isRail = false, onNavigate }) {
             <Image
               src={branding.logo_url}
               alt={branding.company_name || "Logo"}
-              width={isRail ? 40 : 52}
-              height={isRail ? 40 : 52}
+              width={isRail ? 34 : 56}
+              height={isRail ? 34 : 56}
               className="logo-img"
               unoptimized
             />
           ) : (
-            <VemioRibbonLogo width={isRail ? 30 : 36} />
+            <VemioRibbonLogo width={isRail ? 34 : 56} />
           )}
         </div>
         {!isRail && (
@@ -256,14 +256,14 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 6px;
-          padding: 16px 20px 14px;
+          gap: 8px;
+          padding: 20px 20px 16px;
           border-bottom: 1px solid var(--vemio-border);
           flex-shrink: 0;
         }
 
         .sidebar--rail .sidebar-logo {
-          padding: 14px 6px 12px;
+          padding: 16px 6px 12px;
         }
 
         .logo-icon-wrap {

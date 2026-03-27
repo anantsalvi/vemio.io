@@ -47,12 +47,14 @@ export const GET = withAuth(async (req, session) => {
       typeParams
     );
 
-    // Latest BCS score
+    // Latest BCS score (filtered by category)
     const bcsResult = await queryWithTenant(tenantId,
       `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
        FROM bcs_scores
+       WHERE category = $1
        ORDER BY computed_at DESC
-       LIMIT 1`
+       LIMIT 1`,
+      [category]
     );
 
     // Active alerts (critical/high in last 24h)

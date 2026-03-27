@@ -42,12 +42,12 @@ const NAV_STRUCTURE = [
   { href: "/topology",    label: "Topology",      icon: Network },
   { href: "/tickets",     label: "Tickets & SLA", icon: Ticket },
   { href: "/sites",       label: "Sites",         icon: MapPin },
-  { href: "/rca",         label: "RCA Reports",   icon: FileSearch },
   {
     group: "Reports",
     icon: FileBarChart,
     children: [
       { href: "/reports",          label: "Reports",         icon: FileBarChart },
+      { href: "/rca",              label: "RCA Reports",     icon: FileSearch },
       { href: "/settings/reports", label: "Report Schedule", icon: Clock },
     ],
   },

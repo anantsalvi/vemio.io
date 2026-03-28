@@ -28,7 +28,6 @@ export default function OverviewPage() {
     dedupingInterval: 5000,
   });
 
-  // First load with no cached data — show skeleton
   if (loading && !data) {
     return <OverviewSkeleton />;
   }
@@ -84,7 +83,10 @@ export default function OverviewPage() {
       {/* ── Row 2: Uptime Trend + Recent Events ── */}
       <div className="overview-row-2">
         <motion.div variants={fadeUp} className="overview-uptime">
-          <UptimeChart data={data?.uptimeTrend} />
+          <UptimeChart
+            data={data?.uptimeTrend}
+            devices={data?.devices}
+          />
         </motion.div>
         <motion.div variants={fadeUp} className="overview-events">
           <RecentEvents events={data?.recentEvents} />
@@ -145,14 +147,22 @@ export default function OverviewPage() {
           display: grid;
           grid-template-columns: 1fr 2fr;
           gap: 16px;
-          align-items: start;
+          align-items: stretch;
         }
 
         .overview-row-2 {
           display: grid;
           grid-template-columns: 7fr 5fr;
           gap: 16px;
-          align-items: start;
+          align-items: stretch;
+        }
+
+        /* Make children fill their grid cell height */
+        .overview-bcs > *,
+        .overview-devices > *,
+        .overview-uptime > *,
+        .overview-events > * {
+          height: 100%;
         }
 
         @media (max-width: 1023px) {

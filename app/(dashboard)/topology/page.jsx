@@ -70,7 +70,7 @@ const TIER_ORDER = {
   firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
   access_point:3, server:3, nas:3, ups:4, printer:4, cctv:4, access_control:4, other:4,
 };
-const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Secondary Core','Access Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
+const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Secondary Core','Access Switches','Daisy-Chained Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
 
 const TYPE_NAMES = {
   firewall:'Firewall', core_switch:'Core Switch', access_switch:'Access Switch',
@@ -238,18 +238,30 @@ function buildHierarchy(nodes, edges, expandedClusters) {
     }
   }
 
-  assignSubCoreTier(roots);
+  assignSubTiers(roots);
 
   return { roots, orphans, nodeMap: nm, adj, clusterNodes, subnetGroups };
 }
 
-/** Post-process: core switches parented to other core switches get tier 1.5 (sub-core row) */
-function assignSubCoreTier(roots) {
+/** Post-process: same-tier children get bumped to a sub-tier row.
+ *  - core_switch child of core_switch → tier 1.5 (Secondary Core)
+ *  - access_switch child of access_switch → tier 2.5 (sub-access row)
+ *  Cascades: if a 2.5 node has a tier-2 child via BFS chain, that child also becomes 2.5 */
+function assignSubTiers(roots) {
   function walk(node) {
     for (const child of node.children) {
-      // If a tier-1 node is a child of another tier-1 node, bump it to 1.5
-      if (child.tier === 1 && node.tier === 1) {
-        child.tier = 1.5;
+      const nt = node.tier;
+      const ct = child.tier;
+      // Same base tier: bump child to sub-tier (parent.tier + 0.5)
+      // But only if parent is at a base tier (integer), or parent is already at a sub-tier
+      if (ct === Math.floor(nt) && ct === nt) {
+        // Parent at base tier, child at same base tier → child becomes sub-tier
+        child.tier = ct + 0.5;
+      } else if (Math.floor(nt) === Math.floor(ct) && nt > ct) {
+        // Parent at sub-tier (e.g. 2.5), child at base tier (e.g. 2) → child also sub-tier
+        child.tier = nt;
+      } else if (nt === ct && nt % 1 !== 0) {
+        // Both at same sub-tier already — keep it (deeper chains stay at sub-tier)
       }
       walk(child);
     }
@@ -263,13 +275,114 @@ function summarizeStatuses(members) {
   return counts;
 }
 
+/* ═══════════ ROOT ORDERING BY AFFINITY ═══════════ */
+/**
+ * Orders root subtrees so that roots connected by cross-tree edges
+ * (especially fiber/tunnel) are placed adjacent to each other.
+ *
+ * Algorithm:
+ * 1. Map every node to its root ancestor
+ * 2. For each edge that crosses root boundaries, add affinity weight
+ *    between the two roots (fiber=10, tunnel=8, copper=3, unknown=1)
+ * 3. Greedy nearest-neighbor: start with the root that has the most
+ *    total affinity (most cross-tree connections), then always pick
+ *    the unvisited root with the highest affinity to the current one
+ */
+function orderRootsByAffinity(roots, edges, nodeMap, gwFn) {
+  if (roots.length <= 2) return roots;
+
+  // Step 1: Map every node to its root
+  const nodeToRoot = new Map();
+  function mapToRoot(node, rootId) {
+    nodeToRoot.set(node.id, rootId);
+    for (const child of node.children) mapToRoot(child, rootId);
+  }
+  for (const r of roots) mapToRoot(r, r.id);
+
+  // Step 2: Build root-to-root affinity matrix
+  const MEDIA_WEIGHTS = { fiber: 10, tunnel: 8, copper: 3, unknown: 1 };
+  const affinity = new Map(); // "rootA:rootB" → weight
+  const rootIds = new Set(roots.map(r => r.id));
+
+  function affinityKey(a, b) {
+    return a < b ? `${a}:${b}` : `${b}:${a}`;
+  }
+
+  if (edges) {
+    for (const e of edges) {
+      const rootA = nodeToRoot.get(e.source);
+      const rootB = nodeToRoot.get(e.target);
+      if (!rootA || !rootB || rootA === rootB) continue;
+      if (!rootIds.has(rootA) || !rootIds.has(rootB)) continue;
+
+      const key = affinityKey(rootA, rootB);
+      const weight = MEDIA_WEIGHTS[e.mediaType] || MEDIA_WEIGHTS.unknown;
+      affinity.set(key, (affinity.get(key) || 0) + weight);
+    }
+  }
+
+  // If no cross-tree edges, fall back to size-based ordering
+  if (affinity.size === 0) {
+    return [...roots].sort((a, b) => gwFn(b) - gwFn(a));
+  }
+
+  // Step 3: Compute total affinity per root (for picking start node)
+  const totalAffinity = new Map();
+  for (const r of roots) totalAffinity.set(r.id, 0);
+  for (const [key, weight] of affinity) {
+    const [a, b] = key.split(':');
+    totalAffinity.set(a, (totalAffinity.get(a) || 0) + weight);
+    totalAffinity.set(b, (totalAffinity.get(b) || 0) + weight);
+  }
+
+  // Step 4: Greedy nearest-neighbor traversal
+  const rootMap = new Map();
+  for (const r of roots) rootMap.set(r.id, r);
+
+  const visited = new Set();
+  const ordered = [];
+
+  // Start with the root that has the highest total affinity
+  let startId = roots[0].id;
+  let maxAff = -1;
+  for (const [id, aff] of totalAffinity) {
+    if (aff > maxAff) { maxAff = aff; startId = id; }
+  }
+
+  let currentId = startId;
+  while (ordered.length < roots.length) {
+    visited.add(currentId);
+    ordered.push(rootMap.get(currentId));
+
+    // Find unvisited root with highest affinity to current
+    let bestNext = null, bestWeight = -1;
+    for (const r of roots) {
+      if (visited.has(r.id)) continue;
+      const key = affinityKey(currentId, r.id);
+      const w = affinity.get(key) || 0;
+      if (w > bestWeight) { bestWeight = w; bestNext = r.id; }
+    }
+
+    if (bestNext) {
+      currentId = bestNext;
+    } else {
+      // No affinity connection — pick the largest unvisited root
+      for (const r of roots) {
+        if (!visited.has(r.id)) { currentId = r.id; break; }
+      }
+    }
+  }
+
+  return ordered;
+}
+
 /* ═══════════ LAYOUT ENGINE ═══════════ */
 /** Map tier values to Y positions. Supports fractional tier 1.5 for sub-core */
-const TIER_Y = { 0: 80, 1: 180, 1.5: 248, 2: 340, 3: 480, 4: 590 };
-const TIER_RADIUS_MAP = { 0: 26, 1: 22, 1.5: 20, 2: 14, 3: 10, 4: 8 };
-const TIER_MIN_SPACE = { 0: 100, 1: 90, 1.5: 80, 2: 60, 3: 36, 4: 30 };
+const TIER_Y = { 0: 80, 1: 180, 1.5: 248, 2: 340, 2.5: 408, 3: 500, 4: 610 };
+const TIER_RADIUS_MAP = { 0: 26, 1: 22, 1.5: 20, 2: 14, 2.5: 12, 3: 10, 4: 8 };
+const TIER_MIN_SPACE = { 0: 100, 1: 90, 1.5: 80, 2: 60, 2.5: 50, 3: 36, 4: 30 };
 
-function layoutHierarchy(roots, orphans) {
+function layoutHierarchy(roots, orphans, edges, nodeMap) {
   const pos = new Map();
   const P = 30;
   const CLUSTER_MIN_SPACE = 50;
@@ -308,13 +421,13 @@ function layoutHierarchy(roots, orphans) {
     }
   }
 
-  const sorted = [...roots].sort((a, b) => gw(b) - gw(a));
-  const reord = [];
-  let l = 0, r = sorted.length - 1, il = true;
-  for (let i = 0; i < sorted.length; i++) { reord.push(il ? sorted[l++] : sorted[r--]); il = !il; }
-  const rws = reord.map(r => gw(r));
+  // ── Affinity-based root ordering ──
+  // Goal: place roots with cross-tree edges adjacent to minimize long edge spans
+  const ordered = orderRootsByAffinity(roots, edges, nodeMap, gw);
+
+  const rws = ordered.map(r => gw(r));
   let cur = P;
-  for (let i = 0; i < reord.length; i++) { ps(reord[i], cur, rws[i]); cur += rws[i] + P * 2; }
+  for (let i = 0; i < ordered.length; i++) { ps(ordered[i], cur, rws[i]); cur += rws[i] + P * 2; }
 
   if (orphans.length > 0) {
     const oy = TIER_Y[4] + 100;
@@ -405,7 +518,7 @@ export default function TopologyPage() {
   const layout = useMemo(() => {
     if (!filteredView?.nodes?.length) return null;
     const { roots, orphans, nodeMap, adj, clusterNodes, subnetGroups } = buildHierarchy(filteredView.nodes, filteredView.edges, expandedClusters);
-    const { positions, canvasWidth, canvasHeight } = layoutHierarchy(roots, orphans);
+    const { positions, canvasWidth, canvasHeight } = layoutHierarchy(roots, orphans, filteredView.edges, nodeMap);
     return { positions, canvasWidth, canvasHeight, nodeMap, adj, clusterNodes, subnetGroups };
   }, [filteredView, expandedClusters]);
 

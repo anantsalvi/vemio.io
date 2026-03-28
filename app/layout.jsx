@@ -5,7 +5,7 @@ const SITE_URL = 'https://vemio.vinayenterprises.co.in';
 export const metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: 'VEMIO — Network Intelligence Dashboard',
+    default: 'VEMIO | Network Intelligence Dashboard',
     template: '%s | VEMIO',
   },
   description:

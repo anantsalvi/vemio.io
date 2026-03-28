@@ -3,6 +3,7 @@
 //  Hierarchical tiered layout · device-type + vendor colors
 //  Fiber/Copper/Tunnel edge types · Search/Locate
 //  Subnet-based orphan clustering · Cable type filter
+//  BFS hierarchy: same-tier chaining for access switches
 // ════════════════════════════════════════════════════════
 'use client';
 
@@ -10,6 +11,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Network, X, RefreshCw, Search, Minus, Plus, Maximize2, Crosshair, ChevronRight } from 'lucide-react';
 import * as d3 from 'd3';
+import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
 
 /* ═══════════ DEVICE COLOR SYSTEM ═══════════ */
 const TYPE_COLORS = {
@@ -52,7 +54,6 @@ function getEdgeStyle(edge) {
   return EDGE_STYLES.unknown;
 }
 
-/** Classify an edge for filtering: 'fiber' | 'copper' | 'tunnel' | 'unknown' */
 function classifyEdgeMedia(edge, nodeMap) {
   if (nodeMap) {
     const s = nodeMap.get(edge.source);
@@ -71,7 +72,6 @@ const TIER_ORDER = {
 };
 const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Access Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
 
-/** Full readable device type names */
 const TYPE_NAMES = {
   firewall:'Firewall', core_switch:'Core Switch', access_switch:'Access Switch',
   access_point:'Access Point', router:'Router', server:'Server', nas:'NAS',
@@ -93,45 +93,116 @@ const CABLE_FILTER_OPTIONS = [
   { value:'tunnel',  label:'Tunnel' },
 ];
 
-/* ═══════════ HIERARCHY BUILDER (with subnet clustering) ═══════════ */
+/* ═══════════ HIERARCHY BUILDER (BFS with same-tier chaining) ═══════════ */
 function buildHierarchy(nodes, edges, expandedClusters) {
   const nm = new Map();
   for (const n of nodes) nm.set(n.id, {...n, tier:TIER_ORDER[n.type]??4, children:[]});
+
+  // Build adjacency
   const adj = new Map();
   for (const n of nodes) adj.set(n.id, new Set());
-  for (const e of edges) { if (adj.has(e.source)&&adj.has(e.target)) { adj.get(e.source).add(e.target); adj.get(e.target).add(e.source); } }
-
-  const tiers=[[],[],[],[],[]];
-  for (const n of nm.values()) tiers[Math.min(n.tier,4)].push(n);
-
-  const assigned=new Set(), roots=[];
-
-  // Tier 0 — firewalls & routers are always roots
-  for (const n of tiers[0]) { assigned.add(n.id); roots.push(n); }
-
-  // Tier 1+ — try to attach to a parent in a lower tier
-  for (let t=1;t<=4;t++) for (const node of tiers[t]) {
-    const nb=adj.get(node.id)||new Set(); let bp=null,bt=99;
-    // Look for best parent: connected node in a lower tier that's already assigned
-    for (const id of nb) { const n=nm.get(id); if (n&&assigned.has(n.id)&&n.tier<t&&n.tier<bt) {bp=n;bt=n.tier;} }
-    // Fallback: same-tier peer that's already assigned
-    if (!bp) for (const id of nb) { const n=nm.get(id); if (n&&assigned.has(n.id)&&n.tier===t) {bp=n;break;} }
-
-    if (bp) {
-      bp.children.push(node);
-    } else if (t <= 1) {
-      // Core switches / p2p_links without a firewall parent become roots
-      // This prevents them from falling to orphans
-      roots.push(node);
+  for (const e of edges) {
+    if (adj.has(e.source) && adj.has(e.target)) {
+      adj.get(e.source).add(e.target);
+      adj.get(e.target).add(e.source);
     }
-    assigned.add(node.id);
   }
 
-  const att=new Set();
-  function mark(n){att.add(n.id);for(const c of n.children)mark(c);}
+  const tiers = [[], [], [], [], []];
+  for (const n of nm.values()) tiers[Math.min(n.tier, 4)].push(n);
+
+  const parented = new Set();   // has a parent (is someone's child)
+  const attached = new Set();   // is in the tree (root or parented)
+  const roots = [];
+
+  // ── Phase 1: Tier 0 nodes are always roots ──
+  for (const n of tiers[0]) {
+    attached.add(n.id);
+    roots.push(n);
+  }
+
+  // ── Phase 2: Tier 1 — attach to tier 0, or become root ──
+  for (const node of tiers[1]) {
+    const nb = adj.get(node.id) || new Set();
+    let bestParent = null;
+    for (const id of nb) {
+      const n = nm.get(id);
+      if (n && attached.has(n.id) && n.tier < node.tier) { bestParent = n; break; }
+    }
+    if (bestParent) {
+      bestParent.children.push(node);
+      parented.add(node.id);
+    } else {
+      // Core switches / p2p_links without firewall connection become independent roots
+      roots.push(node);
+    }
+    attached.add(node.id);
+  }
+
+  // ── Phase 3: Tier 2+ — BFS flood-fill within each tier ──
+  // First pass: attach nodes that connect directly to a lower tier (cross-tier parent)
+  // Then BFS: attach nodes that connect to an already-attached same-tier node
+  for (let t = 2; t <= 4; t++) {
+    const tierNodes = tiers[t];
+    const remaining = new Set(tierNodes.map(n => n.id));
+
+    // Pass A: direct cross-tier parents
+    for (const node of tierNodes) {
+      const nb = adj.get(node.id) || new Set();
+      let bestParent = null, bestTier = 99;
+      for (const id of nb) {
+        const n = nm.get(id);
+        if (n && attached.has(n.id) && n.tier < t && n.tier < bestTier) {
+          bestParent = n; bestTier = n.tier;
+        }
+      }
+      if (bestParent) {
+        bestParent.children.push(node);
+        parented.add(node.id);
+        attached.add(node.id);
+        remaining.delete(node.id);
+      }
+    }
+
+    // Pass B: BFS — propagate through same-tier edges
+    // A node that connects to an already-attached same-tier node becomes its child
+    let changed = true;
+    while (changed && remaining.size > 0) {
+      changed = false;
+      for (const nodeId of remaining) {
+        const node = nm.get(nodeId);
+        const nb = adj.get(nodeId) || new Set();
+        let sameTierParent = null;
+        for (const id of nb) {
+          const n = nm.get(id);
+          if (n && attached.has(n.id) && n.tier === t) {
+            sameTierParent = n;
+            break;
+          }
+        }
+        if (sameTierParent) {
+          sameTierParent.children.push(node);
+          parented.add(node.id);
+          attached.add(node.id);
+          remaining.delete(nodeId);
+          changed = true;
+        }
+      }
+    }
+
+    // Remaining nodes in this tier with no connection to any attached node
+    // just get marked as attached but not parented (they'll be orphans)
+    for (const nodeId of remaining) {
+      attached.add(nodeId);
+    }
+  }
+
+  // ── Collect the tree and find orphans ──
+  const att = new Set();
+  function mark(n) { att.add(n.id); for (const c of n.children) mark(c); }
   for (const r of roots) mark(r);
 
-  // Subnet-based orphan assignment
+  // ── Subnet-based orphan assignment ──
   const orphans = [];
   const subnetGroups = new Map();
 
@@ -168,7 +239,7 @@ function buildHierarchy(nodes, edges, expandedClusters) {
     }
   }
 
-  return {roots, orphans, nodeMap:nm, adj, clusterNodes, subnetGroups};
+  return { roots, orphans, nodeMap: nm, adj, clusterNodes, subnetGroups };
 }
 
 function summarizeStatuses(members) {
@@ -179,72 +250,103 @@ function summarizeStatuses(members) {
 
 /* ═══════════ LAYOUT ENGINE ═══════════ */
 function layoutHierarchy(roots, orphans) {
-  const pos=new Map(); const TY=[80,180,310,450,560]; const MS={0:100,1:90,2:60,3:36,4:30}; const P=30;
+  const pos = new Map();
+  const TY = [80, 180, 310, 450, 560];
+  const MS = { 0:100, 1:90, 2:60, 3:36, 4:30 };
+  const P = 30;
   const CLUSTER_MIN_SPACE = 50;
-  const wc=new Map();
-  function gw(n){
-    if(wc.has(n.id))return wc.get(n.id);
-    let w;
-    if(n.isCluster) { w = CLUSTER_MIN_SPACE; }
-    else if(!n.children.length) { w=MS[Math.min(n.tier,4)]; }
-    else { w=0;for(const c of n.children)w+=gw(c);w+=(n.children.length-1)*P;w=Math.max(w,MS[Math.min(n.tier,4)]); }
-    wc.set(n.id,w);return w;
-  }
-  function ps(node,lx,aw){
-    const t=Math.min(node.tier,4);const cx=lx+aw/2;
-    const r = node.isCluster ? 18 : TIER_RADIUS[t];
-    pos.set(node.id,{...node,x:cx,y:TY[t],radius:r});
-    if(!node.children.length)return;
-    const cws=node.children.map(c=>gw(c));
-    const tw=cws.reduce((s,w)=>s+w,0)+(node.children.length-1)*P;
-    let cur=cx-tw/2;
-    for(let i=0;i<node.children.length;i++){ps(node.children[i],cur,cws[i]);cur+=cws[i]+P;}
-  }
-  const sorted=[...roots].sort((a,b)=>gw(b)-gw(a));
-  const reord=[];let l=0,r=sorted.length-1,il=true;
-  for(let i=0;i<sorted.length;i++){reord.push(il?sorted[l++]:sorted[r--]);il=!il;}
-  const rws=reord.map(r=>gw(r));let cur=P;
-  for(let i=0;i<reord.length;i++){ps(reord[i],cur,rws[i]);cur+=rws[i]+P*2;}
+  const wc = new Map();
 
-  if(orphans.length>0){
-    const oy=TY[4]+100;
-    for(let i=0;i<orphans.length;i++){
-      const o=orphans[i];
-      pos.set(o.id,{...o,x:P+i*32,y:oy,radius:TIER_RADIUS[Math.min(o.tier,4)],isOrphan:true});
+  function gw(n) {
+    if (wc.has(n.id)) return wc.get(n.id);
+    let w;
+    if (n.isCluster) { w = CLUSTER_MIN_SPACE; }
+    else if (!n.children.length) { w = MS[Math.min(n.tier, 4)]; }
+    else {
+      w = 0;
+      for (const c of n.children) w += gw(c);
+      w += (n.children.length - 1) * P;
+      w = Math.max(w, MS[Math.min(n.tier, 4)]);
+    }
+    wc.set(n.id, w);
+    return w;
+  }
+
+  function ps(node, lx, aw) {
+    const t = Math.min(node.tier, 4);
+    const cx = lx + aw / 2;
+    const r = node.isCluster ? 18 : TIER_RADIUS[t];
+    pos.set(node.id, { ...node, x: cx, y: TY[t], radius: r });
+    if (!node.children.length) return;
+    const cws = node.children.map(c => gw(c));
+    const tw = cws.reduce((s, w) => s + w, 0) + (node.children.length - 1) * P;
+    let cur = cx - tw / 2;
+    for (let i = 0; i < node.children.length; i++) {
+      ps(node.children[i], cur, cws[i]);
+      cur += cws[i] + P;
     }
   }
 
-  let minX=Infinity,maxX=-Infinity,maxY=-Infinity;
-  for(const p of pos.values()){minX=Math.min(minX,p.x-p.radius);maxX=Math.max(maxX,p.x+p.radius);maxY=Math.max(maxY,p.y+p.radius+30);}
-  const cw=Math.max(maxX-minX+P*4,800),ch=Math.max(maxY+60,650);
-  const sx=P*2-minX;if(sx)for(const p of pos.values())p.x+=sx;
-  return {positions:pos,canvasWidth:cw,canvasHeight:ch};
+  const sorted = [...roots].sort((a, b) => gw(b) - gw(a));
+  const reord = [];
+  let l = 0, r = sorted.length - 1, il = true;
+  for (let i = 0; i < sorted.length; i++) { reord.push(il ? sorted[l++] : sorted[r--]); il = !il; }
+  const rws = reord.map(r => gw(r));
+  let cur = P;
+  for (let i = 0; i < reord.length; i++) { ps(reord[i], cur, rws[i]); cur += rws[i] + P * 2; }
+
+  if (orphans.length > 0) {
+    const oy = TY[4] + 100;
+    for (let i = 0; i < orphans.length; i++) {
+      const o = orphans[i];
+      pos.set(o.id, { ...o, x: P + i * 32, y: oy, radius: TIER_RADIUS[Math.min(o.tier, 4)], isOrphan: true });
+    }
+  }
+
+  let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pos.values()) { minX = Math.min(minX, p.x - p.radius); maxX = Math.max(maxX, p.x + p.radius); maxY = Math.max(maxY, p.y + p.radius + 30); }
+  const cw = Math.max(maxX - minX + P * 4, 800), ch = Math.max(maxY + 60, 650);
+  const sx = P * 2 - minX;
+  if (sx) for (const p of pos.values()) p.x += sx;
+  return { positions: pos, canvasWidth: cw, canvasHeight: ch };
 }
 
 /* ═══════════ TOPOLOGY PAGE ═══════════ */
 export default function TopologyPage() {
-  const svgRef=useRef(null),wrapRef=useRef(null),zoomRef=useRef(null),gRef=useRef(null);
-  const [data,setData]=useState(null),[loading,setLoading]=useState(true),[error,setError]=useState(null);
-  const [sites,setSites]=useState([]),[selectedSite,setSelectedSite]=useState('');
-  const [category,setCategory]=useState('network'),[selected,setSelected]=useState(null);
-  const [viewDims,setViewDims]=useState({w:1200,h:700});
-  const [searchQuery,setSearchQuery]=useState(''),[searchResults,setSearchResults]=useState([]);
-  const [highlightedId,setHighlightedId]=useState(null);
-  const [expandedClusters,setExpandedClusters]=useState(new Set());
-  const [cableFilter,setCableFilter]=useState('all');
+  const svgRef = useRef(null), wrapRef = useRef(null), zoomRef = useRef(null), gRef = useRef(null);
+  const [data, setData] = useState(null), [loading, setLoading] = useState(true), [error, setError] = useState(null);
+  const [sites, setSites] = useState([]), [selectedSite, setSelectedSite] = useState('');
+  const { category } = useDeviceCategory();
+  const [selected, setSelected] = useState(null);
+  const [viewDims, setViewDims] = useState({ w: 1200, h: 700 });
+  const [searchQuery, setSearchQuery] = useState(''), [searchResults, setSearchResults] = useState([]);
+  const [highlightedId, setHighlightedId] = useState(null);
+  const [expandedClusters, setExpandedClusters] = useState(new Set());
+  const [cableFilter, setCableFilter] = useState('all');
 
-  useEffect(()=>{fetch('/api/sites').then(r=>r.ok?r.json():Promise.reject()).then(d=>setSites(d.sites||d||[])).catch(()=>{});},[]);
+  useEffect(() => { fetch('/api/sites').then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, []);
 
-  const fetchTopology=useCallback(async()=>{
-    setLoading(true);setError(null);
-    try{const p=new URLSearchParams();if(selectedSite)p.set('site',selectedSite);if(category!=='network')p.set('category',category);
-    const res=await fetch(`/api/topology?${p}`);if(!res.ok)throw new Error();setData(await res.json());
-    setSelected(null);setHighlightedId(null);setSearchQuery('');setSearchResults([]);}
-    catch{setError('Failed to load topology data');}finally{setLoading(false);}
-  },[selectedSite,category]);
+  const fetchTopology = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const p = new URLSearchParams();
+      if (selectedSite) p.set('site', selectedSite);
+      if (category !== 'network') p.set('category', category);
+      const res = await fetch(`/api/topology?${p}`);
+      if (!res.ok) throw new Error();
+      setData(await res.json());
+      setSelected(null); setHighlightedId(null); setSearchQuery(''); setSearchResults([]);
+    } catch { setError('Failed to load topology data'); }
+    finally { setLoading(false); }
+  }, [selectedSite, category]);
 
-  useEffect(()=>{fetchTopology();},[fetchTopology]);
-  useEffect(()=>{const el=wrapRef.current;if(!el)return;const ro=new ResizeObserver(([e])=>{const{width,height}=e.contentRect;if(width>0&&height>0)setViewDims({w:width,h:height});});ro.observe(el);return()=>ro.disconnect();},[]);
+  useEffect(() => { fetchTopology(); }, [fetchTopology]);
+
+  useEffect(() => {
+    const el = wrapRef.current; if (!el) return;
+    const ro = new ResizeObserver(([e]) => { const { width, height } = e.contentRect; if (width > 0 && height > 0) setViewDims({ w: width, h: height }); });
+    ro.observe(el); return () => ro.disconnect();
+  }, []);
 
   const toggleCluster = useCallback((parentId) => {
     setExpandedClusters(prev => {
@@ -254,7 +356,6 @@ export default function TopologyPage() {
     });
   }, []);
 
-  // Build a node map from raw API data (for edge classification)
   const rawNodeMap = useMemo(() => {
     if (!data?.nodes) return new Map();
     const m = new Map();
@@ -262,25 +363,10 @@ export default function TopologyPage() {
     return m;
   }, [data]);
 
-  // Build edge-to-interface lookup for inspector: "sourceId:targetId" → {srcIf, tgtIf, mediaClass}
-  const edgeDetailMap = useMemo(() => {
-    if (!data?.edges) return new Map();
-    const m = new Map();
-    for (const e of data.edges) {
-      const mc = classifyEdgeMedia(e, rawNodeMap);
-      m.set(`${e.source}:${e.target}`, { srcIf: e.sourceInterface, tgtIf: e.targetInterface, mediaClass: mc });
-      m.set(`${e.target}:${e.source}`, { srcIf: e.targetInterface, tgtIf: e.sourceInterface, mediaClass: mc });
-    }
-    return m;
-  }, [data, rawNodeMap]);
-
-  // ── Cable filter: compute visible nodes & edges ──
-  // When a cable type is selected, only show edges of that type + nodes connected by those edges
+  // Cable filter: compute visible nodes & edges
   const filteredView = useMemo(() => {
     if (!data?.nodes || !data?.edges) return null;
     if (cableFilter === 'all') return { nodes: data.nodes, edges: data.edges, isFiltered: false };
-
-    // Classify and filter edges
     const matchingEdges = [];
     const visibleNodeIds = new Set();
     for (const e of data.edges) {
@@ -302,206 +388,215 @@ export default function TopologyPage() {
     return { positions, canvasWidth, canvasHeight, nodeMap, adj, clusterNodes, subnetGroups };
   }, [filteredView, expandedClusters]);
 
-  useEffect(()=>{if(!searchQuery.trim()||!data?.nodes){setSearchResults([]);if(!searchQuery.trim())setHighlightedId(null);return;}
-    const q=searchQuery.toLowerCase().trim();
-    // Search against full data, not filtered
-    setSearchResults(data.nodes.filter(n=>(n.name||'').toLowerCase().includes(q)||(n.ipAddress||'').toLowerCase().includes(q)||(n.serialNumber||'').toLowerCase().includes(q)||(n.model||'').toLowerCase().includes(q)||(n.make||'').toLowerCase().includes(q)).slice(0,8));
-  },[searchQuery,data]);
+  useEffect(() => {
+    if (!searchQuery.trim() || !data?.nodes) { setSearchResults([]); if (!searchQuery.trim()) setHighlightedId(null); return; }
+    const q = searchQuery.toLowerCase().trim();
+    setSearchResults(data.nodes.filter(n =>
+      (n.name || '').toLowerCase().includes(q) || (n.ipAddress || '').toLowerCase().includes(q) ||
+      (n.serialNumber || '').toLowerCase().includes(q) || (n.model || '').toLowerCase().includes(q) ||
+      (n.make || '').toLowerCase().includes(q)
+    ).slice(0, 8));
+  }, [searchQuery, data]);
 
-  const locateDevice=useCallback((id)=>{
-    if(!layout||!svgRef.current||!zoomRef.current)return;const p=layout.positions.get(id);if(!p)return;
-    setHighlightedId(id);setSearchResults([]);setSearchQuery('');
-    const{w,h}=viewDims;const s=1.5;
-    d3.select(svgRef.current).transition().duration(600).ease(d3.easeCubicInOut).call(zoomRef.current.transform,d3.zoomIdentity.translate(w/2-p.x*s,h/2-p.y*s).scale(s));
-    const node=layout.nodeMap.get(id);if(node)setSelected(node);
-    setTimeout(()=>setHighlightedId(null),4000);
-  },[layout,viewDims]);
+  const locateDevice = useCallback((id) => {
+    if (!layout || !svgRef.current || !zoomRef.current) return;
+    const p = layout.positions.get(id); if (!p) return;
+    setHighlightedId(id); setSearchResults([]); setSearchQuery('');
+    const { w, h } = viewDims; const s = 1.5;
+    d3.select(svgRef.current).transition().duration(600).ease(d3.easeCubicInOut)
+      .call(zoomRef.current.transform, d3.zoomIdentity.translate(w / 2 - p.x * s, h / 2 - p.y * s).scale(s));
+    const node = layout.nodeMap.get(id); if (node) setSelected(node);
+    setTimeout(() => setHighlightedId(null), 4000);
+  }, [layout, viewDims]);
 
-  const handleZoomIn=useCallback(()=>{if(svgRef.current&&zoomRef.current)d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy,1.4);},[]);
-  const handleZoomOut=useCallback(()=>{if(svgRef.current&&zoomRef.current)d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy,0.7);},[]);
-  const handleFitView=useCallback(()=>{if(!svgRef.current||!zoomRef.current||!layout)return;const{w,h}=viewDims;const pad=40;const s=Math.min((w-pad*2)/layout.canvasWidth,(h-pad*2)/layout.canvasHeight,1.0);d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform,d3.zoomIdentity.translate((w-layout.canvasWidth*s)/2,(h-layout.canvasHeight*s)/2+pad/2).scale(s));},[layout,viewDims]);
+  const handleZoomIn = useCallback(() => { if (svgRef.current && zoomRef.current) d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 1.4); }, []);
+  const handleZoomOut = useCallback(() => { if (svgRef.current && zoomRef.current) d3.select(svgRef.current).transition().duration(300).call(zoomRef.current.scaleBy, 0.7); }, []);
+  const handleFitView = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current || !layout) return;
+    const { w, h } = viewDims; const pad = 40;
+    const s = Math.min((w - pad * 2) / layout.canvasWidth, (h - pad * 2) / layout.canvasHeight, 1.0);
+    d3.select(svgRef.current).transition().duration(500).call(zoomRef.current.transform,
+      d3.zoomIdentity.translate((w - layout.canvasWidth * s) / 2, (h - layout.canvasHeight * s) / 2 + pad / 2).scale(s));
+  }, [layout, viewDims]);
 
   /* ═══════════ D3 RENDER ═══════════ */
-  useEffect(()=>{
-    if(!filteredView||!layout||!svgRef.current||!filteredView.nodes.length)return;
-    const svg=d3.select(svgRef.current);svg.selectAll('*').remove();
-    const{w,h}=viewDims;const{positions,canvasWidth,canvasHeight,adj}=layout;
-    const g=svg.append('g').attr('class','tp-main-group');gRef.current=g.node();
-    const zoom=d3.zoom().scaleExtent([0.08,4]).on('zoom',(ev)=>g.attr('transform',ev.transform));
-    svg.call(zoom);zoomRef.current=zoom;
+  useEffect(() => {
+    if (!filteredView || !layout || !svgRef.current || !filteredView.nodes.length) return;
+    const svg = d3.select(svgRef.current); svg.selectAll('*').remove();
+    const { w, h } = viewDims; const { positions, canvasWidth, canvasHeight, adj } = layout;
+    const g = svg.append('g').attr('class', 'tp-main-group'); gRef.current = g.node();
+    const zoom = d3.zoom().scaleExtent([0.08, 4]).on('zoom', (ev) => g.attr('transform', ev.transform));
+    svg.call(zoom); zoomRef.current = zoom;
 
-    const tierYs=[80,180,310,450,560];const usedT=new Set();
-    for(const p of positions.values())if(!p.isCluster)for(let t=0;t<tierYs.length;t++)if(Math.abs(p.y-tierYs[t])<5)usedT.add(t);
-    for(const t of usedT){const y=tierYs[t]-35;g.append('line').attr('x1',0).attr('x2',canvasWidth).attr('y1',y).attr('y2',y).attr('stroke','rgba(148,163,184,0.06)').attr('stroke-width',1);g.append('text').attr('x',8).attr('y',y-6).attr('font-size',9).attr('fill','rgba(148,163,184,0.3)').attr('font-weight',600).attr('letter-spacing','0.06em').text(TIER_LABELS[t]);}
+    // Tier lines
+    const tierYs = [80, 180, 310, 450, 560]; const usedT = new Set();
+    for (const p of positions.values()) if (!p.isCluster) for (let t = 0; t < tierYs.length; t++) if (Math.abs(p.y - tierYs[t]) < 5) usedT.add(t);
+    for (const t of usedT) {
+      const y = tierYs[t] - 35;
+      g.append('line').attr('x1', 0).attr('x2', canvasWidth).attr('y1', y).attr('y2', y).attr('stroke', 'rgba(148,163,184,0.06)').attr('stroke-width', 1);
+      g.append('text').attr('x', 8).attr('y', y - 6).attr('font-size', 9).attr('fill', 'rgba(148,163,184,0.3)').attr('font-weight', 600).attr('letter-spacing', '0.06em').text(TIER_LABELS[t]);
+    }
 
     // Edges
-    const linkG=g.append('g').attr('class','tp-links');
-    const eps=[];
-    for(const e of filteredView.edges){
-      const s=positions.get(e.source),t=positions.get(e.target);
-      if(!s||!t)continue;
-      const isTunnel=TUNNEL_TYPES.has(s.type)&&TUNNEL_TYPES.has(t.type);
-      eps.push({source:s,target:t,isTunnel,mediaType:e.mediaType||null,isClusterEdge:false});
+    const linkG = g.append('g').attr('class', 'tp-links');
+    const eps = [];
+    for (const e of filteredView.edges) {
+      const s = positions.get(e.source), t = positions.get(e.target);
+      if (!s || !t) continue;
+      const isTunnel = TUNNEL_TYPES.has(s.type) && TUNNEL_TYPES.has(t.type);
+      eps.push({ source: s, target: t, isTunnel, mediaType: e.mediaType || null, isClusterEdge: false });
     }
     // Synthetic cluster edges
-    for(const p of positions.values()){
-      if(p.isCluster && p.clusterParentId){
-        const parent=positions.get(p.clusterParentId);
-        if(parent) eps.push({source:parent,target:p,isTunnel:false,mediaType:null,isClusterEdge:true});
+    for (const p of positions.values()) {
+      if (p.isCluster && p.clusterParentId) {
+        const parent = positions.get(p.clusterParentId);
+        if (parent) eps.push({ source: parent, target: p, isTunnel: false, mediaType: null, isClusterEdge: true });
       }
     }
-    if(expandedClusters.size > 0 && layout.subnetGroups) {
-      for(const parentId of expandedClusters) {
+    if (expandedClusters.size > 0 && layout.subnetGroups) {
+      for (const parentId of expandedClusters) {
         const members = layout.subnetGroups.get(parentId);
-        if(!members) continue;
+        if (!members) continue;
         const parent = positions.get(parentId);
-        if(!parent) continue;
-        for(const m of members) {
+        if (!parent) continue;
+        for (const m of members) {
           const mp = positions.get(m.id);
-          if(mp) eps.push({source:parent,target:mp,isTunnel:false,mediaType:null,isClusterEdge:true});
+          if (mp) eps.push({ source: parent, target: mp, isTunnel: false, mediaType: null, isClusterEdge: true });
         }
       }
     }
 
     linkG.selectAll('path').data(eps).join('path')
-      .attr('d',e=>{
-        const dy=e.target.y-e.source.y,dx=e.target.x-e.source.x;
-        if(e.isClusterEdge) return `M${e.source.x},${e.source.y} L${e.target.x},${e.target.y}`;
-        if(Math.abs(dy)<10){const mx=(e.source.x+e.target.x)/2,my=e.source.y-Math.min(30,Math.abs(dx)*0.15);return`M${e.source.x},${e.source.y} Q${mx},${my} ${e.target.x},${e.target.y}`;}
-        const my=(e.source.y+e.target.y)/2;return`M${e.source.x},${e.source.y} C${e.source.x},${my} ${e.target.x},${my} ${e.target.x},${e.target.y}`;
+      .attr('d', e => {
+        const dy = e.target.y - e.source.y, dx = e.target.x - e.source.x;
+        if (e.isClusterEdge) return `M${e.source.x},${e.source.y} L${e.target.x},${e.target.y}`;
+        if (Math.abs(dy) < 10) { const mx = (e.source.x + e.target.x) / 2, my = e.source.y - Math.min(30, Math.abs(dx) * 0.15); return `M${e.source.x},${e.source.y} Q${mx},${my} ${e.target.x},${e.target.y}`; }
+        const my = (e.source.y + e.target.y) / 2; return `M${e.source.x},${e.source.y} C${e.source.x},${my} ${e.target.x},${my} ${e.target.x},${e.target.y}`;
       })
-      .attr('fill','none')
-      .attr('stroke',e=>e.isClusterEdge?'rgba(148,163,184,0.15)':getEdgeStyle(e).color)
-      .attr('stroke-width',e=>e.isClusterEdge?1:getEdgeStyle(e).width)
-      .attr('stroke-dasharray',e=>e.isClusterEdge?'4,4':getEdgeStyle(e).dash)
-      .attr('stroke-opacity',e=>e.isClusterEdge?0.6:getEdgeStyle(e).opacity);
+      .attr('fill', 'none')
+      .attr('stroke', e => e.isClusterEdge ? 'rgba(148,163,184,0.15)' : getEdgeStyle(e).color)
+      .attr('stroke-width', e => e.isClusterEdge ? 1 : getEdgeStyle(e).width)
+      .attr('stroke-dasharray', e => e.isClusterEdge ? '4,4' : getEdgeStyle(e).dash)
+      .attr('stroke-opacity', e => e.isClusterEdge ? 0.6 : getEdgeStyle(e).opacity);
 
     // Nodes
-    const nodeG=g.append('g').attr('class','tp-nodes');
-    const nd=Array.from(positions.values());
-    const node=nodeG.selectAll('g').data(nd,d=>d.id).join('g').attr('transform',d=>`translate(${d.x},${d.y})`).attr('cursor','pointer');
+    const nodeG = g.append('g').attr('class', 'tp-nodes');
+    const nd = Array.from(positions.values());
+    const node = nodeG.selectAll('g').data(nd, d => d.id).join('g')
+      .attr('transform', d => `translate(${d.x},${d.y})`).attr('cursor', 'pointer');
 
     const clusterG = node.filter(d => d.isCluster);
     const regularG = node.filter(d => !d.isCluster);
 
     // Cluster rendering
-    clusterG.append('rect')
-      .attr('x', -18).attr('y', -14).attr('width', 36).attr('height', 28)
-      .attr('rx', 8).attr('ry', 8)
-      .attr('fill', 'rgba(156,163,175,0.08)')
-      .attr('stroke', 'rgba(156,163,175,0.25)')
-      .attr('stroke-width', 1.5).attr('stroke-dasharray', '3,2');
+    clusterG.append('rect').attr('x', -18).attr('y', -14).attr('width', 36).attr('height', 28)
+      .attr('rx', 8).attr('ry', 8).attr('fill', 'rgba(156,163,175,0.08)')
+      .attr('stroke', 'rgba(156,163,175,0.25)').attr('stroke-width', 1.5).attr('stroke-dasharray', '3,2');
 
-    clusterG.each(function(d) {
-      const el = d3.select(this);
-      const ss = d.clusterStatusSummary || {};
+    clusterG.each(function (d) {
+      const el = d3.select(this); const ss = d.clusterStatusSummary || {};
       el.append('circle').attr('cx', -5).attr('cy', -2).attr('r', 4)
-        .attr('fill', ss.up > 0 ? '#22c55e20' : '#6b728020')
-        .attr('stroke', ss.up > 0 ? '#22c55e' : '#6b7280').attr('stroke-width', 1);
+        .attr('fill', ss.up > 0 ? '#22c55e20' : '#6b728020').attr('stroke', ss.up > 0 ? '#22c55e' : '#6b7280').attr('stroke-width', 1);
       el.append('circle').attr('cx', 5).attr('cy', -2).attr('r', 4)
-        .attr('fill', ss.down > 0 ? '#ef444420' : '#6b728020')
-        .attr('stroke', ss.down > 0 ? '#ef4444' : '#6b7280').attr('stroke-width', 1);
+        .attr('fill', ss.down > 0 ? '#ef444420' : '#6b728020').attr('stroke', ss.down > 0 ? '#ef4444' : '#6b7280').attr('stroke-width', 1);
     });
 
-    clusterG.append('text').attr('y', 24).attr('text-anchor', 'middle')
-      .attr('font-size', 9).attr('font-weight', 600).attr('fill', 'rgba(148,163,184,0.6)')
-      .text(d => `${d.clusterCount} devices`);
-
-    clusterG.append('text').attr('y', 35).attr('text-anchor', 'middle')
-      .attr('font-size', 7).attr('fill', 'rgba(148,163,184,0.35)').text('click to expand');
-
+    clusterG.append('text').attr('y', 24).attr('text-anchor', 'middle').attr('font-size', 9).attr('font-weight', 600).attr('fill', 'rgba(148,163,184,0.6)').text(d => `${d.clusterCount} devices`);
+    clusterG.append('text').attr('y', 35).attr('text-anchor', 'middle').attr('font-size', 7).attr('fill', 'rgba(148,163,184,0.35)').text('click to expand');
     clusterG.on('click', (ev, d) => { ev.stopPropagation(); if (d.clusterParentId) toggleCluster(d.clusterParentId); });
 
     // Regular node rendering
-    regularG.append('circle').attr('class','node-ring').attr('r',d=>d.radius+3).attr('fill','none')
-      .attr('stroke',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).color)
-      .attr('stroke-width',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).width)
-      .attr('stroke-dasharray',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).dash)
-      .attr('stroke-opacity',0.5);
+    regularG.append('circle').attr('class', 'node-ring').attr('r', d => d.radius + 3).attr('fill', 'none')
+      .attr('stroke', d => (STATUS_CFG[d.status] || STATUS_CFG.unknown).color)
+      .attr('stroke-width', d => (STATUS_CFG[d.status] || STATUS_CFG.unknown).width)
+      .attr('stroke-dasharray', d => (STATUS_CFG[d.status] || STATUS_CFG.unknown).dash)
+      .attr('stroke-opacity', 0.5);
 
-    regularG.append('circle').attr('class','node-body').attr('r',d=>d.radius)
-      .attr('fill',d=>{const c=getDeviceColor(d.type,d.make);return d.tier<=1?c+'30':c+'1A';})
-      .attr('stroke',d=>getDeviceColor(d.type,d.make))
-      .attr('stroke-width',d=>d.tier<=1?2.5:1.5);
+    regularG.append('circle').attr('class', 'node-body').attr('r', d => d.radius)
+      .attr('fill', d => { const c = getDeviceColor(d.type, d.make); return d.tier <= 1 ? c + '30' : c + '1A'; })
+      .attr('stroke', d => getDeviceColor(d.type, d.make))
+      .attr('stroke-width', d => d.tier <= 1 ? 2.5 : 1.5);
 
-    regularG.filter(d=>d.radius>=10).append('text').attr('text-anchor','middle').attr('dominant-baseline','central')
-      .attr('font-size',d=>Math.max(7,d.radius*0.55)).attr('font-weight',700)
-      .attr('fill',d=>getDeviceColor(d.type,d.make)).attr('pointer-events','none')
-      .text(d=>TYPE_ABBR[d.type]||'?');
+    regularG.filter(d => d.radius >= 10).append('text').attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+      .attr('font-size', d => Math.max(7, d.radius * 0.55)).attr('font-weight', 700)
+      .attr('fill', d => getDeviceColor(d.type, d.make)).attr('pointer-events', 'none')
+      .text(d => TYPE_ABBR[d.type] || '?');
 
-    regularG.filter(d=>d.tier<=2).append('text').attr('y',d=>d.radius+11).attr('text-anchor','middle')
-      .attr('font-size',d=>d.tier<=1?9:7).attr('fill','rgba(148,163,184,0.55)').attr('pointer-events','none')
-      .text(d=>{const n=d.name||'';const m=d.tier<=1?20:14;return n.length>m?n.slice(0,m-1)+'\u2026':n;});
+    regularG.filter(d => d.tier <= 2).append('text').attr('y', d => d.radius + 11).attr('text-anchor', 'middle')
+      .attr('font-size', d => d.tier <= 1 ? 9 : 7).attr('fill', 'rgba(148,163,184,0.55)').attr('pointer-events', 'none')
+      .text(d => { const n = d.name || ''; const m = d.tier <= 1 ? 20 : 14; return n.length > m ? n.slice(0, m - 1) + '\u2026' : n; });
 
-    regularG.filter(d=>d.tier<=1&&d.make).append('text').attr('y',d=>d.radius+22).attr('text-anchor','middle')
-      .attr('font-size',7).attr('fill',d=>getDeviceColor(d.type,d.make)+'80')
-      .attr('font-weight',500).attr('pointer-events','none').text(d=>d.make);
+    regularG.filter(d => d.tier <= 1 && d.make).append('text').attr('y', d => d.radius + 22).attr('text-anchor', 'middle')
+      .attr('font-size', 7).attr('fill', d => getDeviceColor(d.type, d.make) + '80')
+      .attr('font-weight', 500).attr('pointer-events', 'none').text(d => d.make);
 
-    regularG.on('click',(ev,d)=>{ ev.stopPropagation(); setSelected(prev=>prev?.id===d.id?null:d); });
-    regularG.on('dblclick',(ev,d)=>{ ev.stopPropagation(); if(expandedClusters.has(d.id)) toggleCluster(d.id); });
+    regularG.on('click', (ev, d) => { ev.stopPropagation(); setSelected(prev => prev?.id === d.id ? null : d); });
+    regularG.on('dblclick', (ev, d) => { ev.stopPropagation(); if (expandedClusters.has(d.id)) toggleCluster(d.id); });
 
     // Hover
-    node.on('mouseenter',(ev,d)=>{
-      if(d.isCluster) return;
-      const nId=d.id;const conn=new Set([nId]);const nb=adj.get(nId);if(nb)for(const x of nb)conn.add(x);
+    node.on('mouseenter', (ev, d) => {
+      if (d.isCluster) return;
+      const nId = d.id; const conn = new Set([nId]); const nb = adj.get(nId); if (nb) for (const x of nb) conn.add(x);
       linkG.selectAll('path')
-        .attr('stroke',e=>{
-          if(e.isClusterEdge) return 'rgba(148,163,184,0.15)';
-          return (e.source.id===nId||e.target.id===nId)?getEdgeStyle(e).color:'rgba(148,163,184,0.03)';
-        })
-        .attr('stroke-width',e=>{
-          if(e.isClusterEdge) return 1;
-          return (e.source.id===nId||e.target.id===nId)?getEdgeStyle(e).width+1:0.4;
-        })
-        .attr('stroke-opacity',e=>{
-          if(e.isClusterEdge) return 0.3;
-          return (e.source.id===nId||e.target.id===nId)?1:0.3;
-        });
-      nodeG.selectAll('g').attr('opacity',n=>conn.has(n.id)?1:0.15);
+        .attr('stroke', e => { if (e.isClusterEdge) return 'rgba(148,163,184,0.15)'; return (e.source.id === nId || e.target.id === nId) ? getEdgeStyle(e).color : 'rgba(148,163,184,0.03)'; })
+        .attr('stroke-width', e => { if (e.isClusterEdge) return 1; return (e.source.id === nId || e.target.id === nId) ? getEdgeStyle(e).width + 1 : 0.4; })
+        .attr('stroke-opacity', e => { if (e.isClusterEdge) return 0.3; return (e.source.id === nId || e.target.id === nId) ? 1 : 0.3; });
+      nodeG.selectAll('g').attr('opacity', n => conn.has(n.id) ? 1 : 0.15);
     });
-    node.on('mouseleave',()=>{
+    node.on('mouseleave', () => {
       linkG.selectAll('path')
-        .attr('stroke',e=>e.isClusterEdge?'rgba(148,163,184,0.15)':getEdgeStyle(e).color)
-        .attr('stroke-width',e=>e.isClusterEdge?1:getEdgeStyle(e).width)
-        .attr('stroke-opacity',e=>e.isClusterEdge?0.6:getEdgeStyle(e).opacity);
-      nodeG.selectAll('g').attr('opacity',1);
+        .attr('stroke', e => e.isClusterEdge ? 'rgba(148,163,184,0.15)' : getEdgeStyle(e).color)
+        .attr('stroke-width', e => e.isClusterEdge ? 1 : getEdgeStyle(e).width)
+        .attr('stroke-opacity', e => e.isClusterEdge ? 0.6 : getEdgeStyle(e).opacity);
+      nodeG.selectAll('g').attr('opacity', 1);
     });
 
-    svg.on('click',()=>{setSelected(null);setHighlightedId(null);});
+    svg.on('click', () => { setSelected(null); setHighlightedId(null); });
 
-    requestAnimationFrame(()=>{const pad=40;const s=Math.min((w-pad*2)/canvasWidth,(h-pad*2)/canvasHeight,1.0);svg.call(zoom.transform,d3.zoomIdentity.translate((w-canvasWidth*s)/2,(h-canvasHeight*s)/2+pad/2).scale(s));});
-  },[filteredView,layout,viewDims,expandedClusters,toggleCluster]);
+    // Auto-fit
+    requestAnimationFrame(() => {
+      const pad = 40; const s = Math.min((w - pad * 2) / canvasWidth, (h - pad * 2) / canvasHeight, 1.0);
+      svg.call(zoom.transform, d3.zoomIdentity.translate((w - canvasWidth * s) / 2, (h - canvasHeight * s) / 2 + pad / 2).scale(s));
+    });
+  }, [filteredView, layout, viewDims, expandedClusters, toggleCluster]);
 
   // Highlight effect
-  useEffect(()=>{
-    if(!gRef.current||!layout)return;const g=d3.select(gRef.current);const ng=g.select('.tp-nodes').selectAll('g');
-    if(!highlightedId){ng.attr('opacity',1);ng.selectAll('.node-highlight-ring').remove();return;}
-    ng.attr('opacity',d=>d.id===highlightedId?1:0.12);
-    ng.each(function(d){const el=d3.select(this);el.selectAll('.node-highlight-ring').remove();
-      if(d.id===highlightedId){
-        el.append('circle').attr('class','node-highlight-ring').attr('r',d.radius+8).attr('fill','none').attr('stroke','#FBBF24').attr('stroke-width',3).attr('stroke-opacity',1).transition().duration(600).ease(d3.easeLinear).attr('r',d.radius+22).attr('stroke-opacity',0).on('end',function(){d3.select(this).remove();});
-        el.append('circle').attr('class','node-highlight-ring').attr('r',d.radius+6).attr('fill','none').attr('stroke','#FBBF24').attr('stroke-width',2.5).attr('stroke-dasharray','4,3');
+  useEffect(() => {
+    if (!gRef.current || !layout) return;
+    const g = d3.select(gRef.current); const ng = g.select('.tp-nodes').selectAll('g');
+    if (!highlightedId) { ng.attr('opacity', 1); ng.selectAll('.node-highlight-ring').remove(); return; }
+    ng.attr('opacity', d => d.id === highlightedId ? 1 : 0.12);
+    ng.each(function (d) {
+      const el = d3.select(this); el.selectAll('.node-highlight-ring').remove();
+      if (d.id === highlightedId) {
+        el.append('circle').attr('class', 'node-highlight-ring').attr('r', d.radius + 8).attr('fill', 'none').attr('stroke', '#FBBF24').attr('stroke-width', 3).attr('stroke-opacity', 1).transition().duration(600).ease(d3.easeLinear).attr('r', d.radius + 22).attr('stroke-opacity', 0).on('end', function () { d3.select(this).remove(); });
+        el.append('circle').attr('class', 'node-highlight-ring').attr('r', d.radius + 6).attr('fill', 'none').attr('stroke', '#FBBF24').attr('stroke-width', 2.5).attr('stroke-dasharray', '4,3');
       }
     });
-  },[highlightedId,layout]);
+  }, [highlightedId, layout]);
 
   // Legend
-  const legendGroups=useMemo(()=>{
-    if(!data?.nodes)return[];const gm=new Map();
-    for(const n of data.nodes){let key,label,so;
-      if(n.type==='access_point'&&n.make){key=`ap:${n.make}`;label=`AP \u00b7 ${n.make}`;so=30;}
-      else if(n.type==='firewall'&&n.make){key=`fw:${n.make}`;label=`FW \u00b7 ${n.make}`;so=1;}
-      else if(n.type==='core_switch'&&n.make){key=`cs:${n.make}`;label=`Core \u00b7 ${n.make}`;so=10;}
-      else{key=`type:${n.type}`;const tn=(n.type||'other').replace(/_/g,' ');label=tn.charAt(0).toUpperCase()+tn.slice(1);so=(TIER_ORDER[n.type]??4)*10+5;}
-      if(!gm.has(key))gm.set(key,{color:getDeviceColor(n.type,n.make),label,count:0,sortOrder:so});gm.get(key).count++;}
-    return Array.from(gm.values()).sort((a,b)=>a.sortOrder-b.sortOrder);
-  },[data]);
+  const legendGroups = useMemo(() => {
+    if (!data?.nodes) return [];
+    const gm = new Map();
+    for (const n of data.nodes) {
+      let key, label, so;
+      if (n.type === 'access_point' && n.make) { key = `ap:${n.make}`; label = `AP \u00b7 ${n.make}`; so = 30; }
+      else if (n.type === 'firewall' && n.make) { key = `fw:${n.make}`; label = `FW \u00b7 ${n.make}`; so = 1; }
+      else if (n.type === 'core_switch' && n.make) { key = `cs:${n.make}`; label = `Core \u00b7 ${n.make}`; so = 10; }
+      else { key = `type:${n.type}`; const tn = (n.type || 'other').replace(/_/g, ' '); label = tn.charAt(0).toUpperCase() + tn.slice(1); so = (TIER_ORDER[n.type] ?? 4) * 10 + 5; }
+      if (!gm.has(key)) gm.set(key, { color: getDeviceColor(n.type, n.make), label, count: 0, sortOrder: so });
+      gm.get(key).count++;
+    }
+    return Array.from(gm.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+  }, [data]);
 
-  const edgeMediaCounts=useMemo(()=>{
-    if(!data?.edges)return{};const c={fiber:0,copper:0,tunnel:0,unknown:0};
-    for(const e of data.edges){ c[classifyEdgeMedia(e, rawNodeMap)]++; }
+  const edgeMediaCounts = useMemo(() => {
+    if (!data?.edges) return {};
+    const c = { fiber: 0, copper: 0, tunnel: 0, unknown: 0 };
+    for (const e of data.edges) { c[classifyEdgeMedia(e, rawNodeMap)]++; }
     return c;
-  },[data,rawNodeMap]);
+  }, [data, rawNodeMap]);
 
   const clusterSummary = useMemo(() => {
     if (!data?.subnetClusters) return null;
@@ -515,17 +610,9 @@ export default function TopologyPage() {
     if (!selected || !data || selected.isCluster) return [];
     const result = [];
     for (const e of data.edges) {
-      let neighborId = null;
-      let localPort = null, remotePort = null;
-      if (e.source === selected.id) {
-        neighborId = e.target;
-        localPort = e.sourceInterface;
-        remotePort = e.targetInterface;
-      } else if (e.target === selected.id) {
-        neighborId = e.source;
-        localPort = e.targetInterface;
-        remotePort = e.sourceInterface;
-      }
+      let neighborId = null, localPort = null, remotePort = null;
+      if (e.source === selected.id) { neighborId = e.target; localPort = e.sourceInterface; remotePort = e.targetInterface; }
+      else if (e.target === selected.id) { neighborId = e.source; localPort = e.targetInterface; remotePort = e.sourceInterface; }
       if (!neighborId) continue;
       const neighbor = data.nodes.find(n => n.id === neighborId);
       if (!neighbor) continue;
@@ -535,13 +622,11 @@ export default function TopologyPage() {
     return result;
   }, [selected, data, rawNodeMap]);
 
-  // Filtered counts for subtitle
   const filterLabel = cableFilter !== 'all' ? ` (${cableFilter} only)` : '';
 
   return (
     <>
-      <motion.div initial="hidden" animate="visible" variants={{visible:{transition:{staggerChildren:0.06}}}} className="tp-root">
-        {/* ── Removed duplicate h1 header — TopBar already shows page title ── */}
+      <motion.div initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.06 } } }} className="tp-root">
         <motion.div variants={fadeUp} className="tp-header">
           <div>
             <p className="tp-subtitle">
@@ -550,92 +635,88 @@ export default function TopologyPage() {
             </p>
           </div>
           <div className="tp-header-actions">
-            <div className="tp-category-toggle">
-              <button onClick={()=>setCategory('network')} className={`tp-cat-btn ${category==='network'?'tp-cat-btn--active':''}`}>Network</button>
-              <button onClick={()=>setCategory('all')} className={`tp-cat-btn ${category==='all'?'tp-cat-btn--active':''}`}>All Devices</button>
-            </div>
-            <select value={cableFilter} onChange={e=>setCableFilter(e.target.value)} className="tp-cable-select" title="Filter by link type">
-              {CABLE_FILTER_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}{edgeMediaCounts[o.value]!=null&&o.value!=='all'?` (${edgeMediaCounts[o.value]})`:''}</option>)}
+            <select value={cableFilter} onChange={e => setCableFilter(e.target.value)} className="tp-cable-select" title="Filter by link type">
+              {CABLE_FILTER_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}{edgeMediaCounts[o.value] != null && o.value !== 'all' ? ` (${edgeMediaCounts[o.value]})` : ''}</option>)}
             </select>
-            {sites.length>0&&<select value={selectedSite} onChange={e=>setSelectedSite(e.target.value)} className="tp-site-select"><option value="">All Sites</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
-            <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} style={{color:'var(--color-vemio-text-muted)'}}/></button>
+            {sites.length > 0 && <select value={selectedSite} onChange={e => setSelectedSite(e.target.value)} className="tp-site-select"><option value="">All Sites</option>{sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+            <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: 'var(--color-vemio-text-muted)' }} /></button>
           </div>
         </motion.div>
 
         <motion.div variants={fadeUp} className="tp-graph-panel">
-          {data&&data.nodes.length>0&&(
+          {data && data.nodes.length > 0 && (
             <div className="tp-search-bar">
-              <Search size={14} className="tp-search-icon"/>
-              <input type="text" placeholder="Locate device by name, IP, serial, model\u2026" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="tp-search-input"
-                onKeyDown={e=>{if(e.key==='Enter'&&searchResults.length>0)locateDevice(searchResults[0].id);if(e.key==='Escape'){setSearchQuery('');setSearchResults([]);setHighlightedId(null);}}}/>
-              {searchQuery&&<button className="tp-search-clear" onClick={()=>{setSearchQuery('');setSearchResults([]);setHighlightedId(null);}}><X size={12}/></button>}
-              {searchResults.length>0&&(
+              <Search size={14} className="tp-search-icon" />
+              <input type="text" placeholder="Locate device by name, IP, serial, model\u2026" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="tp-search-input"
+                onKeyDown={e => { if (e.key === 'Enter' && searchResults.length > 0) locateDevice(searchResults[0].id); if (e.key === 'Escape') { setSearchQuery(''); setSearchResults([]); setHighlightedId(null); } }} />
+              {searchQuery && <button className="tp-search-clear" onClick={() => { setSearchQuery(''); setSearchResults([]); setHighlightedId(null); }}><X size={12} /></button>}
+              {searchResults.length > 0 && (
                 <div className="tp-search-dropdown">
-                  {searchResults.map(r=>(
-                    <button key={r.id} className="tp-search-result" onClick={()=>locateDevice(r.id)}>
-                      <span className="tp-sr-dot" style={{background:getDeviceColor(r.type,r.make)}}/>
+                  {searchResults.map(r => (
+                    <button key={r.id} className="tp-search-result" onClick={() => locateDevice(r.id)}>
+                      <span className="tp-sr-dot" style={{ background: getDeviceColor(r.type, r.make) }} />
                       <span className="tp-sr-name">{r.name}</span>
-                      <span className="tp-sr-meta">{r.ipAddress||`${TYPE_ABBR[r.type]}${r.make?' \u00b7 '+r.make:''}`}</span>
-                      <Crosshair size={12} className="tp-sr-locate"/>
+                      <span className="tp-sr-meta">{r.ipAddress || `${TYPE_ABBR[r.type]}${r.make ? ' \u00b7 ' + r.make : ''}`}</span>
+                      <Crosshair size={12} className="tp-sr-locate" />
                     </button>))}
                 </div>)}
             </div>)}
 
           <div ref={wrapRef} className="tp-graph-wrap">
-            {loading&&!data&&<div className="tp-loading"><div className="tp-loading-spinner"/><span>Building topology graph\u2026</span></div>}
-            {error&&<div className="tp-empty"><Network className="w-10 h-10" style={{color:'var(--color-vemio-text-dim)',marginBottom:8}}/><p>{error}</p><button onClick={fetchTopology} className="tp-retry-btn">Retry</button></div>}
-            {!loading&&filteredView&&!filteredView.nodes.length&&<div className="tp-empty"><Network className="w-10 h-10" style={{color:'var(--color-vemio-text-dim)',marginBottom:8}}/><p>{cableFilter!=='all'?`No ${cableFilter} connections found`:'No topology data available yet'}</p>{cableFilter!=='all'&&<button onClick={()=>setCableFilter('all')} className="tp-retry-btn">Show all links</button>}</div>}
-            <svg ref={svgRef} width={viewDims.w} height={viewDims.h} style={{display:filteredView&&filteredView.nodes.length?'block':'none'}}/>
-            {filteredView&&filteredView.nodes.length>0&&(<div className="tp-zoom-controls"><button onClick={handleZoomIn} className="tp-zoom-btn" title="Zoom in"><Plus className="w-3.5 h-3.5"/></button><button onClick={handleZoomOut} className="tp-zoom-btn" title="Zoom out"><Minus className="w-3.5 h-3.5"/></button><button onClick={handleFitView} className="tp-zoom-btn" title="Fit to view"><Maximize2 className="w-3.5 h-3.5"/></button></div>)}
+            {loading && !data && <div className="tp-loading"><div className="tp-loading-spinner" /><span>Building topology graph\u2026</span></div>}
+            {error && <div className="tp-empty"><Network className="w-10 h-10" style={{ color: 'var(--color-vemio-text-dim)', marginBottom: 8 }} /><p>{error}</p><button onClick={fetchTopology} className="tp-retry-btn">Retry</button></div>}
+            {!loading && filteredView && !filteredView.nodes.length && <div className="tp-empty"><Network className="w-10 h-10" style={{ color: 'var(--color-vemio-text-dim)', marginBottom: 8 }} /><p>{cableFilter !== 'all' ? `No ${cableFilter} connections found` : 'No topology data available yet'}</p>{cableFilter !== 'all' && <button onClick={() => setCableFilter('all')} className="tp-retry-btn">Show all links</button>}</div>}
+            <svg ref={svgRef} width={viewDims.w} height={viewDims.h} style={{ display: filteredView && filteredView.nodes.length ? 'block' : 'none' }} />
+            {filteredView && filteredView.nodes.length > 0 && (<div className="tp-zoom-controls"><button onClick={handleZoomIn} className="tp-zoom-btn" title="Zoom in"><Plus className="w-3.5 h-3.5" /></button><button onClick={handleZoomOut} className="tp-zoom-btn" title="Zoom out"><Minus className="w-3.5 h-3.5" /></button><button onClick={handleFitView} className="tp-zoom-btn" title="Fit to view"><Maximize2 className="w-3.5 h-3.5" /></button></div>)}
           </div>
 
-          {data&&data.nodes.length>0&&(
+          {data && data.nodes.length > 0 && (
             <div className="tp-legend">
               <div className="tp-legend-section">
                 <span className="tp-legend-title">Devices</span>
-                {legendGroups.map(g=><span key={g.label} className="tp-legend-item"><span className="tp-legend-dot" style={{background:g.color}}/>{g.label} ({g.count})</span>)}
+                {legendGroups.map(g => <span key={g.label} className="tp-legend-item"><span className="tp-legend-dot" style={{ background: g.color }} />{g.label} ({g.count})</span>)}
               </div>
               <div className="tp-legend-section">
                 <span className="tp-legend-title">Links</span>
-                {edgeMediaCounts.fiber>0&&<span className={`tp-legend-item${cableFilter==='fiber'?' tp-legend-item--active':''}`}><span className="tp-legend-line" style={{background:EDGE_STYLES.fiber.color}}/>Fiber ({edgeMediaCounts.fiber})</span>}
-                {edgeMediaCounts.copper>0&&<span className={`tp-legend-item${cableFilter==='copper'?' tp-legend-item--active':''}`}><span className="tp-legend-line" style={{background:'rgba(148,163,184,0.5)'}}/>Copper ({edgeMediaCounts.copper})</span>}
-                {edgeMediaCounts.tunnel>0&&<span className={`tp-legend-item${cableFilter==='tunnel'?' tp-legend-item--active':''}`}><span className="tp-legend-line tp-legend-line--tunnel"/>Tunnel ({edgeMediaCounts.tunnel})</span>}
-                {edgeMediaCounts.unknown>0&&<span className="tp-legend-item"><span className="tp-legend-line" style={{background:'rgba(148,163,184,0.2)'}}/>Unclassified ({edgeMediaCounts.unknown})</span>}
+                {edgeMediaCounts.fiber > 0 && <span className={`tp-legend-item${cableFilter === 'fiber' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line" style={{ background: EDGE_STYLES.fiber.color }} />Fiber ({edgeMediaCounts.fiber})</span>}
+                {edgeMediaCounts.copper > 0 && <span className={`tp-legend-item${cableFilter === 'copper' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line" style={{ background: 'rgba(148,163,184,0.5)' }} />Copper ({edgeMediaCounts.copper})</span>}
+                {edgeMediaCounts.tunnel > 0 && <span className={`tp-legend-item${cableFilter === 'tunnel' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line tp-legend-line--tunnel" />Tunnel ({edgeMediaCounts.tunnel})</span>}
+                {edgeMediaCounts.unknown > 0 && <span className="tp-legend-item"><span className="tp-legend-line" style={{ background: 'rgba(148,163,184,0.2)' }} />Unclassified ({edgeMediaCounts.unknown})</span>}
               </div>
               <div className="tp-legend-section">
                 <span className="tp-legend-title">Status</span>
-                {Object.entries(STATUS_CFG).map(([k,c])=><span key={k} className="tp-legend-item"><span className="tp-legend-ring" style={{borderColor:c.color,borderStyle:c.dash==='none'?'solid':c.dash==='4,3'?'dashed':'dotted'}}/>{c.label}</span>)}
+                {Object.entries(STATUS_CFG).map(([k, c]) => <span key={k} className="tp-legend-item"><span className="tp-legend-ring" style={{ borderColor: c.color, borderStyle: c.dash === 'none' ? 'solid' : c.dash === '4,3' ? 'dashed' : 'dotted' }} />{c.label}</span>)}
               </div>
               {clusterSummary && cableFilter === 'all' && (
                 <div className="tp-legend-section">
                   <span className="tp-legend-title">Clusters</span>
-                  <span className="tp-legend-item"><span className="tp-legend-cluster"/>Subnet Group ({clusterSummary.clusters})</span>
+                  <span className="tp-legend-item"><span className="tp-legend-cluster" />Subnet Group ({clusterSummary.clusters})</span>
                 </div>
               )}
             </div>)}
         </motion.div>
 
-        {/* ═══════════ DEVICE INSPECTOR ═══════════ */}
+        {/* ═══════════ INSPECTOR ═══════════ */}
         <AnimatePresence>
-          {selected&&!selected.isCluster&&(
-            <motion.div key="inspector" initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} exit={{opacity:0,x:24}} transition={{duration:0.25}} className="tp-inspector">
-              <div className="tp-insp-header"><h3 className="tp-insp-title">{selected.name}</h3><button onClick={()=>setSelected(null)} className="tp-insp-close"><X className="w-4 h-4"/></button></div>
+          {selected && !selected.isCluster && (
+            <motion.div key="inspector" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ duration: 0.25 }} className="tp-inspector">
+              <div className="tp-insp-header"><h3 className="tp-insp-title">{selected.name}</h3><button onClick={() => setSelected(null)} className="tp-insp-close"><X className="w-4 h-4" /></button></div>
               <div className="tp-insp-badges">
-                <span className="tp-insp-badge" style={{background:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color+'18',color:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color}}><span className="tp-insp-dot" style={{background:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color}}/>{(STATUS_CFG[selected.status]||STATUS_CFG.unknown).label}</span>
-                <span className="tp-insp-badge" style={{background:getDeviceColor(selected.type,selected.make)+'18',color:getDeviceColor(selected.type,selected.make)}}>{TYPE_NAMES[selected.type]||selected.type?.replace(/_/g,' ')} {selected.make ? `\u00b7 ${selected.make}` : ''}</span>
+                <span className="tp-insp-badge" style={{ background: (STATUS_CFG[selected.status] || STATUS_CFG.unknown).color + '18', color: (STATUS_CFG[selected.status] || STATUS_CFG.unknown).color }}><span className="tp-insp-dot" style={{ background: (STATUS_CFG[selected.status] || STATUS_CFG.unknown).color }} />{(STATUS_CFG[selected.status] || STATUS_CFG.unknown).label}</span>
+                <span className="tp-insp-badge" style={{ background: getDeviceColor(selected.type, selected.make) + '18', color: getDeviceColor(selected.type, selected.make) }}>{TYPE_NAMES[selected.type] || selected.type?.replace(/_/g, ' ')}{selected.make ? ` \u00b7 ${selected.make}` : ''}</span>
               </div>
               <div className="tp-insp-fields">
-                <Field label="Type" value={TYPE_NAMES[selected.type]||selected.type?.replace(/_/g,' ')}/><Field label="IP Address" value={selected.ipAddress} mono/>
-                <Field label="Make" value={selected.make}/><Field label="Model" value={selected.model}/>
-                <Field label="Serial" value={selected.serialNumber} mono/><Field label="Site" value={selected.siteName}/>
-                {selected.subnetGatewayIp && <Field label="Subnet Gateway" value={selected.subnetGatewayIp} mono/>}
+                <Field label="Type" value={TYPE_NAMES[selected.type] || selected.type?.replace(/_/g, ' ')} /><Field label="IP Address" value={selected.ipAddress} mono />
+                <Field label="Make" value={selected.make} /><Field label="Model" value={selected.model} />
+                <Field label="Serial" value={selected.serialNumber} mono /><Field label="Site" value={selected.siteName} />
+                {selected.subnetGatewayIp && <Field label="Subnet Gateway" value={selected.subnetGatewayIp} mono />}
               </div>
-              {neighborsWithPorts.length>0&&(
+              {neighborsWithPorts.length > 0 && (
                 <div className="tp-insp-neighbors"><span className="tp-insp-nbr-title">Connected ({neighborsWithPorts.length})</span>
                   <div className="tp-insp-nbr-list">
-                    {neighborsWithPorts.slice(0,30).map(n=>(
-                      <button key={n.id} className="tp-insp-nbr-item" onClick={()=>{setSelected(data.nodes.find(nd=>nd.id===n.id)||n);locateDevice(n.id);}}>
-                        <span className="tp-insp-dot" style={{background:getDeviceColor(n.type,n.make),width:6,height:6}}/>
+                    {neighborsWithPorts.slice(0, 30).map(n => (
+                      <button key={n.id} className="tp-insp-nbr-item" onClick={() => { setSelected(data.nodes.find(nd => nd.id === n.id) || n); locateDevice(n.id); }}>
+                        <span className="tp-insp-dot" style={{ background: getDeviceColor(n.type, n.make), width: 6, height: 6 }} />
                         <div className="tp-insp-nbr-info">
                           <span className="tp-insp-nbr-name">{n.name}</span>
                           <span className="tp-insp-nbr-ports">
@@ -645,39 +726,38 @@ export default function TopologyPage() {
                             {n.linkType && n.linkType !== 'unknown' && <span className={`tp-link-tag tp-link-tag--${n.linkType}`}>{n.linkType}</span>}
                           </span>
                         </div>
-                        <span className="tp-insp-nbr-type" style={{color:getDeviceColor(n.type,n.make)}}>{TYPE_ABBR[n.type]}{n.make?' \u00b7 '+n.make:''}</span>
+                        <span className="tp-insp-nbr-type" style={{ color: getDeviceColor(n.type, n.make) }}>{TYPE_ABBR[n.type]}{n.make ? ' \u00b7 ' + n.make : ''}</span>
                       </button>))}
-                    {neighborsWithPorts.length>30&&<span className="tp-insp-nbr-more">+{neighborsWithPorts.length-30} more</span>}
+                    {neighborsWithPorts.length > 30 && <span className="tp-insp-nbr-more">+{neighborsWithPorts.length - 30} more</span>}
                   </div>
                 </div>)}
             </motion.div>)}
 
-          {/* ═══════════ CLUSTER INSPECTOR ═══════════ */}
-          {selected&&selected.isCluster&&(
-            <motion.div key="cluster-inspector" initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} exit={{opacity:0,x:24}} transition={{duration:0.25}} className="tp-inspector">
+          {selected && selected.isCluster && (
+            <motion.div key="cluster-inspector" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ duration: 0.25 }} className="tp-inspector">
               <div className="tp-insp-header">
                 <h3 className="tp-insp-title">Subnet Cluster</h3>
-                <button onClick={()=>setSelected(null)} className="tp-insp-close"><X className="w-4 h-4"/></button>
+                <button onClick={() => setSelected(null)} className="tp-insp-close"><X className="w-4 h-4" /></button>
               </div>
               <div className="tp-insp-badges">
-                <span className="tp-insp-badge" style={{background:'rgba(156,163,175,0.12)',color:'#9CA3AF'}}>{selected.clusterCount} devices</span>
+                <span className="tp-insp-badge" style={{ background: 'rgba(156,163,175,0.12)', color: '#9CA3AF' }}>{selected.clusterCount} devices</span>
               </div>
               <div className="tp-insp-fields">
-                <Field label="Gateway" value={(() => { const p = layout?.nodeMap?.get(selected.clusterParentId); return p?.name || 'Unknown'; })()}/>
-                <Field label="Status" value={(() => { const ss = selected.clusterStatusSummary || {}; const parts = []; if(ss.up) parts.push(`${ss.up} up`); if(ss.down) parts.push(`${ss.down} down`); if(ss.degraded) parts.push(`${ss.degraded} degraded`); if(ss.unknown) parts.push(`${ss.unknown} unknown`); return parts.join(', '); })()}/>
+                <Field label="Gateway" value={(() => { const p = layout?.nodeMap?.get(selected.clusterParentId); return p?.name || 'Unknown'; })()} />
+                <Field label="Status" value={(() => { const ss = selected.clusterStatusSummary || {}; const parts = []; if (ss.up) parts.push(`${ss.up} up`); if (ss.down) parts.push(`${ss.down} down`); if (ss.degraded) parts.push(`${ss.degraded} degraded`); if (ss.unknown) parts.push(`${ss.unknown} unknown`); return parts.join(', '); })()} />
               </div>
-              <button className="tp-cluster-expand-btn" onClick={() => { if(selected.clusterParentId) toggleCluster(selected.clusterParentId); setSelected(null); }}>
-                <ChevronRight size={14}/> Expand to show all {selected.clusterCount} devices
+              <button className="tp-cluster-expand-btn" onClick={() => { if (selected.clusterParentId) toggleCluster(selected.clusterParentId); setSelected(null); }}>
+                <ChevronRight size={14} /> Expand to show all {selected.clusterCount} devices
               </button>
               {selected.clusterMembers && selected.clusterMembers.length > 0 && (
                 <div className="tp-insp-neighbors">
                   <span className="tp-insp-nbr-title">Devices in cluster</span>
                   <div className="tp-insp-nbr-list">
                     {selected.clusterMembers.slice(0, 30).map(n => (
-                      <div key={n.id} className="tp-insp-nbr-item" style={{cursor:'default'}}>
-                        <span className="tp-insp-dot" style={{background: getDeviceColor(n.type, n.make), width:6, height:6}}/>
+                      <div key={n.id} className="tp-insp-nbr-item" style={{ cursor: 'default' }}>
+                        <span className="tp-insp-dot" style={{ background: getDeviceColor(n.type, n.make), width: 6, height: 6 }} />
                         <span className="tp-insp-nbr-name">{n.name}</span>
-                        <span className="tp-insp-nbr-type" style={{color: (STATUS_CFG[n.status]||STATUS_CFG.unknown).color}}>{(STATUS_CFG[n.status]||STATUS_CFG.unknown).label}</span>
+                        <span className="tp-insp-nbr-type" style={{ color: (STATUS_CFG[n.status] || STATUS_CFG.unknown).color }}>{(STATUS_CFG[n.status] || STATUS_CFG.unknown).label}</span>
                       </div>
                     ))}
                     {selected.clusterMembers.length > 30 && <span className="tp-insp-nbr-more">+{selected.clusterMembers.length - 30} more</span>}
@@ -694,9 +774,6 @@ export default function TopologyPage() {
         .tp-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
         .tp-subtitle{font-size:13px;color:var(--vemio-text-muted);margin:0}
         .tp-header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
-        .tp-category-toggle{display:flex;border-radius:8px;overflow:hidden;border:1px solid var(--color-vemio-border)}
-        .tp-cat-btn{padding:7px 12px;font-size:11px;font-weight:500;cursor:pointer;border:none;background:var(--color-vemio-surface);color:var(--color-vemio-text-dim);transition:background .15s;white-space:nowrap}
-        .tp-cat-btn:first-child{border-right:1px solid var(--color-vemio-border)}.tp-cat-btn--active{background:rgba(245,158,11,.12);color:var(--color-vemio-amber)}
         .tp-cable-select{padding:8px 12px;border-radius:8px;font-size:13px;background:var(--color-vemio-surface);border:1px solid var(--color-vemio-border);color:var(--color-vemio-text);outline:none;cursor:pointer;min-width:110px}
         .tp-site-select{padding:8px 12px;border-radius:8px;font-size:13px;background:var(--color-vemio-surface);border:1px solid var(--color-vemio-border);color:var(--color-vemio-text);outline:none;cursor:pointer;min-width:140px}
         .tp-refresh-btn{padding:8px;border-radius:8px;border:1px solid var(--color-vemio-border);background:var(--color-vemio-surface);cursor:pointer;display:flex;align-items:center;transition:background .15s}
@@ -767,4 +844,4 @@ export default function TopologyPage() {
   );
 }
 
-function Field({label,value,mono}){if(!value)return null;return<div className="tp-field"><span className="tp-field-label">{label}</span><span className={`tp-field-value ${mono?'tp-field-value--mono':''}`}>{value}</span></div>;}
+function Field({ label, value, mono }) { if (!value) return null; return <div className="tp-field"><span className="tp-field-label">{label}</span><span className={`tp-field-value ${mono ? 'tp-field-value--mono' : ''}`}>{value}</span></div>; }

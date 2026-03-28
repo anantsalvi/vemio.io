@@ -81,6 +81,11 @@ const THEME_INIT_SCRIPT = `
     document.documentElement.setAttribute('data-theme', t);
     document.documentElement.classList.remove('dark', 'light');
     document.documentElement.classList.add(t);
+    var l = document.createElement('link');
+    l.rel = 'icon';
+    l.setAttribute('data-theme-favicon', 'true');
+    l.href = t === 'dark' ? '/favicon-dark.ico' : '/favicon-light.ico';
+    document.head.appendChild(l);
   } catch(e) {
     document.documentElement.setAttribute('data-theme', 'dark');
     document.documentElement.classList.add('dark');

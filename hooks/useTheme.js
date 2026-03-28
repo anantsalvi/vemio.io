@@ -36,7 +36,7 @@ function resolveTheme(preference) {
 
 function applyTheme(resolved) {
   document.documentElement.setAttribute('data-theme', resolved);
-  // Also toggle the class for Tailwind dark: variants
+  // Toggle class for Tailwind dark: variants
   if (resolved === 'dark') {
     document.documentElement.classList.add('dark');
     document.documentElement.classList.remove('light');
@@ -44,6 +44,16 @@ function applyTheme(resolved) {
     document.documentElement.classList.add('light');
     document.documentElement.classList.remove('dark');
   }
+  // Swap favicon to match theme
+  const faviconHref = resolved === 'dark' ? '/favicon-dark.ico' : '/favicon-light.ico';
+  let link = document.querySelector('link[rel="icon"][data-theme-favicon]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'icon';
+    link.setAttribute('data-theme-favicon', 'true');
+    document.head.appendChild(link);
+  }
+  link.href = faviconHref;
 }
 
 export function ThemeProvider({ children }) {

@@ -3,6 +3,7 @@
 //  Hierarchical tiered layout · device-type + vendor colors
 //  Fiber/Copper/Tunnel edge types · Search/Locate
 //  Subnet-based orphan clustering under gateway devices
+//  Cable type filter dropdown
 // ════════════════════════════════════════════════════════
 'use client';
 
@@ -52,6 +53,17 @@ function getEdgeStyle(edge) {
   return EDGE_STYLES.unknown;
 }
 
+function classifyEdgeMedia(edge, nodeMap) {
+  if (nodeMap) {
+    const s = nodeMap.get(edge.source);
+    const t = nodeMap.get(edge.target);
+    if (s && t && TUNNEL_TYPES.has(s.type) && TUNNEL_TYPES.has(t.type)) return 'tunnel';
+  }
+  if (edge.mediaType === 'fiber') return 'fiber';
+  if (edge.mediaType === 'copper') return 'copper';
+  return 'unknown';
+}
+
 /* ═══════════ TIER CONSTANTS ═══════════ */
 const TIER_ORDER = {
   firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
@@ -64,6 +76,13 @@ const TYPE_ABBR = {
 };
 const TIER_RADIUS = [26,22,14,10,8];
 const fadeUp = { hidden:{opacity:0,y:16}, visible:{opacity:1,y:0,transition:{duration:0.4,ease:[0.22,1,0.36,1]}} };
+
+const CABLE_FILTER_OPTIONS = [
+  { value:'all',     label:'All Links' },
+  { value:'fiber',   label:'Fiber' },
+  { value:'copper',  label:'Copper' },
+  { value:'tunnel',  label:'Tunnel' },
+];
 
 /* ═══════════ HIERARCHY BUILDER (with subnet clustering) ═══════════ */
 function buildHierarchy(nodes, edges, expandedClusters) {
@@ -87,11 +106,8 @@ function buildHierarchy(nodes, edges, expandedClusters) {
   function mark(n){att.add(n.id);for(const c of n.children)mark(c);}
   for (const r of roots) mark(r);
 
-  // ── Subnet-based orphan assignment ──
-  // Orphans with subnetParentId get attached to their gateway device
-  // Orphans without stay truly orphaned
   const orphans = [];
-  const subnetGroups = new Map(); // parentId → [orphan nodes]
+  const subnetGroups = new Map();
 
   for (const n of nm.values()) {
     if (att.has(n.id)) continue;
@@ -103,35 +119,20 @@ function buildHierarchy(nodes, edges, expandedClusters) {
     }
   }
 
-  // For each subnet group, create a cluster node under the gateway
   const clusterNodes = [];
   for (const [parentId, members] of subnetGroups) {
     const parent = nm.get(parentId);
     if (!parent) { orphans.push(...members); continue; }
 
-    const isExpanded = expandedClusters.has(parentId);
-
-    if (isExpanded) {
-      // Expanded: attach all members as direct children of the gateway
-      for (const m of members) {
-        parent.children.push(m);
-        att.add(m.id);
-      }
+    if (expandedClusters.has(parentId)) {
+      for (const m of members) { parent.children.push(m); att.add(m.id); }
     } else {
-      // Collapsed: create a synthetic cluster node
       const clusterId = `cluster:${parentId}`;
       const clusterNode = {
-        id: clusterId,
-        name: `${members.length} endpoints`,
-        type: 'cluster',
-        tier: Math.min((parent.tier ?? 0) + 1, 4),
-        children: [],
-        isCluster: true,
-        clusterParentId: parentId,
-        clusterMembers: members,
-        clusterCount: members.length,
-        status: 'unknown',
-        // Summarize statuses
+        id: clusterId, name: `${members.length} endpoints`, type: 'cluster',
+        tier: Math.min((parent.tier ?? 0) + 1, 4), children: [],
+        isCluster: true, clusterParentId: parentId, clusterMembers: members,
+        clusterCount: members.length, status: 'unknown',
         clusterStatusSummary: summarizeStatuses(members),
       };
       nm.set(clusterId, clusterNode);
@@ -151,29 +152,20 @@ function summarizeStatuses(members) {
 }
 
 /* ═══════════ LAYOUT ENGINE ═══════════ */
-function layoutHierarchy(roots, orphans, clusterNodes) {
+function layoutHierarchy(roots, orphans) {
   const pos=new Map(); const TY=[80,180,310,450,560]; const MS={0:100,1:90,2:60,3:36,4:30}; const P=30;
-  // Cluster nodes get special min spacing
   const CLUSTER_MIN_SPACE = 50;
   const wc=new Map();
   function gw(n){
     if(wc.has(n.id))return wc.get(n.id);
     let w;
-    if(n.isCluster) {
-      // Cluster nodes are wider to show the count badge
-      w = CLUSTER_MIN_SPACE;
-    } else if(!n.children.length) {
-      w=MS[Math.min(n.tier,4)];
-    } else {
-      w=0;for(const c of n.children)w+=gw(c);
-      w+=(n.children.length-1)*P;
-      w=Math.max(w,MS[Math.min(n.tier,4)]);
-    }
+    if(n.isCluster) { w = CLUSTER_MIN_SPACE; }
+    else if(!n.children.length) { w=MS[Math.min(n.tier,4)]; }
+    else { w=0;for(const c of n.children)w+=gw(c);w+=(n.children.length-1)*P;w=Math.max(w,MS[Math.min(n.tier,4)]); }
     wc.set(n.id,w);return w;
   }
   function ps(node,lx,aw){
-    const t=Math.min(node.tier,4);
-    const cx=lx+aw/2;
+    const t=Math.min(node.tier,4);const cx=lx+aw/2;
     const r = node.isCluster ? 18 : TIER_RADIUS[t];
     pos.set(node.id,{...node,x:cx,y:TY[t],radius:r});
     if(!node.children.length)return;
@@ -213,6 +205,7 @@ export default function TopologyPage() {
   const [searchQuery,setSearchQuery]=useState(''),[searchResults,setSearchResults]=useState([]);
   const [highlightedId,setHighlightedId]=useState(null);
   const [expandedClusters,setExpandedClusters]=useState(new Set());
+  const [cableFilter,setCableFilter]=useState('all');
 
   useEffect(()=>{fetch('/api/sites').then(r=>r.ok?r.json():Promise.reject()).then(d=>setSites(d.sites||d||[])).catch(()=>{});},[]);
 
@@ -230,8 +223,7 @@ export default function TopologyPage() {
   const toggleCluster = useCallback((parentId) => {
     setExpandedClusters(prev => {
       const next = new Set(prev);
-      if (next.has(parentId)) next.delete(parentId);
-      else next.add(parentId);
+      if (next.has(parentId)) next.delete(parentId); else next.add(parentId);
       return next;
     });
   }, []);
@@ -239,9 +231,16 @@ export default function TopologyPage() {
   const layout=useMemo(()=>{
     if(!data?.nodes?.length)return null;
     const{roots,orphans,nodeMap,adj,clusterNodes,subnetGroups}=buildHierarchy(data.nodes,data.edges,expandedClusters);
-    const{positions,canvasWidth,canvasHeight}=layoutHierarchy(roots,orphans,clusterNodes);
+    const{positions,canvasWidth,canvasHeight}=layoutHierarchy(roots,orphans);
     return{positions,canvasWidth,canvasHeight,nodeMap,adj,clusterNodes,subnetGroups};
   },[data,expandedClusters]);
+
+  const rawNodeMap = useMemo(() => {
+    if (!data?.nodes) return new Map();
+    const m = new Map();
+    for (const n of data.nodes) m.set(n.id, n);
+    return m;
+  }, [data]);
 
   useEffect(()=>{if(!searchQuery.trim()||!data?.nodes){setSearchResults([]);if(!searchQuery.trim())setHighlightedId(null);return;}
     const q=searchQuery.toLowerCase().trim();
@@ -270,28 +269,26 @@ export default function TopologyPage() {
     const zoom=d3.zoom().scaleExtent([0.08,4]).on('zoom',(ev)=>g.attr('transform',ev.transform));
     svg.call(zoom);zoomRef.current=zoom;
 
-    // Tier lines
     const tierYs=[80,180,310,450,560];const usedT=new Set();
     for(const p of positions.values())if(!p.isCluster)for(let t=0;t<tierYs.length;t++)if(Math.abs(p.y-tierYs[t])<5)usedT.add(t);
     for(const t of usedT){const y=tierYs[t]-35;g.append('line').attr('x1',0).attr('x2',canvasWidth).attr('y1',y).attr('y2',y).attr('stroke','rgba(148,163,184,0.06)').attr('stroke-width',1);g.append('text').attr('x',8).attr('y',y-6).attr('font-size',9).attr('fill','rgba(148,163,184,0.3)').attr('font-weight',600).attr('letter-spacing','0.06em').text(TIER_LABELS[t]);}
 
-    // Edges — real edges + synthetic edges from cluster parents to clusters
+    // Edges
     const linkG=g.append('g').attr('class','tp-links');
     const eps=[];
     for(const e of data.edges){
       const s=positions.get(e.source),t=positions.get(e.target);
       if(!s||!t)continue;
       const isTunnel=TUNNEL_TYPES.has(s.type)&&TUNNEL_TYPES.has(t.type);
-      eps.push({source:s,target:t,isTunnel,mediaType:e.mediaType||null,isClusterEdge:false});
+      const mediaClass = classifyEdgeMedia(e, rawNodeMap);
+      eps.push({source:s,target:t,isTunnel,mediaType:e.mediaType||null,mediaClass,isClusterEdge:false});
     }
-    // Add synthetic edges from gateway to cluster nodes
     for(const p of positions.values()){
       if(p.isCluster && p.clusterParentId){
         const parent=positions.get(p.clusterParentId);
-        if(parent) eps.push({source:parent,target:p,isTunnel:false,mediaType:null,isClusterEdge:true});
+        if(parent) eps.push({source:parent,target:p,isTunnel:false,mediaType:null,mediaClass:'cluster',isClusterEdge:true});
       }
     }
-    // Add edges from gateway to expanded orphan children
     if(expandedClusters.size > 0 && layout.subnetGroups) {
       for(const parentId of expandedClusters) {
         const members = layout.subnetGroups.get(parentId);
@@ -300,37 +297,49 @@ export default function TopologyPage() {
         if(!parent) continue;
         for(const m of members) {
           const mp = positions.get(m.id);
-          if(mp) eps.push({source:parent,target:mp,isTunnel:false,mediaType:null,isClusterEdge:true});
+          if(mp) eps.push({source:parent,target:mp,isTunnel:false,mediaType:null,mediaClass:'cluster',isClusterEdge:true});
         }
       }
     }
 
+    const isFiltered = cableFilter !== 'all';
+
     linkG.selectAll('path').data(eps).join('path')
       .attr('d',e=>{
         const dy=e.target.y-e.source.y,dx=e.target.x-e.source.x;
-        if(e.isClusterEdge){
-          // Cluster edges: straight dashed line
-          return `M${e.source.x},${e.source.y} L${e.target.x},${e.target.y}`;
-        }
+        if(e.isClusterEdge) return `M${e.source.x},${e.source.y} L${e.target.x},${e.target.y}`;
         if(Math.abs(dy)<10){const mx=(e.source.x+e.target.x)/2,my=e.source.y-Math.min(30,Math.abs(dx)*0.15);return`M${e.source.x},${e.source.y} Q${mx},${my} ${e.target.x},${e.target.y}`;}
         const my=(e.source.y+e.target.y)/2;return`M${e.source.x},${e.source.y} C${e.source.x},${my} ${e.target.x},${my} ${e.target.x},${e.target.y}`;
       })
       .attr('fill','none')
-      .attr('stroke',e=>e.isClusterEdge?'rgba(148,163,184,0.15)':getEdgeStyle(e).color)
-      .attr('stroke-width',e=>e.isClusterEdge?1:getEdgeStyle(e).width)
+      .attr('stroke',e=>{
+        if(e.isClusterEdge) return 'rgba(148,163,184,0.15)';
+        if(isFiltered && e.mediaClass !== cableFilter) return 'rgba(148,163,184,0.03)';
+        return getEdgeStyle(e).color;
+      })
+      .attr('stroke-width',e=>{
+        if(e.isClusterEdge) return 1;
+        if(isFiltered && e.mediaClass !== cableFilter) return 0.3;
+        if(isFiltered && e.mediaClass === cableFilter) return getEdgeStyle(e).width + 0.5;
+        return getEdgeStyle(e).width;
+      })
       .attr('stroke-dasharray',e=>e.isClusterEdge?'4,4':getEdgeStyle(e).dash)
-      .attr('stroke-opacity',e=>e.isClusterEdge?0.6:getEdgeStyle(e).opacity);
+      .attr('stroke-opacity',e=>{
+        if(e.isClusterEdge) return 0.6;
+        if(isFiltered && e.mediaClass !== cableFilter) return 0.15;
+        if(isFiltered && e.mediaClass === cableFilter) return 1;
+        return getEdgeStyle(e).opacity;
+      });
 
     // Nodes
     const nodeG=g.append('g').attr('class','tp-nodes');
     const nd=Array.from(positions.values());
     const node=nodeG.selectAll('g').data(nd,d=>d.id).join('g').attr('transform',d=>`translate(${d.x},${d.y})`).attr('cursor','pointer');
 
-    // ── Cluster nodes: special rendering ──
     const clusterG = node.filter(d => d.isCluster);
     const regularG = node.filter(d => !d.isCluster);
 
-    // Cluster: rounded rect background
+    // Cluster rendering
     clusterG.append('rect')
       .attr('x', -18).attr('y', -14).attr('width', 36).attr('height', 28)
       .attr('rx', 8).attr('ry', 8)
@@ -339,87 +348,57 @@ export default function TopologyPage() {
       .attr('stroke-width', 1.5)
       .attr('stroke-dasharray', '3,2');
 
-    // Cluster: stacked device icon (3 small circles)
     clusterG.each(function(d) {
       const el = d3.select(this);
       const ss = d.clusterStatusSummary || {};
-      // Mini status dots
       el.append('circle').attr('cx', -5).attr('cy', -2).attr('r', 4)
         .attr('fill', ss.up > 0 ? '#22c55e20' : '#6b728020')
-        .attr('stroke', ss.up > 0 ? '#22c55e' : '#6b7280')
-        .attr('stroke-width', 1);
+        .attr('stroke', ss.up > 0 ? '#22c55e' : '#6b7280').attr('stroke-width', 1);
       el.append('circle').attr('cx', 5).attr('cy', -2).attr('r', 4)
         .attr('fill', ss.down > 0 ? '#ef444420' : '#6b728020')
-        .attr('stroke', ss.down > 0 ? '#ef4444' : '#6b7280')
-        .attr('stroke-width', 1);
+        .attr('stroke', ss.down > 0 ? '#ef4444' : '#6b7280').attr('stroke-width', 1);
     });
 
-    // Cluster: count label below
-    clusterG.append('text')
-      .attr('y', 24).attr('text-anchor', 'middle')
-      .attr('font-size', 9).attr('font-weight', 600)
-      .attr('fill', 'rgba(148,163,184,0.6)')
+    clusterG.append('text').attr('y', 24).attr('text-anchor', 'middle')
+      .attr('font-size', 9).attr('font-weight', 600).attr('fill', 'rgba(148,163,184,0.6)')
       .text(d => `${d.clusterCount} devices`);
 
-    // Cluster: expand hint
-    clusterG.append('text')
-      .attr('y', 35).attr('text-anchor', 'middle')
-      .attr('font-size', 7)
-      .attr('fill', 'rgba(148,163,184,0.35)')
-      .text('click to expand');
+    clusterG.append('text').attr('y', 35).attr('text-anchor', 'middle')
+      .attr('font-size', 7).attr('fill', 'rgba(148,163,184,0.35)').text('click to expand');
 
-    // Cluster click → expand
-    clusterG.on('click', (ev, d) => {
-      ev.stopPropagation();
-      if (d.clusterParentId) toggleCluster(d.clusterParentId);
-    });
+    clusterG.on('click', (ev, d) => { ev.stopPropagation(); if (d.clusterParentId) toggleCluster(d.clusterParentId); });
 
-    // ── Regular nodes ──
-    // Status ring
+    // Regular node rendering
     regularG.append('circle').attr('class','node-ring').attr('r',d=>d.radius+3).attr('fill','none')
       .attr('stroke',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).color)
       .attr('stroke-width',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).width)
       .attr('stroke-dasharray',d=>(STATUS_CFG[d.status]||STATUS_CFG.unknown).dash)
       .attr('stroke-opacity',0.5);
 
-    // Body — device type + vendor color
     regularG.append('circle').attr('class','node-body').attr('r',d=>d.radius)
       .attr('fill',d=>{const c=getDeviceColor(d.type,d.make);return d.tier<=1?c+'30':c+'1A';})
       .attr('stroke',d=>getDeviceColor(d.type,d.make))
       .attr('stroke-width',d=>d.tier<=1?2.5:1.5);
 
-    // Type abbr
     regularG.filter(d=>d.radius>=10).append('text').attr('text-anchor','middle').attr('dominant-baseline','central')
       .attr('font-size',d=>Math.max(7,d.radius*0.55)).attr('font-weight',700)
       .attr('fill',d=>getDeviceColor(d.type,d.make)).attr('pointer-events','none')
       .text(d=>TYPE_ABBR[d.type]||'?');
 
-    // Name label (tier 0-2)
     regularG.filter(d=>d.tier<=2).append('text').attr('y',d=>d.radius+11).attr('text-anchor','middle')
       .attr('font-size',d=>d.tier<=1?9:7).attr('fill','rgba(148,163,184,0.55)').attr('pointer-events','none')
       .text(d=>{const n=d.name||'';const m=d.tier<=1?20:14;return n.length>m?n.slice(0,m-1)+'…':n;});
 
-    // Vendor badge (tier 0-1)
     regularG.filter(d=>d.tier<=1&&d.make).append('text').attr('y',d=>d.radius+22).attr('text-anchor','middle')
       .attr('font-size',7).attr('fill',d=>getDeviceColor(d.type,d.make)+'80')
       .attr('font-weight',500).attr('pointer-events','none').text(d=>d.make);
 
-    // ── Regular node click ──
-    regularG.on('click',(ev,d)=>{
-      ev.stopPropagation();
-      // If this is a gateway with an expanded cluster, allow collapsing via double-click
-      setSelected(prev=>prev?.id===d.id?null:d);
-    });
+    regularG.on('click',(ev,d)=>{ ev.stopPropagation(); setSelected(prev=>prev?.id===d.id?null:d); });
+    regularG.on('dblclick',(ev,d)=>{ ev.stopPropagation(); if(expandedClusters.has(d.id)) toggleCluster(d.id); });
 
-    // Double-click on gateway node → collapse its expanded cluster
-    regularG.on('dblclick',(ev,d)=>{
-      ev.stopPropagation();
-      if(expandedClusters.has(d.id)) toggleCluster(d.id);
-    });
-
-    // ── Hover (both regular and cluster) ──
+    // Hover
     node.on('mouseenter',(ev,d)=>{
-      if(d.isCluster) return; // Skip hover effects for cluster nodes
+      if(d.isCluster) return;
       const nId=d.id;const conn=new Set([nId]);const nb=adj.get(nId);if(nb)for(const x of nb)conn.add(x);
       linkG.selectAll('path')
         .attr('stroke',e=>{
@@ -438,17 +417,30 @@ export default function TopologyPage() {
     });
     node.on('mouseleave',()=>{
       linkG.selectAll('path')
-        .attr('stroke',e=>e.isClusterEdge?'rgba(148,163,184,0.15)':getEdgeStyle(e).color)
-        .attr('stroke-width',e=>e.isClusterEdge?1:getEdgeStyle(e).width)
-        .attr('stroke-opacity',e=>e.isClusterEdge?0.6:getEdgeStyle(e).opacity);
+        .attr('stroke',e=>{
+          if(e.isClusterEdge) return 'rgba(148,163,184,0.15)';
+          if(isFiltered && e.mediaClass !== cableFilter) return 'rgba(148,163,184,0.03)';
+          return getEdgeStyle(e).color;
+        })
+        .attr('stroke-width',e=>{
+          if(e.isClusterEdge) return 1;
+          if(isFiltered && e.mediaClass !== cableFilter) return 0.3;
+          if(isFiltered && e.mediaClass === cableFilter) return getEdgeStyle(e).width + 0.5;
+          return getEdgeStyle(e).width;
+        })
+        .attr('stroke-opacity',e=>{
+          if(e.isClusterEdge) return 0.6;
+          if(isFiltered && e.mediaClass !== cableFilter) return 0.15;
+          if(isFiltered && e.mediaClass === cableFilter) return 1;
+          return getEdgeStyle(e).opacity;
+        });
       nodeG.selectAll('g').attr('opacity',1);
     });
 
     svg.on('click',()=>{setSelected(null);setHighlightedId(null);});
 
-    // Auto-fit
     requestAnimationFrame(()=>{const pad=40;const s=Math.min((w-pad*2)/canvasWidth,(h-pad*2)/canvasHeight,1.0);svg.call(zoom.transform,d3.zoomIdentity.translate((w-canvasWidth*s)/2,(h-canvasHeight*s)/2+pad/2).scale(s));});
-  },[data,layout,viewDims,expandedClusters,toggleCluster]);
+  },[data,layout,viewDims,expandedClusters,toggleCluster,cableFilter,rawNodeMap]);
 
   // Highlight effect
   useEffect(()=>{
@@ -463,7 +455,6 @@ export default function TopologyPage() {
     });
   },[highlightedId,layout]);
 
-  // Legend data — devices grouped by type+vendor
   const legendGroups=useMemo(()=>{
     if(!data?.nodes)return[];const gm=new Map();
     for(const n of data.nodes){let key,label,so;
@@ -475,21 +466,12 @@ export default function TopologyPage() {
     return Array.from(gm.values()).sort((a,b)=>a.sortOrder-b.sortOrder);
   },[data]);
 
-  // Edge media counts for legend
   const edgeMediaCounts=useMemo(()=>{
     if(!data?.edges)return{};const c={fiber:0,copper:0,tunnel:0,unknown:0};
-    for(const e of data.edges){
-      if(e.mediaType==='fiber')c.fiber++;
-      else if(e.mediaType==='copper')c.copper++;
-      else c.unknown++;
-    }
-    if(data.nodes){const nm=new Map();for(const n of data.nodes)nm.set(n.id,n);
-      for(const e of data.edges){const s=nm.get(e.source),t=nm.get(e.target);
-        if(s&&t&&TUNNEL_TYPES.has(s.type)&&TUNNEL_TYPES.has(t.type)){c.tunnel++;c.unknown=Math.max(0,c.unknown-1);}}}
+    for(const e of data.edges){ c[classifyEdgeMedia(e, rawNodeMap)]++; }
     return c;
-  },[data]);
+  },[data,rawNodeMap]);
 
-  // Subnet cluster summary for header
   const clusterSummary = useMemo(() => {
     if (!data?.subnetClusters) return null;
     const total = data.subnetClusters.reduce((s, c) => s + c.count, 0);
@@ -497,7 +479,6 @@ export default function TopologyPage() {
     return { clusters: data.subnetClusters.length, devices: total };
   }, [data]);
 
-  // Neighbors for inspector
   const neighbors=[];
   if(selected&&data&&!selected.isCluster){const nIds=new Set();for(const e of data.edges){if(e.source===selected.id)nIds.add(e.target);if(e.target===selected.id)nIds.add(e.source);}for(const n of data.nodes)if(nIds.has(n.id))neighbors.push(n);}
 
@@ -508,12 +489,18 @@ export default function TopologyPage() {
           <div>
             <h1 className="tp-title">Network Topology</h1>
             <p className="tp-subtitle">
-              {data?`${data.nodes.length} devices · ${data.edges.length} connections`:'Loading…'}
-              {clusterSummary && ` · ${clusterSummary.devices} endpoints in ${clusterSummary.clusters} subnet clusters`}
+              {data?`${data.nodes.length} devices · ${data.edges.length} connections`:'Loading\u2026'}
+              {clusterSummary ? ` · ${clusterSummary.devices} endpoints in ${clusterSummary.clusters} subnet clusters` : ''}
             </p>
           </div>
           <div className="tp-header-actions">
-            <div className="tp-category-toggle"><button onClick={()=>setCategory('network')} className={`tp-cat-btn ${category==='network'?'tp-cat-btn--active':''}`}>Network</button><button onClick={()=>setCategory('all')} className={`tp-cat-btn ${category==='all'?'tp-cat-btn--active':''}`}>All Devices</button></div>
+            <div className="tp-category-toggle">
+              <button onClick={()=>setCategory('network')} className={`tp-cat-btn ${category==='network'?'tp-cat-btn--active':''}`}>Network</button>
+              <button onClick={()=>setCategory('all')} className={`tp-cat-btn ${category==='all'?'tp-cat-btn--active':''}`}>All Devices</button>
+            </div>
+            <select value={cableFilter} onChange={e=>setCableFilter(e.target.value)} className="tp-cable-select" title="Filter by link type">
+              {CABLE_FILTER_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
             {sites.length>0&&<select value={selectedSite} onChange={e=>setSelectedSite(e.target.value)} className="tp-site-select"><option value="">All Sites</option>{sites.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select>}
             <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} style={{color:'var(--color-vemio-text-muted)'}}/></button>
           </div>
@@ -523,7 +510,7 @@ export default function TopologyPage() {
           {data&&data.nodes.length>0&&(
             <div className="tp-search-bar">
               <Search size={14} className="tp-search-icon"/>
-              <input type="text" placeholder="Locate device by name, IP, serial, model…" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="tp-search-input"
+              <input type="text" placeholder="Locate device by name, IP, serial, model\u2026" value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} className="tp-search-input"
                 onKeyDown={e=>{if(e.key==='Enter'&&searchResults.length>0)locateDevice(searchResults[0].id);if(e.key==='Escape'){setSearchQuery('');setSearchResults([]);setHighlightedId(null);}}}/>
               {searchQuery&&<button className="tp-search-clear" onClick={()=>{setSearchQuery('');setSearchResults([]);setHighlightedId(null);}}><X size={12}/></button>}
               {searchResults.length>0&&(
@@ -532,21 +519,20 @@ export default function TopologyPage() {
                     <button key={r.id} className="tp-search-result" onClick={()=>locateDevice(r.id)}>
                       <span className="tp-sr-dot" style={{background:getDeviceColor(r.type,r.make)}}/>
                       <span className="tp-sr-name">{r.name}</span>
-                      <span className="tp-sr-meta">{r.ipAddress||`${TYPE_ABBR[r.type]}${r.make?' · '+r.make:''}`}</span>
+                      <span className="tp-sr-meta">{r.ipAddress||`${TYPE_ABBR[r.type]}${r.make?' \u00b7 '+r.make:''}`}</span>
                       <Crosshair size={12} className="tp-sr-locate"/>
                     </button>))}
                 </div>)}
             </div>)}
 
           <div ref={wrapRef} className="tp-graph-wrap">
-            {loading&&!data&&<div className="tp-loading"><div className="tp-loading-spinner"/><span>Building topology graph…</span></div>}
+            {loading&&!data&&<div className="tp-loading"><div className="tp-loading-spinner"/><span>Building topology graph\u2026</span></div>}
             {error&&<div className="tp-empty"><Network className="w-10 h-10" style={{color:'var(--color-vemio-text-dim)',marginBottom:8}}/><p>{error}</p><button onClick={fetchTopology} className="tp-retry-btn">Retry</button></div>}
             {!loading&&data&&!data.nodes.length&&<div className="tp-empty"><Network className="w-10 h-10" style={{color:'var(--color-vemio-text-dim)',marginBottom:8}}/><p>No topology data available yet</p></div>}
             <svg ref={svgRef} width={viewDims.w} height={viewDims.h} style={{display:data&&data.nodes.length?'block':'none'}}/>
             {data&&data.nodes.length>0&&(<div className="tp-zoom-controls"><button onClick={handleZoomIn} className="tp-zoom-btn" title="Zoom in"><Plus className="w-3.5 h-3.5"/></button><button onClick={handleZoomOut} className="tp-zoom-btn" title="Zoom out"><Minus className="w-3.5 h-3.5"/></button><button onClick={handleFitView} className="tp-zoom-btn" title="Fit to view"><Maximize2 className="w-3.5 h-3.5"/></button></div>)}
           </div>
 
-          {/* ═══════════ LEGEND ═══════════ */}
           {data&&data.nodes.length>0&&(
             <div className="tp-legend">
               <div className="tp-legend-section">
@@ -573,14 +559,13 @@ export default function TopologyPage() {
             </div>)}
         </motion.div>
 
-        {/* ═══════════ INSPECTOR ═══════════ */}
         <AnimatePresence>
           {selected&&!selected.isCluster&&(
             <motion.div key="inspector" initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} exit={{opacity:0,x:24}} transition={{duration:0.25}} className="tp-inspector">
               <div className="tp-insp-header"><h3 className="tp-insp-title">{selected.name}</h3><button onClick={()=>setSelected(null)} className="tp-insp-close"><X className="w-4 h-4"/></button></div>
               <div className="tp-insp-badges">
                 <span className="tp-insp-badge" style={{background:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color+'18',color:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color}}><span className="tp-insp-dot" style={{background:(STATUS_CFG[selected.status]||STATUS_CFG.unknown).color}}/>{(STATUS_CFG[selected.status]||STATUS_CFG.unknown).label}</span>
-                <span className="tp-insp-badge" style={{background:getDeviceColor(selected.type,selected.make)+'18',color:getDeviceColor(selected.type,selected.make)}}>{TYPE_ABBR[selected.type]||'?'} · {selected.make||(selected.type||'').replace(/_/g,' ')}</span>
+                <span className="tp-insp-badge" style={{background:getDeviceColor(selected.type,selected.make)+'18',color:getDeviceColor(selected.type,selected.make)}}>{TYPE_ABBR[selected.type]||'?'} {'\u00b7'} {selected.make||(selected.type||'').replace(/_/g,' ')}</span>
               </div>
               <div className="tp-insp-fields">
                 <Field label="Type" value={selected.type?.replace(/_/g,' ')}/><Field label="IP Address" value={selected.ipAddress} mono/>
@@ -591,13 +576,12 @@ export default function TopologyPage() {
               {neighbors.length>0&&(
                 <div className="tp-insp-neighbors"><span className="tp-insp-nbr-title">Connected ({neighbors.length})</span>
                   <div className="tp-insp-nbr-list">
-                    {neighbors.slice(0,30).map(n=>(<button key={n.id} className="tp-insp-nbr-item" onClick={()=>{setSelected(data.nodes.find(nd=>nd.id===n.id)||n);locateDevice(n.id);}}><span className="tp-insp-dot" style={{background:getDeviceColor(n.type,n.make),width:6,height:6}}/><span className="tp-insp-nbr-name">{n.name}</span><span className="tp-insp-nbr-type" style={{color:getDeviceColor(n.type,n.make)}}>{TYPE_ABBR[n.type]}{n.make?' · '+n.make:''}</span></button>))}
+                    {neighbors.slice(0,30).map(n=>(<button key={n.id} className="tp-insp-nbr-item" onClick={()=>{setSelected(data.nodes.find(nd=>nd.id===n.id)||n);locateDevice(n.id);}}><span className="tp-insp-dot" style={{background:getDeviceColor(n.type,n.make),width:6,height:6}}/><span className="tp-insp-nbr-name">{n.name}</span><span className="tp-insp-nbr-type" style={{color:getDeviceColor(n.type,n.make)}}>{TYPE_ABBR[n.type]}{n.make?' \u00b7 '+n.make:''}</span></button>))}
                     {neighbors.length>30&&<span className="tp-insp-nbr-more">+{neighbors.length-30} more</span>}
                   </div>
                 </div>)}
             </motion.div>)}
 
-          {/* ═══════════ CLUSTER INSPECTOR ═══════════ */}
           {selected&&selected.isCluster&&(
             <motion.div key="cluster-inspector" initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} exit={{opacity:0,x:24}} transition={{duration:0.25}} className="tp-inspector">
               <div className="tp-insp-header">
@@ -642,6 +626,7 @@ export default function TopologyPage() {
         .tp-category-toggle{display:flex;border-radius:8px;overflow:hidden;border:1px solid var(--color-vemio-border)}
         .tp-cat-btn{padding:7px 12px;font-size:11px;font-weight:500;cursor:pointer;border:none;background:var(--color-vemio-surface);color:var(--color-vemio-text-dim);transition:background .15s;white-space:nowrap}
         .tp-cat-btn:first-child{border-right:1px solid var(--color-vemio-border)}.tp-cat-btn--active{background:rgba(245,158,11,.12);color:var(--color-vemio-amber)}
+        .tp-cable-select{padding:8px 12px;border-radius:8px;font-size:13px;background:var(--color-vemio-surface);border:1px solid var(--color-vemio-border);color:var(--color-vemio-text);outline:none;cursor:pointer;min-width:100px}
         .tp-site-select{padding:8px 12px;border-radius:8px;font-size:13px;background:var(--color-vemio-surface);border:1px solid var(--color-vemio-border);color:var(--color-vemio-text);outline:none;cursor:pointer;min-width:140px}
         .tp-refresh-btn{padding:8px;border-radius:8px;border:1px solid var(--color-vemio-border);background:var(--color-vemio-surface);cursor:pointer;display:flex;align-items:center;transition:background .15s}
         .tp-refresh-btn:hover{background:var(--color-vemio-surface-raised)}

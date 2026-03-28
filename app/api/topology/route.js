@@ -1,5 +1,5 @@
 /**
- * VEMIO™ — Network Topology API
+ * VEMIO™ | Network Topology API
  * GET /api/topology
  *
  * Returns { nodes, edges } for the tenant's device neighbor graph.

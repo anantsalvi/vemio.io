@@ -32,7 +32,7 @@ export const metadata = {
     locale: 'en_IN',
     url: SITE_URL,
     siteName: 'VEMIO™',
-    title: 'VEMIO™ — Managed Network Intelligence Platform',
+    title: 'VEMIO™ | Managed Network Intelligence Platform',
     description:
       'Real-time infrastructure monitoring, Business Continuity Scoring, and automated alerting for enterprise networks. Powered by Vinay Enterprises.',
     images: [
@@ -40,14 +40,14 @@ export const metadata = {
         url: `${SITE_URL}/api/og`,
         width: 1200,
         height: 630,
-        alt: 'VEMIO™ — Managed Network Intelligence Platform',
+        alt: 'VEMIO™ | Managed Network Intelligence Platform',
         type: 'image/png',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'VEMIO™ — Managed Network Intelligence Platform',
+    title: 'VEMIO™ | Managed Network Intelligence Platform',
     description:
       'Real-time infrastructure monitoring and Business Continuity Scoring for enterprise networks.',
     images: [`${SITE_URL}/api/og`],

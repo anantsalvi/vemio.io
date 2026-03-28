@@ -1,4 +1,4 @@
-# VEMIO™ — Network Intelligence Dashboard
+# VEMIO™ | Network Intelligence Dashboard
 
 Managed network intelligence platform by **Vinay Enterprises**.
 

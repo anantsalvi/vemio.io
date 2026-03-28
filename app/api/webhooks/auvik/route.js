@@ -201,6 +201,7 @@ async function processDeviceStatusChange(data, tenantId, newStatus, timestamp) {
          current_status = $1,
          last_seen_at = $2,
          name = COALESCE(NULLIF($3, ''), name),
+         last_status_change_at = CASE WHEN current_status != $1 THEN NOW() ELSE last_status_change_at END,
          updated_at = NOW()
        WHERE auvik_device_id = $4
          AND tenant_id = $5
@@ -273,7 +274,14 @@ export async function POST(request) {
     const networkId = data.networkId || null;
 
     // Resolve tenant + site
+    // Resolve tenant + site
     const { tenantId, siteId } = await resolveMapping(networkId);
+
+    // Skip unmapped tenants entirely (Auvik system alerts, internal events)
+    if (!tenantId) {
+      console.log(`[VEMIO Webhook] Ignoring unmapped networkId: ${networkId} (${data.deviceName || 'unknown'})`);
+      return Response.json({ status: 'ignored', reason: 'unmapped_tenant' }, { status: 200 });
+    }
 
     // Log raw event (includes site_id column)
     const insertResult = await queryRaw(
@@ -291,9 +299,7 @@ export async function POST(request) {
     let errorMessage = null;
 
     try {
-      if (!tenantId) {
-        errorMessage = `No tenant mapping for networkId: ${networkId}`;
-      } else if (eventType === 'device.status.changed') {
+      if (eventType === 'device.status.changed') {
         // Resolve actual up/down status from alertStatusString + alertName
         const newStatus = resolveDeviceStatus(data.status, data.alertName);
 

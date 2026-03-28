@@ -3,27 +3,28 @@
  * 
  * POST /api/webhooks/auvik
  * 
- * Receives push events from Auvik, validates HMAC-SHA256 signature,
- * logs raw payload to webhook_events, and processes device state changes.
+ * Receives push events from Auvik, validates auth,
+ * logs raw payload to webhook_events, and processes device status changes.
  * 
- * Auvik webhook payload format:
+ * Auvik sends raw alert payloads, but we use a JSONata transformation
+ * in the Auvik webhook config to reshape into this format:
+ * 
  * {
  *   "eventType": "device.status.changed",
  *   "data": {
- *     "deviceId": "...",
- *     "deviceName": "...",
- *     "status": "up|down|degraded",
- *     "previousStatus": "...",
- *     "networkId": "...",
- *     ...
+ *     "deviceId": "MTI3Mzg5...",        // base64, = auvik_device_id
+ *     "deviceName": "Core-Switch-01",
+ *     "status": "Triggered" | "Cleared", // alertStatusString from Auvik
+ *     "networkId": "1338754018033971966", // companyId from Auvik = Auvik tenant ID
+ *     "alertName": "Firewall is online (webhook)",
+ *     "alertSeverity": 1
  *   },
- *   "timestamp": "2026-03-24T12:00:00Z"
+ *   "timestamp": "2026-03-28T12:00:00.000Z"
  * }
  * 
  * Security:
- * - HMAC-SHA256 signature validation (X-Auvik-Signature header)
- * - Rate limiting via Vercel Edge Config (future)
- * - IP allowlisting (future, when Auvik publishes webhook IPs)
+ * - Auvik Header auth (shared secret sent as header value)
+ * - HMAC-SHA256 fallback (future-proofing)
  */
 
 import crypto from 'crypto';
@@ -31,125 +32,177 @@ import { queryRaw, withTransaction } from '@/lib/db';
 
 const WEBHOOK_SECRET = process.env.AUVIK_WEBHOOK_SECRET;
 
+// ─── Auvik tenant ID → VEMIO tenant slug mapping ────────────────────────
+// Maps companyId (arrives as data.networkId via JSONata transform) to slug.
+// Fast path — avoids DB lookup on every webhook hit.
+const AUVIK_TENANT_MAP = {
+  '1337325442462364413': 'vinay-hq',
+  '1338754018033971966': 'aia-engineering',
+};
+
+
 /**
- * Verify HMAC-SHA256 signature from Auvik.
+ * Verify webhook auth from Auvik.
+ * Supports Header auth (shared secret) and HMAC-SHA256 fallback.
  */
-function verifySignature(payload, signature) {
+function verifySignature(payload, request) {
   if (!WEBHOOK_SECRET) {
     console.warn('[VEMIO Webhook] AUVIK_WEBHOOK_SECRET not set — skipping validation');
     return true;
   }
 
-  if (!signature) {
-    return false;
+  // Collect all candidate header values
+  const candidates = [
+    request.headers.get('x-auvik-signature'),
+    request.headers.get('auvik_webhook_secret'),
+    request.headers.get('x-auvik-secret'),
+    request.headers.get('authorization')?.replace(/^Bearer\s+/i, ''),
+  ].filter(Boolean);
+
+  // Direct secret comparison (Auvik Header auth mode)
+  for (const candidate of candidates) {
+    try {
+      const sigBuf = Buffer.from(candidate, 'utf8');
+      const secretBuf = Buffer.from(WEBHOOK_SECRET, 'utf8');
+      if (sigBuf.length === secretBuf.length && crypto.timingSafeEqual(sigBuf, secretBuf)) {
+        return true;
+      }
+    } catch {}
   }
 
-  // First try direct comparison (Auvik Header auth sends the secret as-is)
-  try {
-    const sigBuf = Buffer.from(signature, 'utf8');
-    const secretBuf = Buffer.from(WEBHOOK_SECRET, 'utf8');
-    if (sigBuf.length === secretBuf.length && crypto.timingSafeEqual(sigBuf, secretBuf)) {
-      return true;
-    }
-  } catch {}
-
-  // Fall back to HMAC-SHA256 verification (in case Auvik adds HMAC support later)
-  try {
-    const expected = crypto
-      .createHmac('sha256', WEBHOOK_SECRET)
-      .update(payload, 'utf8')
-      .digest('hex');
-    return crypto.timingSafeEqual(
-      Buffer.from(signature, 'hex'),
-      Buffer.from(expected, 'hex')
-    );
-  } catch {
-    return false;
+  // HMAC-SHA256 fallback
+  const hmacHeader = request.headers.get('x-hub-signature-256')?.replace('sha256=', '');
+  if (hmacHeader) {
+    try {
+      const expected = crypto
+        .createHmac('sha256', WEBHOOK_SECRET)
+        .update(payload, 'utf8')
+        .digest('hex');
+      return crypto.timingSafeEqual(
+        Buffer.from(hmacHeader, 'hex'),
+        Buffer.from(expected, 'hex')
+      );
+    } catch {}
   }
+
+  return false;
 }
 
 
 /**
- * Resolve Auvik networkId → VEMIO tenant + site.
+ * Resolve Auvik companyId → VEMIO tenant_id (UUID).
+ * The companyId arrives as data.networkId via JSONata transform.
  */
-async function resolveMapping(networkId) {
-  if (!networkId) return { tenantId: null, siteId: null };
+async function resolveTenant(networkId) {
+  if (!networkId) return null;
 
-  // Check site-level mapping first (more specific)
-  const siteResult = await queryRaw(
-    `SELECT s.id AS site_id, s.tenant_id 
-     FROM sites s 
-     WHERE s.auvik_network_id = $1 AND s.is_active = TRUE
-     LIMIT 1`,
-    [networkId]
-  );
-
-  if (siteResult.rows.length > 0) {
-    return {
-      tenantId: siteResult.rows[0].tenant_id,
-      siteId: siteResult.rows[0].site_id,
-    };
+  // Fast path: in-memory map → slug → DB lookup for UUID
+  const slug = AUVIK_TENANT_MAP[networkId];
+  if (slug) {
+    const result = await queryRaw(
+      `SELECT id FROM tenants WHERE slug = $1 AND is_active = TRUE LIMIT 1`,
+      [slug]
+    );
+    if (result.rows.length > 0) return result.rows[0].id;
   }
 
-  // Fall back to tenant-level mapping
-  const tenantResult = await queryRaw(
-    `SELECT id AS tenant_id 
-     FROM tenants 
-     WHERE $1 = ANY(auvik_network_ids) AND is_active = TRUE
-     LIMIT 1`,
+  // Slow path: search auvik_network_ids array
+  const result = await queryRaw(
+    `SELECT id FROM tenants WHERE $1 = ANY(auvik_network_ids) AND is_active = TRUE LIMIT 1`,
     [networkId]
   );
+  return result.rows.length > 0 ? result.rows[0].id : null;
+}
 
-  if (tenantResult.rows.length > 0) {
-    return {
-      tenantId: tenantResult.rows[0].tenant_id,
-      siteId: null,
-    };
+
+/**
+ * Determine new device status from the transformed webhook payload.
+ * 
+ * data.status is alertStatusString: "Triggered" or "Cleared"
+ * data.alertName tells us what kind of alert it is.
+ * 
+ * For "Device is offline" / "X went offline" alerts:
+ *   Triggered → device went DOWN
+ *   Cleared   → device came back UP
+ * 
+ * For "Device is online" / "X is online" alerts:
+ *   Triggered → device came UP
+ *   Cleared   → device went DOWN (unusual, but handle it)
+ */
+function resolveDeviceStatus(alertStatusString, alertName) {
+  const isTriggered = alertStatusString === 'Triggered';
+  const isCleared = alertStatusString === 'Cleared';
+
+  if (!isTriggered && !isCleared) return null;
+
+  const name = (alertName || '').toLowerCase();
+
+  // Detect whether this is an "is online" alert (inverse logic)
+  const isOnlineAlert = name.includes('is online') || name.includes('went online');
+  const isOfflineAlert = name.includes('is offline') || name.includes('went offline');
+
+  if (isOnlineAlert) {
+    // "Device is online" alert: Triggered = UP, Cleared = DOWN
+    return isTriggered ? 'up' : 'down';
   }
 
-  return { tenantId: null, siteId: null };
+  if (isOfflineAlert) {
+    // "Device is offline" alert: Triggered = DOWN, Cleared = UP
+    return isTriggered ? 'down' : 'up';
+  }
+
+  // Broader patterns: "Online Status", "status change", etc.
+  // Default to offline-alert logic (Triggered = down) since
+  // Auvik's most common device status alert fires on going offline.
+  if (name.includes('online') || name.includes('status') || name.includes('offline')) {
+    return isTriggered ? 'down' : 'up';
+  }
+
+  // Not a device status alert — return null to skip processing
+  return null;
 }
 
 
 /**
  * Process a device status change event.
  * Updates device current_status and writes to device_status_history.
+ * UPDATE only — does not create new device records from webhooks.
  */
-async function processDeviceStatusChange(data, tenantId, siteId) {
-  const { deviceId, deviceName, status, previousStatus, networkId } = data;
+async function processDeviceStatusChange(data, tenantId, newStatus, timestamp) {
+  const { deviceId, deviceName } = data;
+  const eventDate = timestamp ? new Date(timestamp) : new Date();
 
   await withTransaction(async (client) => {
-    // Upsert device record
-    await client.query(
-      `INSERT INTO devices (
-         auvik_device_id, tenant_id, site_id, name, current_status, last_seen_at
-       ) VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (auvik_device_id) DO UPDATE SET
-         current_status = $5,
-         last_seen_at = NOW(),
-         name = COALESCE(NULLIF($4, ''), devices.name),
-         site_id = COALESCE($3, devices.site_id),
-         updated_at = NOW()`,
-      [deviceId, tenantId, siteId, deviceName || 'Unknown Device', status || 'unknown']
+    // Update existing device only (skip retired devices)
+    const updateResult = await client.query(
+      `UPDATE devices SET
+         current_status = $1,
+         last_seen_at = $2,
+         name = COALESCE(NULLIF($3, ''), name),
+         updated_at = NOW()
+       WHERE auvik_device_id = $4
+         AND tenant_id = $5
+         AND is_retired = false
+       RETURNING id, name`,
+      [newStatus, eventDate, deviceName || null, deviceId, tenantId]
     );
 
-    // Write status history entry
-    if (tenantId) {
-      // Get device UUID from auvik_device_id
-      const deviceResult = await client.query(
-        'SELECT id FROM devices WHERE auvik_device_id = $1',
-        [deviceId]
-      );
-
-      if (deviceResult.rows.length > 0) {
-        await client.query(
-          `INSERT INTO device_status_history (
-             device_id, tenant_id, status, changed_at, source
-           ) VALUES ($1, $2, $3, NOW(), 'webhook')`,
-          [deviceResult.rows[0].id, tenantId, status || 'unknown']
-        );
-      }
+    if (updateResult.rows.length === 0) {
+      console.log(`[VEMIO Webhook] Device not found or retired: ${deviceId}`);
+      return;
     }
+
+    const device = updateResult.rows[0];
+
+    // Write status history entry
+    await client.query(
+      `INSERT INTO device_status_history (
+         device_id, tenant_id, status, changed_at, source
+       ) VALUES ($1, $2, $3, $4, 'webhook')`,
+      [device.id, tenantId, newStatus, eventDate]
+    );
+
+    console.log(`[VEMIO Webhook] ${device.name} → ${newStatus} (via webhook)`);
   });
 }
 
@@ -164,13 +217,9 @@ export async function POST(request) {
     // Read raw body for signature verification
     const rawBody = await request.text();
 
-    // Verify HMAC signature
-     const signature = request.headers.get('x-auvik-signature')
-      || request.headers.get('auvik_webhook_secret')
-      || request.headers.get('x-hub-signature-256')?.replace('sha256=', '');
-
-    if (WEBHOOK_SECRET && !verifySignature(rawBody, signature)) {
-      console.warn('[VEMIO Webhook] Signature verification failed');
+    // Verify auth
+    if (WEBHOOK_SECRET && !verifySignature(rawBody, request)) {
+      console.warn('[VEMIO Webhook] Auth verification failed');
       return Response.json(
         { error: 'Invalid signature' },
         { status: 401 }
@@ -188,21 +237,29 @@ export async function POST(request) {
       );
     }
 
-    const eventType = payload.eventType || payload.event_type || 'unknown';
-    const data = payload.data || payload;
-    const auvikDeviceId = data.deviceId || data.device_id || null;
-    const networkId = data.networkId || data.network_id || null;
+    // Handle Auvik test connection payload
+    if (payload['my-api-test-field'] === 'my-api-test-value') {
+      console.log('[VEMIO Webhook] Auvik test connection — OK');
+      return Response.json({ received: true, test: true }, { status: 200 });
+    }
 
-    // Resolve tenant + site mapping
-    const { tenantId, siteId } = await resolveMapping(networkId);
+    // Extract from JSONata-transformed payload
+    const eventType = payload.eventType || 'unknown';
+    const data = payload.data || {};
+    const timestamp = payload.timestamp || null;
+    const deviceId = data.deviceId || null;
+    const networkId = data.networkId || null;
 
-    // Log raw event to webhook_events table (always, even if mapping fails)
+    // Resolve tenant
+    const tenantId = await resolveTenant(networkId);
+
+    // Log raw event
     const insertResult = await queryRaw(
       `INSERT INTO webhook_events (
-         source, event_type, auvik_device_id, tenant_id, site_id, raw_payload
-       ) VALUES ('auvik', $1, $2, $3, $4, $5)
+         source, event_type, auvik_device_id, tenant_id, raw_payload
+       ) VALUES ('auvik', $1, $2, $3, $4)
        RETURNING id`,
-      [eventType, auvikDeviceId, tenantId, siteId, JSON.stringify(payload)]
+      [eventType, deviceId, tenantId, JSON.stringify(payload)]
     );
 
     const webhookEventId = insertResult.rows[0].id;
@@ -212,36 +269,30 @@ export async function POST(request) {
     let errorMessage = null;
 
     try {
-      if (tenantId) {
-        switch (eventType) {
-          case 'device.status.changed':
-          case 'device.online':
-          case 'device.offline':
-            await processDeviceStatusChange(data, tenantId, siteId);
-            processed = true;
-            break;
+      if (!tenantId) {
+        errorMessage = `No tenant mapping for networkId: ${networkId}`;
+      } else if (eventType === 'device.status.changed') {
+        // Resolve actual up/down status from alertStatusString + alertName
+        const newStatus = resolveDeviceStatus(data.status, data.alertName);
 
-          case 'alert.triggered':
-          case 'alert.resolved':
-            // Phase 2: alert processing pipeline
-            // For now, just log — the raw_payload is preserved
-            processed = true;
-            break;
-
-          default:
-            // Unknown event type — log but don't fail
-            processed = true;
-            break;
+        if (newStatus) {
+          await processDeviceStatusChange(data, tenantId, newStatus, timestamp);
+          processed = true;
+        } else {
+          // Alert doesn't map to a clear status change
+          errorMessage = `Could not resolve status from: ${data.status} / ${data.alertName}`;
+          processed = true; // Not an error, just not actionable
         }
       } else {
-        errorMessage = `No tenant mapping for networkId: ${networkId}`;
+        // Unknown/future event types — log, don't fail
+        processed = true;
       }
     } catch (err) {
       errorMessage = err.message;
       console.error('[VEMIO Webhook] Processing error:', err);
     }
 
-    // Update webhook_events with processing result
+    // Update webhook_events with result
     await queryRaw(
       `UPDATE webhook_events SET 
          processed = $1, processed_at = NOW(), error_message = $2 
@@ -250,7 +301,10 @@ export async function POST(request) {
     );
 
     const duration = Date.now() - startTime;
-    console.log(`[VEMIO Webhook] ${eventType} | tenant=${tenantId || 'unmapped'} | ${duration}ms`);
+    console.log(
+      `[VEMIO Webhook] ${eventType} | ${data.deviceName || 'unknown'} | ` +
+      `status=${data.status || '?'} | tenant=${tenantId ? 'mapped' : 'unmapped'} | ${duration}ms`
+    );
 
     return Response.json({
       received: true,
@@ -277,7 +331,7 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Auvik-Signature, X-Hub-Signature-256',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Auvik-Signature, X-Auvik-Secret, Authorization',
       'Access-Control-Max-Age': '86400',
     },
   });

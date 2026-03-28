@@ -3,7 +3,8 @@
  * GET /api/topology
  *
  * Returns { nodes, edges } for the tenant's device neighbor graph.
- * Edges now include mediaType (fiber/copper/unknown) from device_ports.
+ * Edges include mediaType (fiber/copper/unknown) from device_ports.
+ * Orphan nodes get subnetParentId via device_interfaces VLAN IP matching.
  *
  * Query params:
  *   site     — filter by site_id
@@ -17,6 +18,34 @@ const NETWORK_TYPES = [
   'firewall', 'core_switch', 'access_switch', 'access_point',
   'router', 'server', 'p2p_link',
 ];
+
+/* ── Subnet helpers ── */
+
+/**
+ * Parse an IP string into a 32-bit integer.
+ * Returns null for non-IPv4 / malformed addresses.
+ */
+function ipToInt(ip) {
+  if (!ip) return null;
+  // Strip CIDR suffix if present
+  const bare = ip.split('/')[0].trim();
+  const parts = bare.split('.');
+  if (parts.length !== 4) return null;
+  let num = 0;
+  for (let i = 0; i < 4; i++) {
+    const octet = parseInt(parts[i], 10);
+    if (isNaN(octet) || octet < 0 || octet > 255) return null;
+    num = (num >>> 0) * 256 + octet;
+  }
+  return num >>> 0;
+}
+
+/**
+ * Return the /24 network address (as integer) for a given IP integer.
+ */
+function subnet24(ipInt) {
+  return (ipInt & 0xFFFFFF00) >>> 0;
+}
 
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
@@ -85,7 +114,6 @@ export const GET = withAuth(async (req, session) => {
     );
 
     // ── Build interface media lookup ──
-    // Map: "deviceAuvikId:interfaceName" → mediaType
     const mediaLookup = new Map();
     try {
       const ifResult = await queryWithTenant(tenantId,
@@ -97,18 +125,20 @@ export const GET = withAuth(async (req, session) => {
         mediaLookup.set(`${row.device_auvik_id}:${row.interface_name}`, row.media_type);
       }
     } catch (err) {
-      // device_ports table might not exist yet — graceful fallback
       console.warn('[VEMIO API] device_ports query failed (table may not exist yet):', err.message);
     }
 
     // ── Resolve edges with media type ──
+    const connectedAuvikIds = new Set();
     const edges = edgesResult.rows
       .filter(e => auvikIdSet.has(e.source_auvik_id) && auvikIdSet.has(e.target_auvik_id))
       .map(e => {
         const srcNode = auvikToNode.get(e.source_auvik_id);
         const tgtNode = auvikToNode.get(e.target_auvik_id);
 
-        // Determine media type from interface data
+        connectedAuvikIds.add(e.source_auvik_id);
+        connectedAuvikIds.add(e.target_auvik_id);
+
         let mediaType = null;
         if (e.source_interface) {
           const srcMedia = mediaLookup.get(`${e.source_auvik_id}:${e.source_interface}`);
@@ -124,25 +154,108 @@ export const GET = withAuth(async (req, session) => {
           target: tgtNode.id,
           sourceInterface: e.source_interface || null,
           targetInterface: e.target_interface || null,
-          mediaType: mediaType, // 'fiber', 'copper', or null (unknown)
+          mediaType,
         };
       });
 
-    // ── Format nodes ──
-    const nodes = nodesResult.rows.map(row => ({
-      id: row.id,
-      auvikDeviceId: row.auvik_device_id,
-      name: row.name,
-      type: row.device_type,
-      status: row.current_status,
-      ipAddress: row.ip_address,
-      make: row.make,
-      model: row.model,
-      serialNumber: row.serial_number,
-      siteName: row.site_name,
-    }));
+    // ── Subnet-based orphan clustering ──
+    // Query VLAN gateway IPs from device_interfaces for firewalls + core switches
+    // Map: /24 subnet → device UUID (the gateway device)
+    const subnetMap = new Map(); // subnet24Int → { deviceId (UUID), deviceName }
+    try {
+      const gwResult = await queryWithTenant(tenantId,
+        `SELECT di.device_id, di.ip_address, d.name, d.device_type, d.auvik_device_id
+         FROM device_interfaces di
+         JOIN devices d ON d.id = di.device_id
+         WHERE d.device_type IN ('firewall', 'core_switch')
+           AND d.is_monitored = true
+           AND d.is_retired = false
+           AND di.ip_address IS NOT NULL`
+      );
+      for (const row of gwResult.rows) {
+        // ip_address is inet type — extract the IP string
+        const ipStr = String(row.ip_address).split('/')[0];
+        const ipInt = ipToInt(ipStr);
+        if (ipInt === null) continue;
+        const sn = subnet24(ipInt);
+        // Prefer core_switch over firewall as subnet parent (closer to endpoints)
+        const existing = subnetMap.get(sn);
+        if (!existing || (row.device_type === 'core_switch' && existing.deviceType !== 'core_switch')) {
+          subnetMap.set(sn, {
+            deviceId: row.device_id,
+            deviceName: row.name,
+            deviceType: row.device_type,
+            auvikDeviceId: row.auvik_device_id,
+            gatewayIp: ipStr,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[VEMIO API] device_interfaces subnet query failed:', err.message);
+    }
 
-    return Response.json({ nodes, edges, category });
+    // ── Format nodes — attach subnetParentId for orphans ──
+    // A node is an "orphan" if it has no edge connections
+    const nodeIdSet = new Set(nodesResult.rows.map(r => r.id));
+    const edgeConnectedIds = new Set();
+    for (const e of edges) {
+      edgeConnectedIds.add(e.source);
+      edgeConnectedIds.add(e.target);
+    }
+
+    const nodes = nodesResult.rows.map(row => {
+      const node = {
+        id: row.id,
+        auvikDeviceId: row.auvik_device_id,
+        name: row.name,
+        type: row.device_type,
+        status: row.current_status,
+        ipAddress: row.ip_address,
+        make: row.make,
+        model: row.model,
+        serialNumber: row.serial_number,
+        siteName: row.site_name,
+      };
+
+      // Only assign subnetParentId to orphans (no edge connections)
+      if (!edgeConnectedIds.has(row.id) && row.ip_address) {
+        const ipInt = ipToInt(String(row.ip_address));
+        if (ipInt !== null) {
+          const sn = subnet24(ipInt);
+          const gw = subnetMap.get(sn);
+          if (gw && gw.deviceId !== row.id && nodeIdSet.has(gw.deviceId)) {
+            node.subnetParentId = gw.deviceId;
+            node.subnetGatewayIp = gw.gatewayIp;
+          }
+        }
+      }
+
+      return node;
+    });
+
+    // ── Build subnet cluster summary for frontend ──
+    // Group orphans by their subnetParentId so frontend can render collapsed groups
+    const subnetClusters = {};
+    for (const n of nodes) {
+      if (n.subnetParentId) {
+        if (!subnetClusters[n.subnetParentId]) {
+          const gw = nodesResult.rows.find(r => r.id === n.subnetParentId);
+          subnetClusters[n.subnetParentId] = {
+            parentId: n.subnetParentId,
+            parentName: gw?.name || 'Unknown Gateway',
+            count: 0,
+          };
+        }
+        subnetClusters[n.subnetParentId].count++;
+      }
+    }
+
+    return Response.json({
+      nodes,
+      edges,
+      category,
+      subnetClusters: Object.values(subnetClusters),
+    });
   } catch (err) {
     console.error('[VEMIO API] Topology query error:', err.message);
     return Response.json({ error: 'Failed to fetch topology data' }, { status: 500 });

@@ -4,6 +4,9 @@
  * 
  * Returns status history and all IP interfaces for a single device.
  * Query params: days (7, 30, 90)
+ * 
+ * Chart data includes synthetic boundary points at period start and now,
+ * so devices with stable status render a line instead of a single dot.
  */
 
 import { withAuth } from '@/lib/auth';
@@ -48,7 +51,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       [deviceId]
     );
 
-    // Get status history entries
+    // Get status history entries within the period
     const historyResult = await queryWithTenant(tenantId,
       `SELECT status, changed_at, source
        FROM device_status_history
@@ -58,23 +61,39 @@ export const GET = withAuth(async (req, session, { params }) => {
       [deviceId]
     );
 
-    // Calculate uptime percentage from history
+    // Get the LAST status change BEFORE the period — tells us what state
+    // the device was in when the period started
+    const priorStatusResult = await queryWithTenant(tenantId,
+      `SELECT status, changed_at
+       FROM device_status_history
+       WHERE device_id = $1
+         AND changed_at <= NOW() - INTERVAL '${days} days'
+       ORDER BY changed_at DESC
+       LIMIT 1`,
+      [deviceId]
+    );
+
     const history = historyResult.rows;
+    const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const now = new Date();
+
+    // Determine status at period start
+    const priorStatus = priorStatusResult.rows[0]?.status
+      || (history.length > 0 ? history[0].status : device.current_status);
+
+    // ── Calculate uptime percentage ──
     let uptimePercent = null;
-
-    if (history.length > 0) {
-      const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const now = new Date();
+    {
       let uptimeMs = 0;
-      let lastStatus = history[0].status;
-      let lastTime = new Date(Math.max(periodStart.getTime(), new Date(history[0].changed_at).getTime()));
+      let lastStatus = priorStatus;
+      let lastTime = periodStart;
 
-      for (let i = 1; i < history.length; i++) {
-        const entryTime = new Date(history[i].changed_at);
+      for (const entry of history) {
+        const entryTime = new Date(entry.changed_at);
         if (lastStatus === 'up') {
           uptimeMs += entryTime.getTime() - lastTime.getTime();
         }
-        lastStatus = history[i].status;
+        lastStatus = entry.status;
         lastTime = entryTime;
       }
 
@@ -87,7 +106,35 @@ export const GET = withAuth(async (req, session, { params }) => {
       uptimePercent = totalMs > 0 ? (uptimeMs / totalMs * 100) : null;
     }
 
-    // Build daily uptime breakdown
+    // ── Build chart-ready history with synthetic boundary points ──
+    // This ensures the chart always has at least 2 points (start + end),
+    // drawing a line instead of a single dot for stable devices.
+    const chartHistory = [];
+
+    // Synthetic start point — status at the beginning of the period
+    chartHistory.push({
+      status: priorStatus,
+      changedAt: periodStart.toISOString(),
+      source: 'synthetic',
+    });
+
+    // Real history entries
+    for (const h of history) {
+      chartHistory.push({
+        status: h.status,
+        changedAt: h.changed_at,
+        source: h.source,
+      });
+    }
+
+    // Synthetic end point — current status at now
+    chartHistory.push({
+      status: device.current_status,
+      changedAt: now.toISOString(),
+      source: 'synthetic',
+    });
+
+    // ── Build daily uptime breakdown ──
     const dailyUptime = [];
     for (let d = days - 1; d >= 0; d--) {
       const dayStart = new Date();
@@ -139,11 +186,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         source: row.source,
         updatedAt: row.updated_at,
       })),
-      history: history.map(h => ({
-        status: h.status,
-        changedAt: h.changed_at,
-        source: h.source,
-      })),
+      history: chartHistory,
       uptime: {
         percent: uptimePercent !== null ? Math.round(uptimePercent * 100) / 100 : null,
         days,

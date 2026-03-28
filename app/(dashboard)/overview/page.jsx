@@ -82,13 +82,13 @@ export default function OverviewPage() {
 
       {/* ── Row 2: Uptime Trend + Recent Events ── */}
       <div className="overview-row-2">
-        <motion.div variants={fadeUp} className="overview-uptime">
+        <motion.div variants={fadeUp}>
           <UptimeChart
             data={data?.uptimeTrend}
             devices={data?.devices}
           />
         </motion.div>
-        <motion.div variants={fadeUp} className="overview-events">
+        <motion.div variants={fadeUp}>
           <RecentEvents events={data?.recentEvents} />
         </motion.div>
       </div>
@@ -143,6 +143,7 @@ export default function OverviewPage() {
           color: var(--vemio-amber);
         }
 
+        /* Row 1: BCS + cards — stretch so cards fill BCS height */
         .overview-row-1 {
           display: grid;
           grid-template-columns: 1fr 2fr;
@@ -150,24 +151,27 @@ export default function OverviewPage() {
           align-items: stretch;
         }
 
+        /* Propagate height to children */
+        .overview-bcs > *,
+        .overview-devices > * {
+          height: 100%;
+        }
+
+        /* Row 2: fixed height panels side by side */
         .overview-row-2 {
           display: grid;
           grid-template-columns: 7fr 5fr;
           gap: 16px;
-          align-items: stretch;
-        }
-
-        /* Make children fill their grid cell height */
-        .overview-bcs > *,
-        .overview-devices > *,
-        .overview-uptime > *,
-        .overview-events > * {
-          height: 100%;
+          align-items: start;
         }
 
         @media (max-width: 1023px) {
           .overview-row-1 {
             grid-template-columns: 1fr;
+          }
+          .overview-bcs > *,
+          .overview-devices > * {
+            height: auto;
           }
         }
 

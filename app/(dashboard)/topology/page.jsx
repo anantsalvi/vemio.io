@@ -70,7 +70,7 @@ const TIER_ORDER = {
   firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
   access_point:3, server:3, nas:3, ups:4, printer:4, cctv:4, access_control:4, other:4,
 };
-const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Access Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
+const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Secondary Core','Access Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
 
 const TYPE_NAMES = {
   firewall:'Firewall', core_switch:'Core Switch', access_switch:'Access Switch',
@@ -83,7 +83,6 @@ const TYPE_ABBR = {
   firewall:'FW', core_switch:'CS', access_switch:'AS', access_point:'AP', router:'RT',
   server:'SV', nas:'NA', ups:'UP', cctv:'CC', printer:'PR', access_control:'AC', p2p_link:'P2', other:'\u00b7\u00b7',
 };
-const TIER_RADIUS = [26,22,14,10,8];
 const fadeUp = { hidden:{opacity:0,y:16}, visible:{opacity:1,y:0,transition:{duration:0.4,ease:[0.22,1,0.36,1]}} };
 
 const CABLE_FILTER_OPTIONS = [
@@ -239,7 +238,23 @@ function buildHierarchy(nodes, edges, expandedClusters) {
     }
   }
 
+  assignSubCoreTier(roots);
+
   return { roots, orphans, nodeMap: nm, adj, clusterNodes, subnetGroups };
+}
+
+/** Post-process: core switches parented to other core switches get tier 1.5 (sub-core row) */
+function assignSubCoreTier(roots) {
+  function walk(node) {
+    for (const child of node.children) {
+      // If a tier-1 node is a child of another tier-1 node, bump it to 1.5
+      if (child.tier === 1 && node.tier === 1) {
+        child.tier = 1.5;
+      }
+      walk(child);
+    }
+  }
+  for (const r of roots) walk(r);
 }
 
 function summarizeStatuses(members) {
@@ -249,34 +264,40 @@ function summarizeStatuses(members) {
 }
 
 /* ═══════════ LAYOUT ENGINE ═══════════ */
+/** Map tier values to Y positions. Supports fractional tier 1.5 for sub-core */
+const TIER_Y = { 0: 80, 1: 180, 1.5: 248, 2: 340, 3: 480, 4: 590 };
+const TIER_RADIUS_MAP = { 0: 26, 1: 22, 1.5: 20, 2: 14, 3: 10, 4: 8 };
+const TIER_MIN_SPACE = { 0: 100, 1: 90, 1.5: 80, 2: 60, 3: 36, 4: 30 };
+
 function layoutHierarchy(roots, orphans) {
   const pos = new Map();
-  const TY = [80, 180, 310, 450, 560];
-  const MS = { 0:100, 1:90, 2:60, 3:36, 4:30 };
   const P = 30;
   const CLUSTER_MIN_SPACE = 50;
   const wc = new Map();
+
+  function tierY(t) { return TIER_Y[t] ?? TIER_Y[Math.min(Math.floor(t), 4)]; }
+  function tierR(t) { return TIER_RADIUS_MAP[t] ?? TIER_RADIUS_MAP[Math.min(Math.floor(t), 4)]; }
+  function tierMS(t) { return TIER_MIN_SPACE[t] ?? TIER_MIN_SPACE[Math.min(Math.floor(t), 4)]; }
 
   function gw(n) {
     if (wc.has(n.id)) return wc.get(n.id);
     let w;
     if (n.isCluster) { w = CLUSTER_MIN_SPACE; }
-    else if (!n.children.length) { w = MS[Math.min(n.tier, 4)]; }
+    else if (!n.children.length) { w = tierMS(n.tier); }
     else {
       w = 0;
       for (const c of n.children) w += gw(c);
       w += (n.children.length - 1) * P;
-      w = Math.max(w, MS[Math.min(n.tier, 4)]);
+      w = Math.max(w, tierMS(n.tier));
     }
     wc.set(n.id, w);
     return w;
   }
 
   function ps(node, lx, aw) {
-    const t = Math.min(node.tier, 4);
     const cx = lx + aw / 2;
-    const r = node.isCluster ? 18 : TIER_RADIUS[t];
-    pos.set(node.id, { ...node, x: cx, y: TY[t], radius: r });
+    const r = node.isCluster ? 18 : tierR(node.tier);
+    pos.set(node.id, { ...node, x: cx, y: tierY(node.tier), radius: r });
     if (!node.children.length) return;
     const cws = node.children.map(c => gw(c));
     const tw = cws.reduce((s, w) => s + w, 0) + (node.children.length - 1) * P;
@@ -296,10 +317,10 @@ function layoutHierarchy(roots, orphans) {
   for (let i = 0; i < reord.length; i++) { ps(reord[i], cur, rws[i]); cur += rws[i] + P * 2; }
 
   if (orphans.length > 0) {
-    const oy = TY[4] + 100;
+    const oy = TIER_Y[4] + 100;
     for (let i = 0; i < orphans.length; i++) {
       const o = orphans[i];
-      pos.set(o.id, { ...o, x: P + i * 32, y: oy, radius: TIER_RADIUS[Math.min(o.tier, 4)], isOrphan: true });
+      pos.set(o.id, { ...o, x: P + i * 32, y: oy, radius: tierR(o.tier), isOrphan: true });
     }
   }
 
@@ -429,12 +450,19 @@ export default function TopologyPage() {
     svg.call(zoom); zoomRef.current = zoom;
 
     // Tier lines
-    const tierYs = [80, 180, 310, 450, 560]; const usedT = new Set();
-    for (const p of positions.values()) if (!p.isCluster) for (let t = 0; t < tierYs.length; t++) if (Math.abs(p.y - tierYs[t]) < 5) usedT.add(t);
-    for (const t of usedT) {
-      const y = tierYs[t] - 35;
+    const tierYEntries = Object.entries(TIER_Y); // [[0,80],[1,180],[1.5,248],...]
+    const usedT = new Set();
+    for (const p of positions.values()) {
+      if (p.isCluster) continue;
+      for (const [tk, ty] of tierYEntries) {
+        if (Math.abs(p.y - ty) < 5) usedT.add(tk);
+      }
+    }
+    for (const tk of usedT) {
+      const y = TIER_Y[tk] - 35;
+      const tierIdx = tierYEntries.findIndex(([k]) => k === tk);
       g.append('line').attr('x1', 0).attr('x2', canvasWidth).attr('y1', y).attr('y2', y).attr('stroke', 'rgba(148,163,184,0.06)').attr('stroke-width', 1);
-      g.append('text').attr('x', 8).attr('y', y - 6).attr('font-size', 9).attr('fill', 'rgba(148,163,184,0.3)').attr('font-weight', 600).attr('letter-spacing', '0.06em').text(TIER_LABELS[t]);
+      g.append('text').attr('x', 8).attr('y', y - 6).attr('font-size', 9).attr('fill', 'rgba(148,163,184,0.3)').attr('font-weight', 600).attr('letter-spacing', '0.06em').text(TIER_LABELS[tierIdx] || '');
     }
 
     // Edges
@@ -513,9 +541,9 @@ export default function TopologyPage() {
       .attr('stroke-opacity', 0.5);
 
     regularG.append('circle').attr('class', 'node-body').attr('r', d => d.radius)
-      .attr('fill', d => { const c = getDeviceColor(d.type, d.make); return d.tier <= 1 ? c + '30' : c + '1A'; })
+      .attr('fill', d => { const c = getDeviceColor(d.type, d.make); return d.tier <= 1.5 ? c + '30' : c + '1A'; })
       .attr('stroke', d => getDeviceColor(d.type, d.make))
-      .attr('stroke-width', d => d.tier <= 1 ? 2.5 : 1.5);
+      .attr('stroke-width', d => d.tier <= 1.5 ? 2.5 : 1.5);
 
     regularG.filter(d => d.radius >= 10).append('text').attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
       .attr('font-size', d => Math.max(7, d.radius * 0.55)).attr('font-weight', 700)
@@ -523,10 +551,10 @@ export default function TopologyPage() {
       .text(d => TYPE_ABBR[d.type] || '?');
 
     regularG.filter(d => d.tier <= 2).append('text').attr('y', d => d.radius + 11).attr('text-anchor', 'middle')
-      .attr('font-size', d => d.tier <= 1 ? 9 : 7).attr('fill', 'rgba(148,163,184,0.55)').attr('pointer-events', 'none')
-      .text(d => { const n = d.name || ''; const m = d.tier <= 1 ? 20 : 14; return n.length > m ? n.slice(0, m - 1) + '\u2026' : n; });
+      .attr('font-size', d => d.tier <= 1.5 ? 9 : 7).attr('fill', 'rgba(148,163,184,0.55)').attr('pointer-events', 'none')
+      .text(d => { const n = d.name || ''; const m = d.tier <= 1.5 ? 20 : 14; return n.length > m ? n.slice(0, m - 1) + '\u2026' : n; });
 
-    regularG.filter(d => d.tier <= 1 && d.make).append('text').attr('y', d => d.radius + 22).attr('text-anchor', 'middle')
+    regularG.filter(d => d.tier <= 1.5 && d.make).append('text').attr('y', d => d.radius + 22).attr('text-anchor', 'middle')
       .attr('font-size', 7).attr('fill', d => getDeviceColor(d.type, d.make) + '80')
       .attr('font-weight', 500).attr('pointer-events', 'none').text(d => d.make);
 

@@ -59,6 +59,7 @@ const NAV_STRUCTURE = [
       { href: "/settings/account",       label: "Account",       icon: User },
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/settings/branding",      label: "Branding",      icon: Palette },
+      { href: '/settings/webhooks',      label: 'Webhook Log',   icon: Webhook },
     ],
   },
 ];

@@ -31,6 +31,7 @@ const PAGE_TITLES_SHORT = {
   '/settings/notifications': 'Notifications',
   '/settings/reports':       'Report Schedule',
   '/settings/account':       'Account',
+  '/settings/webhooks':      { short: 'Webhooks', full: 'Webhook Log' },
 };
 
 export default function TopBar({ onMenuClick, isMobile }) {

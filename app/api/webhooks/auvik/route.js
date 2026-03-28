@@ -193,7 +193,7 @@ function resolveDeviceStatus(alertStatusString, alertName) {
 async function processDeviceStatusChange(data, tenantId, newStatus, timestamp) {
   const { deviceId, deviceName } = data;
   const eventDate = timestamp ? new Date(timestamp) : new Date();
-
+ 
   await withTransaction(async (client) => {
     // Update existing device only (skip retired devices)
     const updateResult = await client.query(
@@ -209,25 +209,32 @@ async function processDeviceStatusChange(data, tenantId, newStatus, timestamp) {
        RETURNING id, name`,
       [newStatus, eventDate, deviceName || null, deviceId, tenantId]
     );
-
+ 
     if (updateResult.rows.length === 0) {
       console.log(`[VEMIO Webhook] Device not found or retired: ${deviceId}`);
       return;
     }
-
+ 
     const device = updateResult.rows[0];
-
-    // Write status history entry
-    await client.query(
-      `INSERT INTO device_status_history (
-         device_id, tenant_id, status, changed_at, source
-       ) VALUES ($1, $2, $3, $4, 'webhook')`,
-      [device.id, tenantId, newStatus, eventDate]
-    );
-
+ 
+    // Write status history entry — wrapped in try-catch so a failure here
+    // doesn't roll back the device status UPDATE above
+    try {
+      await client.query(
+        `INSERT INTO device_status_history (
+           device_id, tenant_id, status, changed_at, source
+         ) VALUES ($1, $2, $3, $4, 'webhook')`,
+        [device.id, tenantId, newStatus, eventDate]
+      );
+    } catch (histErr) {
+      console.error(`[VEMIO Webhook] Failed to write status history for ${device.name}: ${histErr.message}`);
+      // Don't rethrow — device update already succeeded, history is non-critical
+    }
+ 
     console.log(`[VEMIO Webhook] ${device.name} → ${newStatus} (via webhook)`);
   });
 }
+ 
 
 
 /**

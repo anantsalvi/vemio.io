@@ -65,7 +65,7 @@ export function useAlertNotifications() {
           // Show browser notification
           const notification = new Notification(`VEMIO ${latest.severity.toUpperCase()} Alert`, {
             body: latest.title,
-            icon: '/favicon.ico',
+            icon: isDark ? '/favicon-dark.ico' : '/favicon-light.ico',
             tag: `vemio-alert-${latest.id}`,
             requireInteraction: latest.severity === 'critical',
           });

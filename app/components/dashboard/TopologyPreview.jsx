@@ -6,37 +6,67 @@ import { Network, ArrowRight, RefreshCw } from 'lucide-react';
 import * as d3 from 'd3';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
 
-/* ── Status colors ── */
-const STATUS_COLOR = {
-  up:       '#22c55e',
-  down:     '#ef4444',
-  degraded: '#f59e0b',
-  unknown:  '#6b7280',
+/* ── Device-type color system (matches main topology) ── */
+const TYPE_COLORS = {
+  firewall:'#EF4444', router:'#F97316', core_switch:'#3B82F6', access_switch:'#10B981',
+  access_point:'#A855F7', server:'#6366F1', p2p_link:'#06B6D4', nas:'#8B5CF6',
+  ups:'#F87171', printer:'#84CC16', cctv:'#14B8A6', access_control:'#C084FC', other:'#9CA3AF',
 };
+const VENDOR_COLORS = {
+  'firewall:Fortinet':'#DC2626','firewall:Sophos':'#EA580C',
+  'core_switch:Cisco':'#2563EB','core_switch:HP':'#0891B2',
+  'access_point:Ruckus':'#EC4899','access_point:Fortinet':'#F59E0B','access_point:Aruba':'#06B6D4',
+  'access_point:Cambium':'#8B5CF6','router:Cisco':'#FB923C',
+};
+function getDeviceColor(type, make) {
+  if (make) { const k = `${type}:${make}`; if (VENDOR_COLORS[k]) return VENDOR_COLORS[k]; }
+  return TYPE_COLORS[type] || TYPE_COLORS.other;
+}
+
+/* ── Status ── */
+const STATUS_CFG = {
+  up:      { color:'#22c55e', dash:'none' },
+  down:    { color:'#ef4444', dash:'none' },
+  degraded:{ color:'#f59e0b', dash:'4,3' },
+  unknown: { color:'#6b7280', dash:'2,2' },
+};
+
+/* ── Edge styles ── */
+const TUNNEL_TYPES = new Set(['router','firewall','p2p_link']);
+const EDGE_STYLES = {
+  fiber:   { color:'#F97316', width:1.5, dash:'none', opacity:0.6 },
+  copper:  { color:'rgba(148,163,184,0.20)', width:0.6, dash:'none', opacity:1 },
+  tunnel:  { color:'#06B6D4', width:1.5, dash:'6,3', opacity:0.6 },
+  unknown: { color:'rgba(148,163,184,0.08)', width:0.5, dash:'none', opacity:1 },
+};
+function classifyEdge(e, nm) {
+  const s = nm.get(e.source), t = nm.get(e.target);
+  if (s && t && TUNNEL_TYPES.has(s.type) && TUNNEL_TYPES.has(t.type)) return 'tunnel';
+  if (e.mediaType === 'fiber') return 'fiber';
+  if (e.mediaType === 'copper') return 'copper';
+  return 'unknown';
+}
 
 /* ── Tier order ── */
 const TIER_ORDER = {
-  firewall: 0, router: 0,
-  core_switch: 1, p2p_link: 1,
-  access_switch: 2,
-  access_point: 3, server: 3,
-  nas: 3, ups: 4, printer: 4,
-  cctv: 4, access_control: 4, other: 4,
+  firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
+  access_point:3, server:3, nas:3, ups:4, printer:4, cctv:4, access_control:4, other:4,
 };
 
 const TYPE_ABBR = {
-  firewall: 'FW', core_switch: 'CS', access_switch: 'AS',
-  access_point: 'AP', router: 'RT', server: 'SV',
-  nas: 'NA', ups: 'UP', cctv: 'CC', printer: 'PR',
-  access_control: 'AC', p2p_link: 'P2', other: '?',
+  firewall:'FW', core_switch:'CS', access_switch:'AS', access_point:'AP', router:'RT',
+  server:'SV', nas:'NA', ups:'UP', cctv:'CC', printer:'PR', access_control:'AC', p2p_link:'P2', other:'?',
 };
 
-const TIER_RADIUS = { 0: 18, 1: 15, 2: 8, 3: 6, 4: 5 };
+/* ── Preview tier layout: Y positions and radii (compact for 300px height) ── */
+const PREVIEW_TIER_Y =      { 0:35, 1:85, 1.5:118, 2:158, 2.5:192, 3:228, 4:262 };
+const PREVIEW_TIER_RADIUS = { 0:16, 1:13, 1.5:11,  2:7,   2.5:6,   3:5,   4:4   };
+const PREVIEW_LIMITS =      { 0:999, 1:999, 1.5:20, 2:50,  2.5:30,  3:20,  4:10  };
 
 /**
  * TopologyPreview — compact tiered network map for the Overview dashboard.
- * Shows devices in a hierarchical layout matching the main topology page.
- * Click to navigate to the full topology page.
+ * Matches the main topology page: device-type colors, fiber/copper/tunnel edges,
+ * sub-tier layout, affinity-based root ordering.
  */
 export default function TopologyPreview() {
   const router = useRouter();
@@ -78,7 +108,90 @@ export default function TopologyPreview() {
     return () => ro.disconnect();
   }, []);
 
-  /* ── D3 Render — tiered layout ── */
+  /* ── Build mini hierarchy ── */
+  function buildPreviewHierarchy(nodes, edges) {
+    const nm = new Map();
+    for (const n of nodes) nm.set(n.id, { ...n, tier: TIER_ORDER[n.type] ?? 4, children: [] });
+
+    const adj = new Map();
+    for (const n of nodes) adj.set(n.id, new Set());
+    for (const e of edges) {
+      if (adj.has(e.source) && adj.has(e.target)) {
+        adj.get(e.source).add(e.target);
+        adj.get(e.target).add(e.source);
+      }
+    }
+
+    const tiers = [[], [], [], [], []];
+    for (const n of nm.values()) tiers[Math.min(n.tier, 4)].push(n);
+
+    const attached = new Set();
+    const roots = [];
+
+    // Tier 0: roots
+    for (const n of tiers[0]) { attached.add(n.id); roots.push(n); }
+
+    // Tier 1: attach or become root
+    for (const node of tiers[1]) {
+      const nb = adj.get(node.id) || new Set();
+      let bp = null;
+      for (const id of nb) { const n = nm.get(id); if (n && attached.has(n.id) && n.tier < node.tier) { bp = n; break; } }
+      if (bp) { bp.children.push(node); } else { roots.push(node); }
+      attached.add(node.id);
+    }
+
+    // Tier 2+: BFS
+    for (let t = 2; t <= 4; t++) {
+      const tierNodes = tiers[t];
+      const remaining = new Set(tierNodes.map(n => n.id));
+
+      for (const node of tierNodes) {
+        const nb = adj.get(node.id) || new Set();
+        let bp = null, bt = 99;
+        for (const id of nb) { const n = nm.get(id); if (n && attached.has(n.id) && n.tier < t && n.tier < bt) { bp = n; bt = n.tier; } }
+        if (bp) { bp.children.push(node); attached.add(node.id); remaining.delete(node.id); }
+      }
+
+      let changed = true;
+      while (changed && remaining.size > 0) {
+        changed = false;
+        for (const nodeId of remaining) {
+          const node = nm.get(nodeId);
+          const nb = adj.get(nodeId) || new Set();
+          for (const id of nb) {
+            const n = nm.get(id);
+            if (n && attached.has(n.id) && n.tier === t) {
+              n.children.push(node); attached.add(nodeId); remaining.delete(nodeId); changed = true; break;
+            }
+          }
+        }
+      }
+      for (const nodeId of remaining) attached.add(nodeId);
+    }
+
+    // Sub-tier assignment
+    function assignSubTiers(node) {
+      for (const child of node.children) {
+        if (child.tier === Math.floor(node.tier) && child.tier === node.tier) {
+          child.tier = child.tier + 0.5;
+        }
+        assignSubTiers(child);
+      }
+    }
+    for (const r of roots) assignSubTiers(r);
+
+    // Collect tree
+    const att = new Set();
+    function mark(n) { att.add(n.id); for (const c of n.children) mark(c); }
+    for (const r of roots) mark(r);
+
+    const orphans = [];
+    for (const n of nm.values()) if (!att.has(n.id)) orphans.push(n);
+
+    return { roots, orphans, nodeMap: nm };
+  }
+
+  /* ── D3 Render ── */
   useEffect(() => {
     if (!data?.nodes?.length || !svgRef.current) return;
 
@@ -86,116 +199,140 @@ export default function TopologyPreview() {
     svg.selectAll('*').remove();
 
     const { w, h } = dimensions;
-    const PAD_X = 30;
-    const PAD_TOP = 20;
+    const PAD = 20;
+    const nm = new Map();
+    for (const n of data.nodes) nm.set(n.id, n);
 
-    // Assign tiers and limit to ~80 nodes for preview
-    const allNodes = data.nodes.map(n => ({
-      ...n,
-      tier: TIER_ORDER[n.type] ?? 4,
-      radius: TIER_RADIUS[TIER_ORDER[n.type] ?? 4] || 5,
-    }));
+    const { roots, orphans } = buildPreviewHierarchy(data.nodes, data.edges);
 
-    // Sort by tier, take top nodes per tier for preview
-    const tiers = {};
-    for (const n of allNodes) {
-      if (!tiers[n.tier]) tiers[n.tier] = [];
-      tiers[n.tier].push(n);
+    // ── Flatten tree to get positioned nodes ──
+    const positioned = [];
+    const tierBuckets = new Map(); // tier → [nodes]
+
+    function collectNodes(node) {
+      if (!tierBuckets.has(node.tier)) tierBuckets.set(node.tier, []);
+      tierBuckets.get(node.tier).push(node);
+      for (const c of node.children) collectNodes(c);
+    }
+    for (const r of roots) collectNodes(r);
+    for (const o of orphans) {
+      if (!tierBuckets.has(o.tier)) tierBuckets.set(o.tier, []);
+      tierBuckets.get(o.tier).push(o);
     }
 
-    // Limit: show all tier 0-1, up to 40 tier 2, up to 20 tier 3+
-    const LIMITS = { 0: 999, 1: 999, 2: 40, 3: 20, 4: 10 };
+    // Apply preview limits per tier
+    const visibleIds = new Set();
     const visibleNodes = [];
-    for (const [tier, nodes] of Object.entries(tiers)) {
-      const limit = LIMITS[tier] ?? 10;
-      visibleNodes.push(...nodes.slice(0, limit));
-    }
+    const sortedTiers = [...tierBuckets.keys()].sort((a, b) => a - b);
 
-    const visibleIds = new Set(visibleNodes.map(n => n.id));
-    const edges = data.edges.filter(e => visibleIds.has(e.source) && visibleIds.has(e.target));
-
-    // Group by tier for layout
-    const activeTiers = [...new Set(visibleNodes.map(n => n.tier))].sort((a, b) => a - b);
-    const tierCount = activeTiers.length;
-    const tierGap = (h - PAD_TOP * 2) / Math.max(tierCount, 1);
-
-    // Position nodes in tiered rows
-    const nodeMap = new Map();
-    for (let ti = 0; ti < activeTiers.length; ti++) {
-      const tierIdx = activeTiers[ti];
-      const tierNodes = visibleNodes.filter(n => n.tier === tierIdx);
-      const y = PAD_TOP + ti * tierGap + tierGap / 2;
-      const availW = w - PAD_X * 2;
-      const spacing = Math.min(availW / Math.max(tierNodes.length, 1), tierIdx <= 1 ? 70 : 30);
-      const startX = (w - (tierNodes.length - 1) * spacing) / 2;
-
-      for (let ni = 0; ni < tierNodes.length; ni++) {
-        const n = tierNodes[ni];
-        n.x = startX + ni * spacing;
-        n.y = y;
-        nodeMap.set(n.id, n);
+    for (const tier of sortedTiers) {
+      const nodes = tierBuckets.get(tier);
+      const limit = PREVIEW_LIMITS[tier] ?? 10;
+      for (let i = 0; i < Math.min(nodes.length, limit); i++) {
+        visibleIds.add(nodes[i].id);
+        visibleNodes.push(nodes[i]);
       }
     }
 
-    // Resolve edges
-    const resolvedEdges = edges
-      .filter(e => nodeMap.has(e.source) && nodeMap.has(e.target))
-      .map(e => ({ source: nodeMap.get(e.source), target: nodeMap.get(e.target) }));
+    // Position nodes in tiered rows
+    const activeTiers = [...new Set(visibleNodes.map(n => n.tier))].sort((a, b) => a - b);
+    const posMap = new Map();
+
+    for (const tier of activeTiers) {
+      const tierNodes = visibleNodes.filter(n => n.tier === tier);
+      const y = PREVIEW_TIER_Y[tier] ?? (35 + tier * 50);
+      const r = PREVIEW_TIER_RADIUS[tier] ?? 5;
+      const availW = w - PAD * 2;
+      const maxSpacing = tier <= 1.5 ? 70 : tier <= 2.5 ? 26 : 20;
+      const spacing = Math.min(availW / Math.max(tierNodes.length, 1), maxSpacing);
+      const startX = (w - (tierNodes.length - 1) * spacing) / 2;
+
+      for (let i = 0; i < tierNodes.length; i++) {
+        const n = tierNodes[i];
+        posMap.set(n.id, { ...n, x: startX + i * spacing, y, radius: r });
+      }
+    }
+
+    // Visible edges
+    const visibleEdges = data.edges
+      .filter(e => posMap.has(e.source) && posMap.has(e.target))
+      .map(e => ({
+        source: posMap.get(e.source),
+        target: posMap.get(e.target),
+        mediaClass: classifyEdge(e, nm),
+      }));
 
     const g = svg.append('g');
 
-    // Edges
-    g.append('g')
-      .selectAll('path')
-      .data(resolvedEdges)
-      .join('path')
+    // ── Edges with media type styling ──
+    g.append('g').selectAll('path').data(visibleEdges).join('path')
       .attr('d', e => {
-        const sx = e.source.x, sy = e.source.y;
-        const tx = e.target.x, ty = e.target.y;
+        const sx = e.source.x, sy = e.source.y, tx = e.target.x, ty = e.target.y;
         if (Math.abs(sy - ty) < 5) {
-          const mx = (sx + tx) / 2, my = sy - 15;
+          const mx = (sx + tx) / 2, my = sy - 12;
           return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
         }
         const my = (sy + ty) / 2;
         return `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
       })
       .attr('fill', 'none')
-      .attr('stroke', 'rgba(148,163,184,0.10)')
-      .attr('stroke-width', 0.7);
+      .attr('stroke', e => EDGE_STYLES[e.mediaClass].color)
+      .attr('stroke-width', e => EDGE_STYLES[e.mediaClass].width)
+      .attr('stroke-dasharray', e => EDGE_STYLES[e.mediaClass].dash)
+      .attr('stroke-opacity', e => EDGE_STYLES[e.mediaClass].opacity);
 
-    // Nodes
-    const node = g.append('g')
-      .selectAll('g')
-      .data(visibleNodes)
-      .join('g')
+    // ── Nodes with device-type + vendor colors ──
+    const allPos = Array.from(posMap.values());
+    const node = g.append('g').selectAll('g').data(allPos).join('g')
       .attr('transform', d => `translate(${d.x},${d.y})`);
 
-    // Circle
+    // Status ring
+    node.append('circle')
+      .attr('r', d => d.radius + 2)
+      .attr('fill', 'none')
+      .attr('stroke', d => (STATUS_CFG[d.status] || STATUS_CFG.unknown).color)
+      .attr('stroke-width', d => d.tier <= 1.5 ? 1.2 : 0.6)
+      .attr('stroke-dasharray', d => (STATUS_CFG[d.status] || STATUS_CFG.unknown).dash)
+      .attr('stroke-opacity', 0.4);
+
+    // Body circle — device-type color
     node.append('circle')
       .attr('r', d => d.radius)
       .attr('fill', d => {
-        const c = STATUS_COLOR[d.status] || STATUS_COLOR.unknown;
-        return d.tier <= 1 ? c + '28' : c + '18';
+        const c = getDeviceColor(d.type, d.make);
+        return d.tier <= 1.5 ? c + '30' : c + '1A';
       })
-      .attr('stroke', d => STATUS_COLOR[d.status] || STATUS_COLOR.unknown)
-      .attr('stroke-width', d => d.tier <= 1 ? 1.5 : 0.7);
+      .attr('stroke', d => getDeviceColor(d.type, d.make))
+      .attr('stroke-width', d => d.tier <= 1.5 ? 1.5 : 0.8);
 
-    // Label on tier 0-1 only
-    node.filter(d => d.tier <= 1)
+    // Type abbreviation on tier 0-1.5
+    node.filter(d => d.tier <= 1.5 && d.radius >= 10)
       .append('text')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
-      .attr('font-size', d => Math.max(7, d.radius * 0.5))
+      .attr('font-size', d => Math.max(6, d.radius * 0.5))
       .attr('font-weight', 700)
-      .attr('fill', d => STATUS_COLOR[d.status] || STATUS_COLOR.unknown)
+      .attr('fill', d => getDeviceColor(d.type, d.make))
       .attr('pointer-events', 'none')
       .text(d => TYPE_ABBR[d.type] || '?');
 
     // Tooltip
     node.append('title')
-      .text(d => `${d.name}\n${d.type?.replace('_', ' ')} · ${d.status}`);
+      .text(d => `${d.name}\n${(d.type || '').replace(/_/g, ' ')} · ${d.status}${d.make ? '\n' + d.make : ''}`);
 
   }, [data, dimensions]);
+
+  /* ── Edge media counts ── */
+  const mediaCounts = data?.edges ? (() => {
+    const nm = new Map();
+    for (const n of data.nodes) nm.set(n.id, n);
+    const c = { fiber: 0, copper: 0, tunnel: 0 };
+    for (const e of data.edges) {
+      const mc = classifyEdge(e, nm);
+      if (c[mc] !== undefined) c[mc]++;
+    }
+    return c;
+  })() : null;
 
   /* ── Status summary ── */
   const statusSummary = data?.nodes ? {
@@ -251,19 +388,38 @@ export default function TopologyPreview() {
         />
       </div>
 
-      {/* Mini legend */}
+      {/* Mini legend — status + media types */}
       {data?.nodes?.length > 0 && (
         <div className="tp-preview-legend">
           {[
-            { label: 'Online', color: STATUS_COLOR.up },
-            { label: 'Offline', color: STATUS_COLOR.down },
-            { label: 'Degraded', color: STATUS_COLOR.degraded },
+            { label: 'Online', color: STATUS_CFG.up.color },
+            { label: 'Offline', color: STATUS_CFG.down.color },
+            { label: 'Degraded', color: STATUS_CFG.degraded.color },
           ].map(s => (
             <span key={s.label} className="tp-preview-legend-item">
               <span className="tp-preview-legend-dot" style={{ background: s.color }} />
               {s.label}
             </span>
           ))}
+          <span className="tp-preview-legend-sep" />
+          {mediaCounts?.fiber > 0 && (
+            <span className="tp-preview-legend-item">
+              <span className="tp-preview-legend-line" style={{ background: EDGE_STYLES.fiber.color }} />
+              Fiber ({mediaCounts.fiber})
+            </span>
+          )}
+          {mediaCounts?.copper > 0 && (
+            <span className="tp-preview-legend-item">
+              <span className="tp-preview-legend-line" style={{ background: 'rgba(148,163,184,0.5)' }} />
+              Copper ({mediaCounts.copper})
+            </span>
+          )}
+          {mediaCounts?.tunnel > 0 && (
+            <span className="tp-preview-legend-item">
+              <span className="tp-preview-legend-line tp-preview-legend-line--tunnel" />
+              Tunnel ({mediaCounts.tunnel})
+            </span>
+          )}
           <span className="tp-preview-legend-hint">Click to explore →</span>
         </div>
       )}
@@ -340,7 +496,7 @@ export default function TopologyPreview() {
         .tp-preview-legend {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 10px;
           padding: 8px 20px;
           border-top: 1px solid var(--color-vemio-border);
           flex-wrap: wrap;
@@ -351,11 +507,30 @@ export default function TopologyPreview() {
           gap: 4px;
           font-size: 10px;
           color: var(--color-vemio-text-dim);
+          white-space: nowrap;
         }
         .tp-preview-legend-dot {
           width: 6px;
           height: 6px;
           border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .tp-preview-legend-line {
+          width: 12px;
+          height: 2px;
+          border-radius: 1px;
+          flex-shrink: 0;
+        }
+        .tp-preview-legend-line--tunnel {
+          width: 12px;
+          height: 0;
+          border-top: 1.5px dashed #06B6D4;
+          background: none;
+        }
+        .tp-preview-legend-sep {
+          width: 1px;
+          height: 10px;
+          background: var(--color-vemio-border);
           flex-shrink: 0;
         }
         .tp-preview-legend-hint {
@@ -369,6 +544,7 @@ export default function TopologyPreview() {
           .tp-preview-legend { padding: 6px 14px; gap: 8px; }
           .tp-preview-graph { height: 240px; }
           .tp-preview-legend-hint { display: none; }
+          .tp-preview-legend-sep { display: none; }
         }
       `}</style>
     </div>

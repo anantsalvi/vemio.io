@@ -356,10 +356,10 @@ export default function LoginPage() {
         .login-brand-name {
           font-size: 28px;
           font-weight: 700;
-          letter-spacing: 0.12em;
+          letter-spacing: 0.15em;
           color: var(--color-vemio-amber);
           margin: 0;
-          font-family: var(--font-display);
+          font-family: 'Anton', sans-serif;
         }
 
         .login-tm {

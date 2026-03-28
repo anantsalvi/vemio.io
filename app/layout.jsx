@@ -25,11 +25,11 @@ export const metadata = {
   creator: 'Vinay Enterprises',
   publisher: 'Vinay Enterprises',
   icons: {
-  icon: [
-    { url: '/favicon-light.ico', media: '(prefers-color-scheme: light)' },
-    { url: '/favicon-dark.ico', media: '(prefers-color-scheme: dark)' },
-  ],
-},
+    icon: [
+      { url: '/favicon-light.ico', media: '(prefers-color-scheme: light)' },
+      { url: '/favicon-dark.ico', media: '(prefers-color-scheme: dark)' },
+    ],
+  },
   openGraph: {
     type: 'website',
     locale: 'en_IN',
@@ -65,10 +65,34 @@ export const metadata = {
   },
 };
 
+/**
+ * Blocking script that runs before paint.
+ * Reads theme preference from localStorage and applies it immediately,
+ * preventing the flash of wrong theme on page load.
+ */
+const THEME_INIT_SCRIPT = `
+(function(){
+  try {
+    var p = localStorage.getItem('vemio-theme-preference') || 'dark';
+    var t = p;
+    if (p === 'system') {
+      t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.classList.remove('dark', 'light');
+    document.documentElement.classList.add(t);
+  } catch(e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.classList.add('dark');
+  }
+})();
+`;
+
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

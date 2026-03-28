@@ -6,8 +6,14 @@ import { useState, useEffect, createContext, useContext, useCallback } from 'rea
  * VEMIO™ — Theme System
  *
  * Three modes: 'dark' (default), 'light', 'system'
- * Stored in localStorage. Applied via data-theme attribute on <html>.
+ * Persistence:
+ *   1. localStorage (instant, no flash)
+ *   2. DB via /api/user/preferences (syncs across devices)
+ * Applied via data-theme attribute on <html>.
  * CSS variables are overridden in globals.css for [data-theme="light"].
+ *
+ * A blocking <script> in layout.jsx reads localStorage before paint
+ * to prevent the dark→light flash on page load.
  */
 
 const ThemeContext = createContext({
@@ -28,19 +34,66 @@ function resolveTheme(preference) {
   return preference;
 }
 
+function applyTheme(resolved) {
+  document.documentElement.setAttribute('data-theme', resolved);
+  // Also toggle the class for Tailwind dark: variants
+  if (resolved === 'dark') {
+    document.documentElement.classList.add('dark');
+    document.documentElement.classList.remove('light');
+  } else {
+    document.documentElement.classList.add('light');
+    document.documentElement.classList.remove('dark');
+  }
+}
+
 export function ThemeProvider({ children }) {
   const [preference, setPreferenceState] = useState('dark');
   const [theme, setTheme] = useState('dark');
+  const [loaded, setLoaded] = useState(false);
 
-  // Initialize from localStorage
+  // Initialize: localStorage first (instant), then DB (authoritative)
   useEffect(() => {
+    // 1. Read localStorage (already applied by blocking script, just sync state)
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored && ['dark', 'light', 'system'].includes(stored)) {
       setPreferenceState(stored);
       const resolved = resolveTheme(stored);
       setTheme(resolved);
-      document.documentElement.setAttribute('data-theme', resolved);
+      applyTheme(resolved);
     }
+
+    // 2. Fetch from DB — if different from localStorage, DB wins
+    async function loadFromDB() {
+      try {
+        const res = await fetch('/api/user/preferences');
+        if (res.ok) {
+          const data = await res.json();
+          const dbPref = data.preferences?.theme;
+          if (dbPref && ['dark', 'light', 'system'].includes(dbPref)) {
+            // DB is authoritative — update localStorage and state
+            if (dbPref !== stored) {
+              localStorage.setItem(STORAGE_KEY, dbPref);
+              setPreferenceState(dbPref);
+              const resolved = resolveTheme(dbPref);
+              setTheme(resolved);
+              applyTheme(resolved);
+            }
+          } else if (stored) {
+            // DB has no theme preference but localStorage does — push to DB
+            fetch('/api/user/preferences', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ theme: stored }),
+            }).catch(() => {});
+          }
+        }
+      } catch {
+        // API unavailable — localStorage preference stands
+      } finally {
+        setLoaded(true);
+      }
+    }
+    loadFromDB();
   }, []);
 
   // Listen for system theme changes when preference is 'system'
@@ -51,18 +104,32 @@ export function ThemeProvider({ children }) {
     const handler = (e) => {
       const resolved = e.matches ? 'light' : 'dark';
       setTheme(resolved);
-      document.documentElement.setAttribute('data-theme', resolved);
+      applyTheme(resolved);
     };
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, [preference]);
 
   const setPreference = useCallback((pref) => {
+    if (!['dark', 'light', 'system'].includes(pref)) return;
+
+    // Update state immediately
     setPreferenceState(pref);
-    localStorage.setItem(STORAGE_KEY, pref);
     const resolved = resolveTheme(pref);
     setTheme(resolved);
-    document.documentElement.setAttribute('data-theme', resolved);
+    applyTheme(resolved);
+
+    // Persist to localStorage (instant on next load)
+    localStorage.setItem(STORAGE_KEY, pref);
+
+    // Persist to DB (sync across devices)
+    fetch('/api/user/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: pref }),
+    }).catch(() => {
+      // Preference saved locally even if API fails
+    });
   }, []);
 
   return (

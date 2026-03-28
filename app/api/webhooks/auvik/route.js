@@ -342,7 +342,12 @@ export async function POST(request) {
     );
   }
 }
-
+export async function GET() {
+  return Response.json(
+    { status: 'ok', message: 'VEMIO webhook endpoint active. Use POST to send events.' },
+    { status: 200 }
+  );
+}
 
 /**
  * OPTIONS handler — CORS preflight for Auvik.

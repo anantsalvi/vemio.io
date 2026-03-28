@@ -217,18 +217,20 @@ async function processDeviceStatusChange(data, tenantId, newStatus, timestamp) {
  
     const device = updateResult.rows[0];
  
-    // Write status history entry — wrapped in try-catch so a failure here
-    // doesn't roll back the device status UPDATE above
+    // Write status history entry — use SAVEPOINT so a failure here
+    // doesn't abort the transaction and roll back the device UPDATE
     try {
+      await client.query('SAVEPOINT history_insert');
       await client.query(
         `INSERT INTO device_status_history (
            device_id, tenant_id, status, changed_at, source
          ) VALUES ($1, $2, $3, $4, 'webhook')`,
         [device.id, tenantId, newStatus, eventDate]
       );
+      await client.query('RELEASE SAVEPOINT history_insert');
     } catch (histErr) {
+      await client.query('ROLLBACK TO SAVEPOINT history_insert');
       console.error(`[VEMIO Webhook] Failed to write status history for ${device.name}: ${histErr.message}`);
-      // Don't rethrow — device update already succeeded, history is non-critical
     }
  
     console.log(`[VEMIO Webhook] ${device.name} → ${newStatus} (via webhook)`);

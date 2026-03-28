@@ -1,7 +1,7 @@
 /**
  * VEMIO™ — Alerts API
  * GET  /api/alerts  — List alerts with filters
- * PATCH /api/alerts — Acknowledge or resolve an alert
+ * PATCH /api/alerts — Acknowledge (creates GLPI ticket) or Resolve (closes ticket)
  *
  * Query params:
  *   ?state=active|acknowledged|resolved|suppressed
@@ -12,7 +12,8 @@
  */
 
 import { withAuth } from '@/lib/auth';
-import { queryWithTenant, withTransaction } from '@/lib/db';
+import { queryWithTenant } from '@/lib/db';
+import { createGLPITicket, addGLPIFollowup, closeGLPITicket } from '@/lib/glpi';
 
 const NETWORK_TYPES = [
   'firewall', 'core_switch', 'access_switch', 'access_point',
@@ -30,7 +31,6 @@ export const GET = withAuth(async (req, session) => {
   const offset   = parseInt(searchParams.get('offset') || '0', 10);
 
   try {
-    // Build dynamic WHERE (RLS handles tenant_id)
     const conditions = [];
     const params = [];
     let paramIdx = 1;
@@ -51,33 +51,27 @@ export const GET = withAuth(async (req, session) => {
       paramIdx++;
     }
 
-    // Category filter: only include alerts for network device types
     if (category !== 'all') {
       conditions.push(`(d.device_type = ANY($${paramIdx}) OR d.device_type IS NULL)`);
       params.push(NETWORK_TYPES);
       paramIdx++;
     }
 
-    // Exclude retired devices
     conditions.push(`(d.is_retired = false OR d.id IS NULL)`);
 
     const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    // Count
     const countResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS total
-       FROM alerts a
-       LEFT JOIN devices d ON d.id = a.device_id
-       ${whereClause}`, params
+      `SELECT COUNT(*) AS total FROM alerts a LEFT JOIN devices d ON d.id = a.device_id ${whereClause}`, params
     );
 
-    // Alerts with joins
     const alerts = await queryWithTenant(tenantId, `
       SELECT
         a.id, a.alert_type, a.severity, a.state,
         a.title, a.description, a.source_type,
         a.notification_sent, a.notification_channel,
         a.triggered_at, a.acknowledged_at, a.resolved_at,
+        a.glpi_ticket_id,
         d.name AS device_name, d.device_type,
         s.name AS site_name
       FROM alerts a
@@ -91,7 +85,7 @@ export const GET = withAuth(async (req, session) => {
       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
     `, [...params, limit, offset]);
 
-    // Summary counts (respect category filter)
+    // Summary counts
     const summaryConditions = [];
     const summaryParams = [];
     let summaryIdx = 1;
@@ -102,10 +96,7 @@ export const GET = withAuth(async (req, session) => {
       summaryIdx++;
     }
     summaryConditions.push(`(d.is_retired = false OR d.id IS NULL)`);
-
-    const summaryWhere = summaryConditions.length > 0
-      ? 'WHERE ' + summaryConditions.join(' AND ')
-      : '';
+    const summaryWhere = summaryConditions.length > 0 ? 'WHERE ' + summaryConditions.join(' AND ') : '';
 
     const summary = await queryWithTenant(tenantId, `
       SELECT
@@ -141,35 +132,174 @@ export const GET = withAuth(async (req, session) => {
   }
 });
 
+
 export const PATCH = withAuth(async (req, session) => {
   const tenantId = session.user.tenantId;
+  const tenantSlug = session.user.tenantSlug;
+  const userName = session.user.name || session.user.email || 'Unknown';
 
   try {
     const body = await req.json();
     const { alertId, action } = body;
 
     if (!alertId || !['acknowledge', 'resolve'].includes(action)) {
-      return Response.json({ error: 'Invalid request' }, { status: 400 });
+      return Response.json({ error: 'Invalid request — need alertId and action (acknowledge|resolve)' }, { status: 400 });
     }
 
+    // ── ACKNOWLEDGE ──
+    // 1. Set state to acknowledged
+    // 2. Create GLPI ticket (if none exists)
+    // 3. Store ticket ID on the alert
     if (action === 'acknowledge') {
-      const result = await queryWithTenant(tenantId, `
-        UPDATE alerts SET state = 'acknowledged', acknowledged_at = NOW()
-        WHERE id = $1 AND state = 'active'
-        RETURNING id, state
+      // Get alert details for ticket creation
+      const alertResult = await queryWithTenant(tenantId, `
+        SELECT a.id, a.title, a.description, a.severity, a.alert_type,
+               a.state, a.glpi_ticket_id, a.triggered_at,
+               d.name AS device_name, d.device_type, d.ip_address,
+               s.name AS site_name
+        FROM alerts a
+        LEFT JOIN devices d ON d.id = a.device_id
+        LEFT JOIN sites s ON s.id = a.site_id
+        WHERE a.id = $1 AND a.state = 'active'
       `, [alertId]);
-      if (result.rowCount === 0) return Response.json({ error: 'Not found or not active' }, { status: 404 });
-      return Response.json({ success: true, alert: result.rows[0] });
+
+      if (alertResult.rows.length === 0) {
+        return Response.json({ error: 'Alert not found or not active' }, { status: 404 });
+      }
+
+      const alert = alertResult.rows[0];
+
+      // Update state to acknowledged
+      await queryWithTenant(tenantId, `
+        UPDATE alerts
+        SET state = 'acknowledged',
+            acknowledged_at = NOW()
+        WHERE id = $1
+      `, [alertId]);
+
+      // Create GLPI ticket if none exists
+      let glpiTicket = null;
+      if (!alert.glpi_ticket_id) {
+        const ticketDescription = [
+          alert.description || '',
+          '',
+          `<p><strong>Alert Details:</strong></p>`,
+          `<ul>`,
+          `<li>Severity: <strong>${alert.severity?.toUpperCase()}</strong></li>`,
+          `<li>Type: ${alert.alert_type?.replace(/_/g, ' ')}</li>`,
+          alert.device_name ? `<li>Device: ${alert.device_name}${alert.ip_address ? ` (${alert.ip_address})` : ''}</li>` : '',
+          alert.site_name ? `<li>Site: ${alert.site_name}</li>` : '',
+          `<li>Triggered: ${new Date(alert.triggered_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</li>`,
+          `<li>Acknowledged by: ${userName}</li>`,
+          `</ul>`,
+        ].filter(Boolean).join('\n');
+
+        glpiTicket = await createGLPITicket({
+          title: `[VEMIO] ${alert.title}`,
+          description: ticketDescription,
+          severity: alert.severity,
+          tenantSlug,
+          alertType: alert.alert_type,
+          deviceName: alert.device_name,
+          siteName: alert.site_name,
+        });
+
+        // Store GLPI ticket ID on the alert
+        if (glpiTicket?.ticketId) {
+          await queryWithTenant(tenantId, `
+            UPDATE alerts SET glpi_ticket_id = $1 WHERE id = $2
+          `, [glpiTicket.ticketId.toString(), alertId]);
+        }
+      }
+
+      return Response.json({
+        success: true,
+        alert: { id: alertId, state: 'acknowledged' },
+        glpiTicket: glpiTicket ? {
+          id: glpiTicket.ticketId,
+          url: glpiTicket.ticketUrl,
+        } : alert.glpi_ticket_id ? {
+          id: parseInt(alert.glpi_ticket_id),
+          url: `https://techsupport.vinayenterprises.co.in/front/ticket.form.php?id=${alert.glpi_ticket_id}`,
+          existing: true,
+        } : null,
+      });
     }
 
+    // ── RESOLVE ──
+    // 1. Set state to resolved
+    // 2. Close GLPI ticket with downtime duration
     if (action === 'resolve') {
-      const result = await queryWithTenant(tenantId, `
-        UPDATE alerts SET state = 'resolved', resolved_at = NOW()
-        WHERE id = $1 AND state IN ('active', 'acknowledged')
-        RETURNING id, state
+      // Get alert details for ticket closure
+      const alertResult = await queryWithTenant(tenantId, `
+        SELECT a.id, a.title, a.severity, a.state,
+               a.triggered_at, a.acknowledged_at, a.glpi_ticket_id,
+               d.name AS device_name,
+               s.name AS site_name
+        FROM alerts a
+        LEFT JOIN devices d ON d.id = a.device_id
+        LEFT JOIN sites s ON s.id = a.site_id
+        WHERE a.id = $1 AND a.state IN ('active', 'acknowledged')
       `, [alertId]);
-      if (result.rowCount === 0) return Response.json({ error: 'Not found or already resolved' }, { status: 404 });
-      return Response.json({ success: true, alert: result.rows[0] });
+
+      if (alertResult.rows.length === 0) {
+        return Response.json({ error: 'Alert not found or already resolved' }, { status: 404 });
+      }
+
+      const alert = alertResult.rows[0];
+      const resolvedAt = new Date();
+      const triggeredAt = new Date(alert.triggered_at);
+      const downtimeMs = resolvedAt.getTime() - triggeredAt.getTime();
+
+      // Format downtime
+      const downtimeMin = Math.floor(downtimeMs / 60000);
+      let downtimeStr;
+      if (downtimeMin < 60) {
+        downtimeStr = `${downtimeMin} minutes`;
+      } else if (downtimeMin < 1440) {
+        const h = Math.floor(downtimeMin / 60);
+        const m = downtimeMin % 60;
+        downtimeStr = `${h}h ${m}m`;
+      } else {
+        const d = Math.floor(downtimeMin / 1440);
+        const h = Math.floor((downtimeMin % 1440) / 60);
+        downtimeStr = `${d}d ${h}h`;
+      }
+
+      // Update state to resolved
+      await queryWithTenant(tenantId, `
+        UPDATE alerts
+        SET state = 'resolved',
+            resolved_at = NOW()
+        WHERE id = $1
+      `, [alertId]);
+
+      // Close GLPI ticket if one exists
+      let ticketClosed = false;
+      if (alert.glpi_ticket_id) {
+        const resolutionNote = [
+          `<p><strong>Alert Resolved</strong></p>`,
+          `<p>Resolved by: ${userName}</p>`,
+          `<p>Total duration: <strong>${downtimeStr}</strong></p>`,
+          `<ul>`,
+          `<li>Triggered: ${triggeredAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</li>`,
+          alert.acknowledged_at ? `<li>Acknowledged: ${new Date(alert.acknowledged_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</li>` : '',
+          `<li>Resolved: ${resolvedAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</li>`,
+          `</ul>`,
+          `<p style="color: #999; font-size: 11px;">Resolved via VEMIO™ Dashboard</p>`,
+        ].filter(Boolean).join('\n');
+
+        const result = await closeGLPITicket(parseInt(alert.glpi_ticket_id), resolutionNote);
+        ticketClosed = !!result;
+      }
+
+      return Response.json({
+        success: true,
+        alert: { id: alertId, state: 'resolved' },
+        downtime: downtimeStr,
+        glpiTicketClosed: ticketClosed,
+        glpiTicketId: alert.glpi_ticket_id ? parseInt(alert.glpi_ticket_id) : null,
+      });
     }
   } catch (err) {
     console.error('[API /alerts PATCH] Error:', err.message);

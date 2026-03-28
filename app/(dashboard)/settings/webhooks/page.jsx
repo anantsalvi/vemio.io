@@ -23,6 +23,7 @@ export default function WebhookLogPage() {
   const [events, setEvents] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
   const [expandedId, setExpandedId] = useState(null);
@@ -61,7 +62,7 @@ export default function WebhookLogPage() {
     const interval = setInterval(fetchEvents, 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, fetchEvents]);
-
+ useEffect(() => { setMounted(true); }, []);
   const handleCopyPayload = async (payload, id) => {
     try {
       const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
@@ -161,7 +162,9 @@ export default function WebhookLogPage() {
     { value: 'unprocessed', label: 'Pending', icon: Clock },
   ];
 
-  if (error && events.length === 0) {
+  if (!mounted) return null;
+
+if (error && events.length === 0) {
     return (
       <div className="p-6">
         <div className="flex items-center gap-3 mb-6">
@@ -175,7 +178,9 @@ export default function WebhookLogPage() {
     );
   }
 
-  return (
+  if (!mounted) return null;
+
+return (
     <div className="p-4 md:p-6 max-w-full overflow-hidden">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">

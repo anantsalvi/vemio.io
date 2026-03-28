@@ -220,11 +220,6 @@ export default function Sidebar({ isRail = false, onNavigate }) {
 
       {/* Footer */}
       <div className="sidebar-footer">
-        {/* Powered by */}
-        {!isRail && branding.show_powered_by && branding.powered_by_text && (
-          <p className="powered-by">{branding.powered_by_text}</p>
-        )}
-
         {!isRail && session?.user && (
           <button
             className="sidebar-user"
@@ -252,6 +247,16 @@ export default function Sidebar({ isRail = false, onNavigate }) {
             <span>Sign out</span>
           </button>
         )}
+        {/* Fallback sign out if session hasn't loaded yet */}
+        {!isRail && !session?.user && (
+          <button
+            className="signout-btn"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+          >
+            <LogOut size={16} />
+            <span>Sign out</span>
+          </button>
+        )}
         {isRail && (
           <button
             className="signout-btn signout-btn--rail"
@@ -260,6 +265,11 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           >
             <LogOut size={16} />
           </button>
+        )}
+
+        {/* Powered by */}
+        {!isRail && branding.show_powered_by && branding.powered_by_text && (
+          <p className="powered-by">{branding.powered_by_text}</p>
         )}
       </div>
 

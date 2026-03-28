@@ -2,7 +2,10 @@
 
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
-import { Server, CheckCircle2, XCircle, AlertTriangle, Bell, MapPin } from 'lucide-react';
+import {
+  Server, CheckCircle2, XCircle, AlertTriangle, Bell, MapPin,
+  ChevronRight, TrendingUp, TrendingDown, Minus,
+} from 'lucide-react';
 
 const cardVariants = {
   hidden: { opacity: 0, y: 12 },
@@ -37,6 +40,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       bg: 'rgba(239, 68, 68, 0.1)',
       pulse: (devices?.down ?? 0) > 0,
       href: '/devices?status=down',
+      urgent: (devices?.down ?? 0) > 0,
     },
     {
       label: 'Degraded',
@@ -54,6 +58,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
       bg: 'rgba(249, 115, 22, 0.1)',
       pulse: (alerts?.active ?? 0) > 0,
       href: '/alerts',
+      urgent: (alerts?.active ?? 0) > 0,
     },
     {
       label: 'Sites',
@@ -74,7 +79,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
             <motion.div
               key={card.label}
               variants={cardVariants}
-              className="dsc-card"
+              className={`dsc-card ${card.urgent ? 'dsc-card--urgent' : ''}`}
               onClick={() => router.push(card.href)}
               role="link"
               tabIndex={0}
@@ -89,9 +94,12 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
                 <div className="dsc-icon-wrap" style={{ background: card.bg }}>
                   <Icon className="dsc-icon" style={{ color: card.color }} />
                 </div>
-                {card.pulse && (
-                  <span className="dsc-pulse-dot" style={{ background: card.color }} />
-                )}
+                <div className="dsc-card-top-right">
+                  {card.pulse && (
+                    <span className="dsc-pulse-dot" style={{ background: card.color }} />
+                  )}
+                  <ChevronRight className="dsc-chevron" />
+                </div>
               </div>
               <div className="dsc-card-body">
                 <p className="dsc-value" style={{ color: card.color }}>
@@ -132,18 +140,28 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
           border: 1px solid var(--color-vemio-border);
           min-height: 90px;
           cursor: pointer;
-          transition: border-color 0.15s, background 0.15s;
+          transition: border-color 0.15s, background 0.15s, transform 0.15s;
           outline: none;
         }
 
         .dsc-card:hover {
           border-color: var(--color-vemio-text-dim);
           background: var(--color-vemio-surface-raised);
+          transform: translateY(-1px);
+        }
+
+        .dsc-card:hover .dsc-chevron {
+          opacity: 0.5;
+          transform: translateX(2px);
         }
 
         .dsc-card:focus-visible {
           border-color: var(--color-vemio-amber);
           box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-vemio-amber) 25%, transparent);
+        }
+
+        .dsc-card--urgent {
+          border-color: rgba(239, 68, 68, 0.2);
         }
 
         @media (max-width: 479px) {
@@ -154,6 +172,12 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
           display: flex;
           align-items: center;
           justify-content: space-between;
+        }
+
+        .dsc-card-top-right {
+          display: flex;
+          align-items: center;
+          gap: 6px;
         }
 
         .dsc-icon-wrap {
@@ -169,6 +193,15 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         .dsc-icon {
           width: 16px;
           height: 16px;
+        }
+
+        .dsc-chevron {
+          width: 14px;
+          height: 14px;
+          color: var(--color-vemio-text-dim);
+          opacity: 0;
+          transition: opacity 0.15s, transform 0.15s;
+          flex-shrink: 0;
         }
 
         .dsc-pulse-dot {

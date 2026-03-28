@@ -3,7 +3,7 @@
  * GET /api/overview
  * 
  * Returns dashboard overview data: BCS score, device summary,
- * alert count, SLA gauge, uptime trend.
+ * alert count, SLA gauge, uptime trend, recent events.
  * 
  * Query params:
  *   category — 'network' (default) or 'all'
@@ -25,9 +25,6 @@ export const GET = withAuth(async (req, session) => {
   // Build device type filter
   const deviceTypeFilter = category !== 'all'
     ? 'AND device_type = ANY($1)'
-    : '';
-  const deviceTypeFilterD = category !== 'all'
-    ? 'AND d.device_type = ANY($1)'
     : '';
   const typeParams = category !== 'all' ? [NETWORK_TYPES] : [];
 
@@ -57,13 +54,11 @@ export const GET = withAuth(async (req, session) => {
       [category]
     );
 
-    // Active alerts (critical/high in last 24h)
+    // Active alerts count
     const alertResult = await queryWithTenant(tenantId,
       `SELECT COUNT(*) AS count
-       FROM webhook_events
-       WHERE event_type IN ('alert.triggered')
-         AND processed = TRUE
-         AND received_at > NOW() - INTERVAL '24 hours'`
+       FROM alerts
+       WHERE state = 'active'`
     );
 
     // Site count
@@ -102,12 +97,12 @@ export const GET = withAuth(async (req, session) => {
         const trendResult = await queryWithTenant(tenantId,
           `WITH daily AS (
              SELECT 
-               DATE(recorded_at) AS day,
+               DATE(changed_at) AS day,
                COUNT(*) FILTER (WHERE status = 'up') AS up_events,
                COUNT(*) AS total_events
              FROM device_status_history
-             WHERE recorded_at > NOW() - INTERVAL '7 days'
-             GROUP BY DATE(recorded_at)
+             WHERE changed_at > NOW() - INTERVAL '7 days'
+             GROUP BY DATE(changed_at)
              ORDER BY day
            )
            SELECT day, 
@@ -137,21 +132,21 @@ export const GET = withAuth(async (req, session) => {
         const eventsResult = await queryWithTenant(tenantId,
           `SELECT 
              dsh.status,
-             dsh.recorded_at,
+             dsh.changed_at,
              dsh.source AS event_source,
-             dsh.latency_ms,
-             dsh.cpu_percent,
+             d.id AS device_id,
              d.name AS device_name,
              d.device_type,
+             d.ip_address,
              s.name AS site_name
            FROM device_status_history dsh
            JOIN devices d ON d.id = dsh.device_id
            LEFT JOIN sites s ON s.id = d.site_id
-           WHERE dsh.recorded_at > NOW() - INTERVAL '24 hours'
+           WHERE dsh.changed_at > NOW() - INTERVAL '24 hours'
              AND d.is_retired = false
              ${eventsTypeFilter}
-           ORDER BY dsh.recorded_at DESC
-           LIMIT 15`,
+           ORDER BY dsh.changed_at DESC
+           LIMIT 20`,
           eventsParams
         );
 
@@ -168,16 +163,12 @@ export const GET = withAuth(async (req, session) => {
                 severity = 'high';
                 break;
               case 'degraded':
-                message = r.cpu_percent && parseFloat(r.cpu_percent) > 80
-                  ? `${name} CPU at ${parseFloat(r.cpu_percent).toFixed(0)}%`
-                  : r.latency_ms && r.latency_ms > 100
-                    ? `${name} latency ${r.latency_ms}ms`
-                    : `${name} degraded`;
+                message = `${name} degraded`;
                 eventType = 'alert';
                 severity = 'medium';
                 break;
               case 'up':
-                message = `${name} online`;
+                message = `${name} back online`;
                 eventType = 'resolved';
                 severity = 'info';
                 break;
@@ -188,14 +179,18 @@ export const GET = withAuth(async (req, session) => {
             }
 
             return {
-              time: new Date(r.recorded_at).toLocaleTimeString('en-IN', {
+              time: new Date(r.changed_at).toLocaleTimeString('en-IN', {
                 hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata',
               }),
+              timestamp: r.changed_at,
               type: eventType,
               message,
               severity,
               site: r.site_name || 'Unknown',
               deviceType: type,
+              device_name: r.device_name,
+              device_id: r.device_id,
+              ip_address: r.ip_address,
             };
           });
         }
@@ -217,14 +212,14 @@ export const GET = withAuth(async (req, session) => {
 function formatDeviceType(type) {
   const map = {
     firewall: 'Firewall',
-    switch: 'Switch',
+    core_switch: 'Core Switch',
+    access_switch: 'Access Switch',
     router: 'Router',
     access_point: 'AP',
     server: 'Server',
+    nas: 'NAS',
     ups: 'UPS',
     printer: 'Printer',
-    ip_phone: 'IP Phone',
-    workstation: 'Workstation',
     other: 'Device',
   };
   return map[type] || 'Device';
@@ -251,20 +246,20 @@ function getDemoOverview() {
     alerts: { active: 5 },
     sites: { total: 4 },
     uptimeTrend: [
-      { date: '2026-03-18', uptime: 99.2 },
-      { date: '2026-03-19', uptime: 99.8 },
-      { date: '2026-03-20', uptime: 98.4 },
-      { date: '2026-03-21', uptime: 99.9 },
-      { date: '2026-03-22', uptime: 99.7 },
-      { date: '2026-03-23', uptime: 99.5 },
+      { date: '2026-03-23', uptime: 99.2 },
       { date: '2026-03-24', uptime: 99.8 },
+      { date: '2026-03-25', uptime: 98.4 },
+      { date: '2026-03-26', uptime: 99.9 },
+      { date: '2026-03-27', uptime: 99.7 },
+      { date: '2026-03-28', uptime: 99.5 },
+      { date: '2026-03-29', uptime: 99.8 },
     ],
     recentEvents: [
-      { time: '14:32', type: 'alert', message: 'Core Switch SW-01 went offline', severity: 'high', site: 'HQ - Naroda', deviceType: 'Switch' },
-      { time: '13:15', type: 'resolved', message: 'AP-CONF-07 online', severity: 'info', site: 'Warehouse - Narol', deviceType: 'AP' },
-      { time: '11:48', type: 'alert', message: 'Firewall FW-02 CPU at 85%', severity: 'medium', site: 'Branch - Vatva', deviceType: 'Firewall' },
-      { time: '09:22', type: 'maintenance', message: 'Scheduled firmware update: AP-series', severity: 'info', site: 'All sites', deviceType: 'AP' },
-      { time: '08:00', type: 'report', message: 'Daily BCS recalculated: 87.4', severity: 'info', site: 'System', deviceType: 'Device' },
+      { time: '14:32', type: 'alert', message: 'Core Switch SW-01 went offline', severity: 'high', site: 'HQ - Ahmedabad', deviceType: 'Core Switch' },
+      { time: '13:15', type: 'resolved', message: 'AP-CONF-07 back online', severity: 'info', site: 'Warehouse', deviceType: 'AP' },
+      { time: '11:48', type: 'alert', message: 'Firewall FW-02 degraded', severity: 'medium', site: 'Branch Office', deviceType: 'Firewall' },
+      { time: '09:22', type: 'resolved', message: 'Server SRV-03 back online', severity: 'info', site: 'Data Center', deviceType: 'Server' },
+      { time: '08:00', type: 'report', message: 'Daily BCS recalculated: 87.4', severity: 'info', site: 'System', deviceType: 'System' },
     ],
   };
 }

@@ -3,14 +3,11 @@
  * GET /api/topology
  *
  * Returns { nodes, edges } for the tenant's device neighbor graph.
- * Nodes come from the devices table; edges from device_neighbors,
- * deduplicated so A→B and B→A collapse into one edge.
+ * Edges now include mediaType (fiber/copper/unknown) from device_ports.
  *
  * Query params:
  *   site     — filter by site_id
  *   category — 'network' (default) or 'all'
- *              network = firewall, core_switch, access_switch, access_point, router, server, p2p_link
- *              all     = includes printer, cctv, ups, access_control, nas, other
  */
 
 import { withAuth } from '@/lib/auth';
@@ -38,7 +35,6 @@ export const GET = withAuth(async (req, session) => {
       nodeParams.push(siteId);
     }
 
-    // Default to network-only; 'all' shows everything
     if (category !== 'all') {
       nodeConditions.push(`d.device_type = ANY($${pi++})`);
       nodeParams.push(NETWORK_TYPES);
@@ -56,6 +52,7 @@ export const GET = withAuth(async (req, session) => {
          d.ip_address,
          d.make,
          d.model,
+         d.serial_number,
          s.name AS site_name
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id
@@ -63,12 +60,10 @@ export const GET = withAuth(async (req, session) => {
       nodeParams
     );
 
-    // Build a Set of auvik_device_ids for fast lookup (to filter edges)
+    // Build lookup maps
     const auvikIdSet = new Set(
       nodesResult.rows.map(r => r.auvik_device_id).filter(Boolean)
     );
-
-    // Also build a map: auvik_device_id → node row (for edge resolution)
     const auvikToNode = new Map();
     for (const row of nodesResult.rows) {
       if (row.auvik_device_id) {
@@ -81,19 +76,57 @@ export const GET = withAuth(async (req, session) => {
       `SELECT DISTINCT ON (LEAST(dn.device_id, dn.neighbor_device_id),
                            GREATEST(dn.device_id, dn.neighbor_device_id))
          dn.device_id          AS source_auvik_id,
-         dn.neighbor_device_id AS target_auvik_id
+         dn.neighbor_device_id AS target_auvik_id,
+         dn.interface_name     AS source_interface,
+         dn.neighbor_interface AS target_interface
        FROM device_neighbors dn
        ORDER BY LEAST(dn.device_id, dn.neighbor_device_id),
                 GREATEST(dn.device_id, dn.neighbor_device_id)`
     );
 
-    // Filter edges to only include devices we have as nodes
+    // ── Build interface media lookup ──
+    // Map: "deviceAuvikId:interfaceName" → mediaType
+    const mediaLookup = new Map();
+    try {
+      const ifResult = await queryWithTenant(tenantId,
+        `SELECT device_auvik_id, interface_name, media_type
+         FROM device_ports
+         WHERE media_type IS NOT NULL AND media_type NOT IN ('virtual', 'unknown')`
+      );
+      for (const row of ifResult.rows) {
+        mediaLookup.set(`${row.device_auvik_id}:${row.interface_name}`, row.media_type);
+      }
+    } catch (err) {
+      // device_ports table might not exist yet — graceful fallback
+      console.warn('[VEMIO API] device_ports query failed (table may not exist yet):', err.message);
+    }
+
+    // ── Resolve edges with media type ──
     const edges = edgesResult.rows
       .filter(e => auvikIdSet.has(e.source_auvik_id) && auvikIdSet.has(e.target_auvik_id))
-      .map(e => ({
-        source: auvikToNode.get(e.source_auvik_id).id,
-        target: auvikToNode.get(e.target_auvik_id).id,
-      }));
+      .map(e => {
+        const srcNode = auvikToNode.get(e.source_auvik_id);
+        const tgtNode = auvikToNode.get(e.target_auvik_id);
+
+        // Determine media type from interface data
+        let mediaType = null;
+        if (e.source_interface) {
+          const srcMedia = mediaLookup.get(`${e.source_auvik_id}:${e.source_interface}`);
+          if (srcMedia) mediaType = srcMedia;
+        }
+        if (!mediaType && e.target_interface) {
+          const tgtMedia = mediaLookup.get(`${e.target_auvik_id}:${e.target_interface}`);
+          if (tgtMedia) mediaType = tgtMedia;
+        }
+
+        return {
+          source: srcNode.id,
+          target: tgtNode.id,
+          sourceInterface: e.source_interface || null,
+          targetInterface: e.target_interface || null,
+          mediaType: mediaType, // 'fiber', 'copper', or null (unknown)
+        };
+      });
 
     // ── Format nodes ──
     const nodes = nodesResult.rows.map(row => ({
@@ -105,6 +138,7 @@ export const GET = withAuth(async (req, session) => {
       ipAddress: row.ip_address,
       make: row.make,
       model: row.model,
+      serialNumber: row.serial_number,
       siteName: row.site_name,
     }));
 

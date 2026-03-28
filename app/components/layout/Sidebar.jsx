@@ -292,6 +292,13 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           flex-shrink: 0;
         }
 
+        @media (max-height: 700px) {
+          .sidebar-logo {
+            padding: 12px 20px 10px;
+            gap: 4px;
+          }
+        }
+
         .sidebar--rail .sidebar-logo {
           padding: 16px 6px 12px;
         }
@@ -341,10 +348,13 @@ export default function Sidebar({ isRail = false, onNavigate }) {
           margin: 0;
           padding: 12px 10px;
           flex: 1;
+          min-height: 0;
           overflow-y: auto;
           display: flex;
           flex-direction: column;
           gap: 2px;
+          scrollbar-width: thin;
+          scrollbar-color: var(--vemio-border) transparent;
         }
 
         .sidebar--rail .sidebar-nav {

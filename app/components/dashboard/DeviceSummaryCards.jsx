@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   Server, CheckCircle2, XCircle, AlertTriangle, Bell, MapPin,
-  ChevronRight, TrendingUp, TrendingDown, Minus,
+  ChevronRight,
 } from 'lucide-react';
 
 const cardVariants = {
@@ -14,11 +14,13 @@ const cardVariants = {
 
 export default function DeviceSummaryCards({ devices, alerts, sites }) {
   const router = useRouter();
+  const total = devices?.total || 1;
 
   const cards = [
     {
       label: 'Total Devices',
       value: devices?.total ?? 0,
+      sub: null,
       icon: Server,
       color: 'var(--color-vemio-teal)',
       bg: 'var(--color-vemio-teal-soft)',
@@ -27,6 +29,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
     {
       label: 'Online',
       value: devices?.up ?? 0,
+      sub: devices?.up > 0 ? `${((devices.up / total) * 100).toFixed(1)}%` : null,
       icon: CheckCircle2,
       color: 'var(--color-status-up)',
       bg: 'rgba(34, 197, 94, 0.1)',
@@ -35,6 +38,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
     {
       label: 'Offline',
       value: devices?.down ?? 0,
+      sub: devices?.down > 0 ? `${((devices.down / total) * 100).toFixed(1)}%` : null,
       icon: XCircle,
       color: 'var(--color-status-down)',
       bg: 'rgba(239, 68, 68, 0.1)',
@@ -45,6 +49,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
     {
       label: 'Degraded',
       value: devices?.degraded ?? 0,
+      sub: devices?.degraded > 0 ? `${((devices.degraded / total) * 100).toFixed(1)}%` : null,
       icon: AlertTriangle,
       color: 'var(--color-status-degraded)',
       bg: 'rgba(245, 158, 11, 0.1)',
@@ -53,6 +58,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
     {
       label: 'Active Alerts',
       value: alerts?.active ?? 0,
+      sub: null,
       icon: Bell,
       color: 'var(--color-severity-high)',
       bg: 'rgba(249, 115, 22, 0.1)',
@@ -63,6 +69,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
     {
       label: 'Sites',
       value: sites?.total ?? 0,
+      sub: null,
       icon: MapPin,
       color: 'var(--color-vemio-text-muted)',
       bg: 'rgba(148, 163, 184, 0.08)',
@@ -102,9 +109,16 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
                 </div>
               </div>
               <div className="dsc-card-body">
-                <p className="dsc-value" style={{ color: card.color }}>
-                  {card.value}
-                </p>
+                <div className="dsc-value-row">
+                  <p className="dsc-value" style={{ color: card.color }}>
+                    {card.value}
+                  </p>
+                  {card.sub && (
+                    <span className="dsc-sub" style={{ color: card.color }}>
+                      {card.sub}
+                    </span>
+                  )}
+                </div>
                 <p className="dsc-label">{card.label}</p>
               </div>
             </motion.div>
@@ -128,17 +142,16 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         }
 
         .dsc-card {
-          border-radius: 12px;
-          padding: 14px;
+          border-radius: 14px;
+          padding: 18px;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
-          gap: 10px;
+          gap: 14px;
           position: relative;
           overflow: hidden;
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
-          min-height: 90px;
           cursor: pointer;
           transition: border-color 0.15s, background 0.15s, transform 0.15s;
           outline: none;
@@ -165,7 +178,7 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         }
 
         @media (max-width: 479px) {
-          .dsc-card { padding: 12px; min-height: 80px; }
+          .dsc-card { padding: 14px; gap: 10px; }
         }
 
         .dsc-card-top {
@@ -181,9 +194,9 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         }
 
         .dsc-icon-wrap {
-          width: 32px;
-          height: 32px;
-          border-radius: 8px;
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -191,8 +204,8 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         }
 
         .dsc-icon {
-          width: 16px;
-          height: 16px;
+          width: 18px;
+          height: 18px;
         }
 
         .dsc-chevron {
@@ -220,23 +233,36 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
         .dsc-card-body {
           display: flex;
           flex-direction: column;
-          gap: 2px;
+          gap: 3px;
+        }
+
+        .dsc-value-row {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
         }
 
         .dsc-value {
-          font-size: 24px;
+          font-size: 28px;
           font-weight: 700;
           font-variant-numeric: tabular-nums;
           line-height: 1;
           margin: 0;
         }
 
+        .dsc-sub {
+          font-size: 13px;
+          font-weight: 500;
+          opacity: 0.6;
+        }
+
         @media (max-width: 479px) {
-          .dsc-value { font-size: 20px; }
+          .dsc-value { font-size: 22px; }
+          .dsc-sub { font-size: 11px; }
         }
 
         .dsc-label {
-          font-size: 11px;
+          font-size: 12px;
           color: var(--color-vemio-text-dim);
           margin: 0;
         }

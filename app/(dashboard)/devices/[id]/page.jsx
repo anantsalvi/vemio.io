@@ -1,3 +1,32 @@
+// ══════════════════════════════════════════════════════════════
+// Device Detail Page — app/(dashboard)/devices/[id]/page.jsx
+//
+// INTEGRATION CHANGE: Added DevicePortsSection between
+// IP Interfaces panel and Lifecycle panel.
+//
+// To integrate into your existing file, add:
+// 1. Import at top: import DevicePortsSection from '@/app/components/device-stencils/DevicePortsSection';
+// 2. After the IP Interfaces panel (the {hasMultipleIPs && ...} block),
+//    add the following JSX:
+//
+//    {/* ── Ports & Interfaces Stencil ── */}
+//    <DevicePortsSection
+//      deviceId={device.id || id}
+//      device={{
+//        make: device.make,
+//        model: device.model,
+//        type: device.type,
+//        name: device.name,
+//        status: device.status,
+//      }}
+//    />
+//
+// That's it — the component is fully self-contained,
+// handles its own data fetching, loading states, and errors.
+// ══════════════════════════════════════════════════════════════
+
+// FULL FILE BELOW (copy-paste replacement for your existing [id]/page.jsx)
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -7,6 +36,7 @@ import { ArrowLeft, RefreshCw, AlertTriangle, Shield, Archive, RotateCcw, Chevro
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import DevicePortsSection from '@/app/components/device-stencils/DevicePortsSection';
 
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'  },
@@ -116,7 +146,6 @@ export default function DeviceDetailPage() {
     status: h.status,
   }));
 
-  // Info cards — show primary IP only (interfaces section handles the rest)
   const infoCards = [
     { label: 'IP Address',      value: device.ipAddress || '—', mono: true },
     { label: 'Manufacturer',    value: device.make      || '—' },
@@ -128,8 +157,6 @@ export default function DeviceDetailPage() {
   ];
 
   const hasLifecycle = device.eolDate || device.warrantyExpiry;
-
-  // Interfaces: separate primary from others
   const primaryIP = interfaces.find(i => i.isPrimary);
   const otherIPs = interfaces.filter(i => !i.isPrimary);
   const hasMultipleIPs = interfaces.length > 1;
@@ -260,7 +287,7 @@ export default function DeviceDetailPage() {
           ))}
         </div>
 
-        {/* ── IP Interfaces panel — only show if device has multiple IPs ── */}
+        {/* ── IP Interfaces panel ── */}
         {hasMultipleIPs && (
           <div className="dd-panel dd-interfaces-panel">
             <button
@@ -314,6 +341,20 @@ export default function DeviceDetailPage() {
             </AnimatePresence>
           </div>
         )}
+
+        {/* ═══════════════════════════════════════════════════ */}
+        {/* ── NEW: Ports & Interfaces Stencil ──              */}
+        {/* ═══════════════════════════════════════════════════ */}
+        <DevicePortsSection
+          deviceId={device.id || id}
+          device={{
+            make: device.make,
+            model: device.model,
+            type: device.type,
+            name: device.name,
+            status: device.status,
+          }}
+        />
 
         {/* ── Lifecycle panel ── */}
         {hasLifecycle && (
@@ -468,7 +509,6 @@ export default function DeviceDetailPage() {
         }
         @media (max-width: 767px) { .dd-root { gap: 14px; } }
 
-        /* ── Retired banner ── */
         .dd-retired-banner {
           display: flex;
           align-items: center;
@@ -482,7 +522,6 @@ export default function DeviceDetailPage() {
           line-height: 1.4;
         }
 
-        /* ── Header ── */
         .dd-header {
           display: flex;
           align-items: flex-start;
@@ -539,243 +578,63 @@ export default function DeviceDetailPage() {
           flex-shrink: 0;
         }
 
-        .dd-badges {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          margin-top: 6px;
-          flex-wrap: wrap;
-        }
-        .dd-status-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          padding: 2px 8px;
-          border-radius: 20px;
-          font-size: 10px;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.07em;
-        }
-        .dd-status-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
-        .dd-meta-chip {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          background: var(--color-vemio-surface-raised);
-          padding: 2px 8px;
-          border-radius: 6px;
-          text-transform: capitalize;
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-        }
-        .dd-meta-chip--critical {
-          color: var(--color-severity-high);
-          background: rgba(249, 115, 22, 0.08);
-          border: 1px solid rgba(249, 115, 22, 0.15);
-        }
-        .dd-meta-chip--ips {
-          color: var(--color-vemio-amber);
-          background: rgba(245, 158, 11, 0.06);
-          border: 1px solid rgba(245, 158, 11, 0.12);
-          text-transform: none;
-        }
+        .dd-badges { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+        .dd-status-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; }
+        .dd-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        .dd-meta-chip { font-size: 11px; color: var(--color-vemio-text-dim); background: var(--color-vemio-surface-raised); padding: 2px 8px; border-radius: 6px; text-transform: capitalize; display: inline-flex; align-items: center; gap: 4px; }
+        .dd-meta-chip--critical { color: var(--color-severity-high); background: rgba(249, 115, 22, 0.08); border: 1px solid rgba(249, 115, 22, 0.15); }
+        .dd-meta-chip--ips { color: var(--color-vemio-amber); background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.12); text-transform: none; }
 
-        /* ── Retire button ── */
-        .dd-retire-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 7px 12px;
-          border-radius: 8px;
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-          white-space: nowrap;
-          border: 1px solid rgba(107, 114, 128, 0.25);
-          background: var(--color-vemio-surface);
-          color: var(--color-vemio-text-dim);
-          transition: background 0.15s, color 0.15s, border-color 0.15s;
-        }
-        .dd-retire-btn:hover:not(:disabled) {
-          background: rgba(239, 68, 68, 0.06);
-          border-color: rgba(239, 68, 68, 0.25);
-          color: var(--color-status-down);
-        }
-        .dd-retire-btn--reactivate:hover:not(:disabled) {
-          background: rgba(34, 197, 94, 0.06);
-          border-color: rgba(34, 197, 94, 0.25);
-          color: var(--color-status-up);
-        }
+        .dd-retire-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; white-space: nowrap; border: 1px solid rgba(107, 114, 128, 0.25); background: var(--color-vemio-surface); color: var(--color-vemio-text-dim); transition: background 0.15s, color 0.15s, border-color 0.15s; }
+        .dd-retire-btn:hover:not(:disabled) { background: rgba(239, 68, 68, 0.06); border-color: rgba(239, 68, 68, 0.25); color: var(--color-status-down); }
+        .dd-retire-btn--reactivate:hover:not(:disabled) { background: rgba(34, 197, 94, 0.06); border-color: rgba(34, 197, 94, 0.25); color: var(--color-status-up); }
         .dd-retire-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        @media (max-width: 479px) { .dd-retire-label { display: none; } .dd-retire-btn { padding: 7px 8px; } }
 
-        @media (max-width: 479px) {
-          .dd-retire-label { display: none; }
-          .dd-retire-btn { padding: 7px 8px; }
-        }
-
-        /* ── Retire confirmation ── */
         .dd-retire-confirm { overflow: hidden; }
-        .dd-retire-confirm-inner {
-          padding: 16px;
-          border-radius: 12px;
-          background: rgba(245, 158, 11, 0.04);
-          border: 1px solid rgba(245, 158, 11, 0.15);
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
-        }
+        .dd-retire-confirm-inner { padding: 16px; border-radius: 12px; background: rgba(245, 158, 11, 0.04); border: 1px solid rgba(245, 158, 11, 0.15); display: flex; flex-direction: column; gap: 14px; }
         .dd-retire-confirm-text { display: flex; gap: 10px; align-items: flex-start; }
         .dd-retire-confirm-title { font-size: 13px; font-weight: 600; color: var(--color-vemio-text); margin: 0; }
         .dd-retire-confirm-desc { font-size: 12px; color: var(--color-vemio-text-muted); margin: 4px 0 0; line-height: 1.5; }
         .dd-retire-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
-        .dd-retire-cancel-btn {
-          padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer;
-          border: 1px solid var(--color-vemio-border); background: var(--color-vemio-surface); color: var(--color-vemio-text-muted); transition: background 0.15s;
-        }
+        .dd-retire-cancel-btn { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: 1px solid var(--color-vemio-border); background: var(--color-vemio-surface); color: var(--color-vemio-text-muted); transition: background 0.15s; }
         .dd-retire-cancel-btn:hover { background: var(--color-vemio-surface-raised); }
-        .dd-retire-confirm-btn {
-          padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
-          border: none; background: rgba(239, 68, 68, 0.12); color: var(--color-status-down); transition: background 0.15s;
-        }
+        .dd-retire-confirm-btn { padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: rgba(239, 68, 68, 0.12); color: var(--color-status-down); transition: background 0.15s; }
         .dd-retire-confirm-btn:hover { background: rgba(239, 68, 68, 0.2); }
         .dd-retire-confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* ── Description ── */
-        .dd-description {
-          border-radius: 12px;
-          padding: 14px;
-          background: var(--color-vemio-surface);
-          border: 1px solid var(--color-vemio-border);
-        }
+        .dd-description { border-radius: 12px; padding: 14px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); }
         .dd-description-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
         .dd-description-text { font-size: 13px; color: var(--color-vemio-text-muted); margin: 6px 0 0; line-height: 1.5; }
 
-        /* ── Info grid ── */
-        .dd-info-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 12px;
-        }
+        .dd-info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
         @media (max-width: 767px) { .dd-info-grid { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 479px) { .dd-info-grid { gap: 8px; } }
-
-        .dd-info-card {
-          border-radius: 12px;
-          padding: 14px;
-          background: var(--color-vemio-surface);
-          border: 1px solid var(--color-vemio-border);
-        }
+        .dd-info-card { border-radius: 12px; padding: 14px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); }
         .dd-info-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
         .dd-info-value { font-size: 13px; font-weight: 500; color: var(--vemio-text); margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .dd-info-value--mono { font-family: var(--font-mono); font-size: 12px; }
 
-        /* ── IP Interfaces panel ── */
         .dd-interfaces-panel { padding: 0; }
-        .dd-interfaces-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 16px 20px;
-          cursor: pointer;
-          border: none;
-          background: transparent;
-          width: 100%;
-          text-align: left;
-          color: inherit;
-          transition: background 0.12s;
-          border-radius: 16px;
-        }
+        .dd-interfaces-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; color: inherit; transition: background 0.12s; border-radius: 16px; }
         .dd-interfaces-header:hover { background: rgba(255, 255, 255, 0.02); }
         .dd-interfaces-header-left { min-width: 0; }
         .dd-interfaces-toggle { flex-shrink: 0; }
-
         .dd-interfaces-body { overflow: hidden; }
-        .dd-interfaces-list {
-          padding: 0 20px 16px;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          max-height: 400px;
-          overflow-y: auto;
-        }
-
-        .dd-iface-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          padding: 8px 12px;
-          border-radius: 8px;
-          transition: background 0.12s;
-        }
+        .dd-interfaces-list { padding: 0 20px 16px; display: flex; flex-direction: column; gap: 4px; max-height: 400px; overflow-y: auto; }
+        .dd-iface-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 8px; transition: background 0.12s; }
         .dd-iface-row:hover { background: rgba(255, 255, 255, 0.03); }
         .dd-iface-row--primary { background: rgba(245, 158, 11, 0.03); }
         .dd-iface-row--primary:hover { background: rgba(245, 158, 11, 0.06); }
+        .dd-iface-ip { font-family: var(--font-mono); font-size: 12px; color: var(--color-vemio-text); font-weight: 500; flex-shrink: 0; }
+        .dd-iface-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+        .dd-iface-badge { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 6px; border-radius: 4px; background: rgba(148, 163, 184, 0.1); color: var(--color-vemio-text-dim); }
+        .dd-iface-badge--primary { background: rgba(245, 158, 11, 0.12); color: var(--color-vemio-amber); }
+        @media (max-width: 479px) { .dd-interfaces-header { padding: 12px 14px; } .dd-interfaces-list { padding: 0 14px 12px; } .dd-iface-row { flex-direction: column; align-items: flex-start; gap: 4px; } .dd-iface-meta { justify-content: flex-start; } }
 
-        .dd-iface-ip {
-          font-family: var(--font-mono);
-          font-size: 12px;
-          color: var(--color-vemio-text);
-          font-weight: 500;
-          flex-shrink: 0;
-        }
-        .dd-iface-meta {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-        .dd-iface-badge {
-          font-size: 9px;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          padding: 2px 6px;
-          border-radius: 4px;
-          background: rgba(148, 163, 184, 0.1);
-          color: var(--color-vemio-text-dim);
-        }
-        .dd-iface-badge--primary {
-          background: rgba(245, 158, 11, 0.12);
-          color: var(--color-vemio-amber);
-        }
-        .dd-iface-source {
-          font-size: 9px;
-          color: var(--color-vemio-text-dim);
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          opacity: 0.5;
-        }
-
-        @media (max-width: 479px) {
-          .dd-interfaces-header { padding: 12px 14px; }
-          .dd-interfaces-list { padding: 0 14px 12px; }
-          .dd-iface-row { flex-direction: column; align-items: flex-start; gap: 4px; }
-          .dd-iface-meta { justify-content: flex-start; }
-        }
-
-        /* ── Lifecycle cards ── */
-        .dd-lifecycle-row {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 12px;
-        }
+        .dd-lifecycle-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
         @media (max-width: 479px) { .dd-lifecycle-row { grid-template-columns: 1fr; } }
-
-        .dd-lifecycle-card {
-          border-radius: 12px;
-          padding: 16px;
-          background: var(--color-vemio-surface);
-          border: 1px solid var(--color-vemio-border);
-        }
+        .dd-lifecycle-card { border-radius: 12px; padding: 16px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); }
         .dd-lifecycle-card--expired { background: rgba(239, 68, 68, 0.04); border-color: rgba(239, 68, 68, 0.15); }
         .dd-lifecycle-card--warning { background: rgba(245, 158, 11, 0.04); border-color: rgba(245, 158, 11, 0.15); }
         .dd-lifecycle-label { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; }
@@ -784,62 +643,30 @@ export default function DeviceDetailPage() {
         .dd-lifecycle-tag--expired { color: var(--color-severity-high); background: rgba(239, 68, 68, 0.08); }
         .dd-lifecycle-tag--warning { color: var(--color-vemio-amber); background: rgba(245, 158, 11, 0.08); }
 
-        /* ── Shared panel ── */
-        .dd-panel {
-          border-radius: 16px;
-          padding: 20px;
-          background: var(--color-vemio-surface);
-          border: 1px solid var(--color-vemio-border);
-        }
+        .dd-panel { border-radius: 16px; padding: 20px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); }
         @media (max-width: 479px) { .dd-panel { padding: 14px; } }
-
         .dd-panel-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; }
         .dd-panel-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 3px 0 0; }
 
-        .dd-uptime-header {
-          display: flex; align-items: flex-start; justify-content: space-between;
-          gap: 12px; margin-bottom: 20px; flex-wrap: wrap;
-        }
+        .dd-uptime-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
         .dd-uptime-header-left { min-width: 0; }
         .dd-uptime-header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-        @media (max-width: 479px) {
-          .dd-uptime-header { flex-direction: column; gap: 10px; }
-          .dd-uptime-header-right { align-self: flex-start; }
-        }
-
+        @media (max-width: 479px) { .dd-uptime-header { flex-direction: column; gap: 10px; } .dd-uptime-header-right { align-self: flex-start; } }
         .dd-uptime-pct { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
         .dd-range-btns { display: flex; gap: 2px; }
-        .dd-range-btn {
-          padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 500;
-          cursor: pointer; border: none; transition: background 0.15s, color 0.15s; min-height: 30px;
-        }
+        .dd-range-btn { padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: none; transition: background 0.15s, color 0.15s; min-height: 30px; }
 
-        .dd-empty-chart {
-          display: flex; align-items: center; justify-content: center;
-          height: 200px; font-size: 13px; color: var(--color-vemio-text-dim);
-        }
+        .dd-empty-chart { display: flex; align-items: center; justify-content: center; height: 200px; font-size: 13px; color: var(--color-vemio-text-dim); }
+        .dd-tooltip { border-radius: 8px; padding: 8px 12px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border); }
 
-        .dd-tooltip {
-          border-radius: 8px; padding: 8px 12px; font-size: 12px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-          background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border);
-        }
-
-        /* ── Log ── */
         .dd-log { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
-        .dd-log-row {
-          display: flex; align-items: center; gap: 10px; padding: 7px 12px;
-          border-radius: 8px; transition: background 0.12s; flex-wrap: wrap;
-        }
+        .dd-log-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; transition: background 0.12s; flex-wrap: wrap; }
         .dd-log-row:hover { background: var(--color-vemio-surface-raised); }
         .dd-log-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
         .dd-log-status { font-size: 12px; font-weight: 500; min-width: 52px; }
         .dd-log-time { font-size: 11px; color: var(--color-vemio-text-dim); margin-left: auto; }
         .dd-log-source { font-size: 10px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
-        @media (max-width: 479px) {
-          .dd-log-time { margin-left: 0; }
-          .dd-log-source { display: none; }
-        }
+        @media (max-width: 479px) { .dd-log-time { margin-left: 0; } .dd-log-source { display: none; } }
       `}</style>
     </>
   );

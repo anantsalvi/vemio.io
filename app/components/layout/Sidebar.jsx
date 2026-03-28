@@ -26,6 +26,7 @@ import {
   Settings,
   Palette,
   User,
+  Webhook,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -58,8 +59,8 @@ const NAV_STRUCTURE = [
     children: [
       { href: "/settings/account",       label: "Account",       icon: User },
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
-      { href: "/settings/branding",      label: "Branding",      icon: Palette },
-      { href: '/settings/webhooks',      label: 'Webhook Log',   icon: Webhook },
+      { href: "/settings/branding",      label: "Branding",      icon: Palette, adminOnly: true },
+      { href: '/settings/webhooks',      label: 'Webhook Log',   icon: Webhook, adminOnly: true },
     ],
   },
 ];

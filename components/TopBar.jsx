@@ -23,6 +23,7 @@ const PAGE_TITLES = {
   '/settings/reports':       'Report Scheduling',
   '/settings/branding':      'Branding',
   '/settings/account':       'Account Settings',
+  '/settings/webhooks':      'Webhook Log',
 };
 
 /* Shorter titles for mobile to prevent truncation */
@@ -31,7 +32,7 @@ const PAGE_TITLES_SHORT = {
   '/settings/notifications': 'Notifications',
   '/settings/reports':       'Report Schedule',
   '/settings/account':       'Account',
-  '/settings/webhooks':      { short: 'Webhooks', full: 'Webhook Log' },
+  '/settings/webhooks':      'Webhooks',
 };
 
 export default function TopBar({ onMenuClick, isMobile }) {

@@ -7,9 +7,12 @@
  * Admin-only endpoint for debugging webhook integrations.
  * 
  * Query params:
- *   ?limit=50        — number of events (default 50, max 200)
- *   ?status=all       — filter: all | processed | failed | unprocessed
- *   ?source=auvik     — filter by source (default: all)
+ *   ?limit=50         — number of events (default 50, max 200)
+ *   ?status=all        — filter: all | processed | failed | unprocessed
+ *   ?source=auvik      — filter by source (default: all)
+ * 
+ * Note: webhook_events has a bypass RLS policy for vemio_api,
+ * so we explicitly filter by tenant_id from the session.
  */
 
 import { withAuth } from '@/lib/auth';
@@ -27,10 +30,10 @@ export async function GET(request) {
     const status = searchParams.get('status') || 'all';
     const source = searchParams.get('source') || 'all';
 
-    // Build WHERE clauses
-    const conditions = [];
-    const params = [];
-    let paramIndex = 1;
+    // Build WHERE clauses — always filter by tenant even though RLS bypasses
+    const conditions = ['we.tenant_id = $1'];
+    const params = [session.tenantId];
+    let paramIndex = 2;
 
     if (status === 'processed') {
       conditions.push(`we.processed = true AND we.error_message IS NULL`);
@@ -46,11 +49,9 @@ export async function GET(request) {
       paramIndex++;
     }
 
-    const whereClause = conditions.length > 0
-      ? `AND ${conditions.join(' AND ')}`
-      : '';
-
     params.push(limit);
+
+    const whereClause = conditions.join(' AND ');
 
     const result = await queryWithTenant(
       session.tenantId,
@@ -60,15 +61,15 @@ export async function GET(request) {
          we.event_type,
          we.auvik_device_id,
          we.tenant_id,
+         we.site_id,
          we.processed,
          we.processed_at,
          we.error_message,
          we.raw_payload,
-         we.created_at
+         we.received_at
        FROM webhook_events we
-       WHERE we.tenant_id = app.current_tenant_id()
-         ${whereClause}
-       ORDER BY we.created_at DESC
+       WHERE ${whereClause}
+       ORDER BY we.received_at DESC
        LIMIT $${paramIndex}`,
       params
     );
@@ -102,6 +103,7 @@ export async function GET(request) {
         id: row.id,
         source: row.source,
         eventType: row.event_type,
+        auvikDeviceId: row.auvik_device_id,
         deviceName: displayName,
         alertStatus: displayStatus,
         alertName: alertName,
@@ -109,7 +111,7 @@ export async function GET(request) {
         processedAt: row.processed_at,
         errorMessage: row.error_message,
         rawPayload: row.raw_payload,
-        createdAt: row.created_at,
+        receivedAt: row.received_at,
       };
     });
 
@@ -121,11 +123,11 @@ export async function GET(request) {
          COUNT(*) FILTER (WHERE processed = true AND error_message IS NULL) AS processed,
          COUNT(*) FILTER (WHERE error_message IS NOT NULL) AS failed,
          COUNT(*) FILTER (WHERE processed = false) AS unprocessed,
-         MIN(created_at) AS first_event,
-         MAX(created_at) AS last_event
+         MIN(received_at) AS first_event,
+         MAX(received_at) AS last_event
        FROM webhook_events
-       WHERE tenant_id = app.current_tenant_id()`,
-      []
+       WHERE tenant_id = $1`,
+      [session.tenantId]
     );
 
     const stats = statsResult.rows[0] || {};

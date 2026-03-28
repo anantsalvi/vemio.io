@@ -90,11 +90,11 @@ function verifySignature(payload, request) {
 
 
 /**
- * Resolve Auvik companyId → VEMIO tenant_id (UUID).
+ * Resolve Auvik companyId → VEMIO tenant_id (UUID) and optional site_id.
  * The companyId arrives as data.networkId via JSONata transform.
  */
-async function resolveTenant(networkId) {
-  if (!networkId) return null;
+async function resolveMapping(networkId) {
+  if (!networkId) return { tenantId: null, siteId: null };
 
   // Fast path: in-memory map → slug → DB lookup for UUID
   const slug = AUVIK_TENANT_MAP[networkId];
@@ -103,15 +103,37 @@ async function resolveTenant(networkId) {
       `SELECT id FROM tenants WHERE slug = $1 AND is_active = TRUE LIMIT 1`,
       [slug]
     );
-    if (result.rows.length > 0) return result.rows[0].id;
+    if (result.rows.length > 0) {
+      return { tenantId: result.rows[0].id, siteId: null };
+    }
   }
 
-  // Slow path: search auvik_network_ids array
+  // Check site-level mapping (more specific)
+  const siteResult = await queryRaw(
+    `SELECT s.id AS site_id, s.tenant_id 
+     FROM sites s 
+     WHERE s.auvik_network_id = $1 AND s.is_active = TRUE
+     LIMIT 1`,
+    [networkId]
+  );
+
+  if (siteResult.rows.length > 0) {
+    return {
+      tenantId: siteResult.rows[0].tenant_id,
+      siteId: siteResult.rows[0].site_id,
+    };
+  }
+
+  // Slow path: search auvik_network_ids array on tenants
   const result = await queryRaw(
     `SELECT id FROM tenants WHERE $1 = ANY(auvik_network_ids) AND is_active = TRUE LIMIT 1`,
     [networkId]
   );
-  return result.rows.length > 0 ? result.rows[0].id : null;
+  if (result.rows.length > 0) {
+    return { tenantId: result.rows[0].id, siteId: null };
+  }
+
+  return { tenantId: null, siteId: null };
 }
 
 
@@ -250,16 +272,16 @@ export async function POST(request) {
     const deviceId = data.deviceId || null;
     const networkId = data.networkId || null;
 
-    // Resolve tenant
-    const tenantId = await resolveTenant(networkId);
+    // Resolve tenant + site
+    const { tenantId, siteId } = await resolveMapping(networkId);
 
-    // Log raw event
+    // Log raw event (includes site_id column)
     const insertResult = await queryRaw(
       `INSERT INTO webhook_events (
-         source, event_type, auvik_device_id, tenant_id, raw_payload
-       ) VALUES ('auvik', $1, $2, $3, $4)
+         source, event_type, auvik_device_id, tenant_id, site_id, raw_payload
+       ) VALUES ('auvik', $1, $2, $3, $4, $5)
        RETURNING id`,
-      [eventType, deviceId, tenantId, JSON.stringify(payload)]
+      [eventType, deviceId, tenantId, siteId, JSON.stringify(payload)]
     );
 
     const webhookEventId = insertResult.rows[0].id;

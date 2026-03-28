@@ -234,10 +234,8 @@ export default function WebhookLogPage() {
             <div className="text-xs text-zinc-500 mb-1">Last Event</div>
             <div className="text-sm font-medium text-zinc-300 truncate">
               {stats.lastEvent
-                ? new Date(stats.lastEvent).toLocaleString('en-IN', {
-                    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
-                  })
-                : 'None'}
+                ? formatTimestamp(stats.lastEvent)
+                : 'None yet'}
             </div>
           </div>
         </div>
@@ -280,7 +278,7 @@ export default function WebhookLogPage() {
           <Webhook size={40} className="text-zinc-700 mx-auto mb-3" />
           <p className="text-zinc-400 font-medium">No webhook events yet</p>
           <p className="text-zinc-600 text-sm mt-1">
-            Configure the webhook URL in Auvik and trigger a test connection.
+            Configure the webhook URL in Auvik and trigger a test connection to verify.
           </p>
         </div>
       ) : (
@@ -324,7 +322,7 @@ export default function WebhookLogPage() {
 
                   {/* Timestamp */}
                   <div className="text-xs text-zinc-500 flex-shrink-0 text-right min-w-[80px] hidden md:block">
-                    {formatTimestamp(event.createdAt)}
+                    {formatTimestamp(event.receivedAt)}
                   </div>
                 </button>
 
@@ -350,12 +348,16 @@ export default function WebhookLogPage() {
                             <span className="text-zinc-300">{event.source}</span>
                           </div>
                           <div>
-                            <span className="text-zinc-500 text-xs block">Status</span>
-                            {getStatusBadge(event)}
+                            <span className="text-zinc-500 text-xs block">Auvik Device ID</span>
+                            <span className="text-zinc-300 font-mono text-xs truncate block max-w-[200px]">
+                              {event.auvikDeviceId || '—'}
+                            </span>
                           </div>
                           <div>
-                            <span className="text-zinc-500 text-xs block">Received</span>
-                            <span className="text-zinc-300 text-xs">{formatTimestamp(event.createdAt)}</span>
+                            <span className="text-zinc-500 text-xs block">Processed At</span>
+                            <span className="text-zinc-300 text-xs">
+                              {event.processedAt ? formatTimestamp(event.processedAt) : '—'}
+                            </span>
                           </div>
                         </div>
 
@@ -404,7 +406,7 @@ export default function WebhookLogPage() {
 
       {/* Auto-refresh indicator */}
       {autoRefresh && (
-        <div className="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 rounded-full px-3 py-1.5 text-xs text-zinc-400 flex items-center gap-2 shadow-lg">
+        <div className="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 rounded-full px-3 py-1.5 text-xs text-zinc-400 flex items-center gap-2 shadow-lg z-50">
           <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
           Live — refreshing every 10s
         </div>

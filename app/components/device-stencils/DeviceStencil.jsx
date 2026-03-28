@@ -7,6 +7,7 @@ import {
   matchPortsToStencil,
   PORT_TYPE_STYLES,
   PORT_STATUS_COLORS,
+  isPhysicalPort,
 } from './stencilRegistry';
 
 /**
@@ -23,14 +24,21 @@ export default function DeviceStencil({ device, ports = [], onPortSelect, select
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const svgRef = useRef(null);
 
+  // Filter out virtual/software interfaces (BR0, bond0, wifi0, vlan100, lo, etc.)
+  // Only physical ports should appear on the hardware stencil drawing
+  const stencilPorts = useMemo(
+    () => ports.filter(isPhysicalPort),
+    [ports]
+  );
+
   const stencil = useMemo(
-    () => getStencilTemplate(device?.make, device?.model, device?.type, ports),
-    [device?.make, device?.model, device?.type, ports]
+    () => getStencilTemplate(device?.make, device?.model, device?.type, stencilPorts),
+    [device?.make, device?.model, device?.type, stencilPorts]
   );
 
   const portMap = useMemo(
-    () => matchPortsToStencil(stencil, ports),
-    [stencil, ports]
+    () => matchPortsToStencil(stencil, stencilPorts),
+    [stencil, stencilPorts]
   );
 
   const handlePortHover = useCallback((e, portDef) => {

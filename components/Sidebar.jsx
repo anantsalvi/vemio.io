@@ -15,13 +15,15 @@ import {
   FileBarChart,
   LogOut,
   Zap,
-  Clock
+  Clock,
+  Signal
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/overview",      label: "Overview",       icon: LayoutDashboard },
   { href: "/intelligence",  label: "Intelligence",   icon: Activity },
   { href: "/devices",       label: "Device Health",  icon: Monitor },
+  { href: "/availability",  label: "Availability",   icon: Signal },
   { href: "/tickets",       label: "Tickets & SLA",  icon: Ticket },
   { href: "/alerts",        label: "Alerts",         icon: Bell },
   { href: "/sites",         label: "Sites",          icon: MapPin },

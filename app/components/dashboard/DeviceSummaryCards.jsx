@@ -1,10 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 import {
   Server, CheckCircle2, XCircle, AlertTriangle, Bell, MapPin,
-  ChevronRight,
+  ChevronRight, Info,
 } from 'lucide-react';
 
 const cardVariants = {
@@ -14,6 +15,7 @@ const cardVariants = {
 
 export default function DeviceSummaryCards({ devices, alerts, sites }) {
   const router = useRouter();
+  const [showInfo, setShowInfo] = useState(false);
   const total = devices?.total || 1;
 
   const cards = [
@@ -79,59 +81,110 @@ export default function DeviceSummaryCards({ devices, alerts, sites }) {
 
   return (
     <>
-      <div className="dsc-grid">
-        {cards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <motion.div
-              key={card.label}
-              variants={cardVariants}
-              className={`dsc-card ${card.urgent ? 'dsc-card--urgent' : ''}`}
-              onClick={() => router.push(card.href)}
-              role="link"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  router.push(card.href);
-                }
-              }}
-            >
-              <div className="dsc-card-top">
-                <div className="dsc-icon-wrap" style={{ background: card.bg }}>
-                  <Icon className="dsc-icon" style={{ color: card.color }} />
+      <div className="dsc-wrap">
+        {showInfo && (
+          <div className="dsc-info-box">
+            Real-time device status from Auvik monitoring. Shows current online/offline/degraded counts, active alerts, and sites. Click any card to drill down. Filtered by the Network/All toggle.
+          </div>
+        )}
+        <div className="dsc-grid">
+          {cards.map((card, i) => {
+            const Icon = card.icon;
+            return (
+              <motion.div
+                key={card.label}
+                variants={cardVariants}
+                className={`dsc-card ${card.urgent ? 'dsc-card--urgent' : ''}`}
+                onClick={() => router.push(card.href)}
+                role="link"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    router.push(card.href);
+                  }
+                }}
+              >
+                <div className="dsc-card-top">
+                  <div className="dsc-icon-wrap" style={{ background: card.bg }}>
+                    <Icon className="dsc-icon" style={{ color: card.color }} />
+                  </div>
+                  <div className="dsc-card-top-right">
+                    {i === 0 && (
+                      <button
+                        className="dsc-info-btn"
+                        onClick={(e) => { e.stopPropagation(); setShowInfo(p => !p); }}
+                        title="What are these cards?"
+                      >
+                        <Info size={10} />
+                      </button>
+                    )}
+                    {card.pulse && (
+                      <span className="dsc-pulse-dot" style={{ background: card.color }} />
+                    )}
+                    <ChevronRight className="dsc-chevron" />
+                  </div>
                 </div>
-                <div className="dsc-card-top-right">
-                  {card.pulse && (
-                    <span className="dsc-pulse-dot" style={{ background: card.color }} />
-                  )}
-                  <ChevronRight className="dsc-chevron" />
+                <div className="dsc-card-body">
+                  <div className="dsc-value-row">
+                    <p className="dsc-value" style={{ color: card.color }}>
+                      {card.value}
+                    </p>
+                    {card.sub && (
+                      <span className="dsc-sub" style={{ color: card.color }}>
+                        {card.sub}
+                      </span>
+                    )}
+                  </div>
+                  <p className="dsc-label">{card.label}</p>
                 </div>
-              </div>
-              <div className="dsc-card-body">
-                <div className="dsc-value-row">
-                  <p className="dsc-value" style={{ color: card.color }}>
-                    {card.value}
-                  </p>
-                  {card.sub && (
-                    <span className="dsc-sub" style={{ color: card.color }}>
-                      {card.sub}
-                    </span>
-                  )}
-                </div>
-                <p className="dsc-label">{card.label}</p>
-              </div>
-            </motion.div>
-          );
-        })}
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
 
       <style>{`
+        .dsc-wrap {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          height: 100%;
+        }
+        .dsc-info-box {
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--color-vemio-text-muted);
+          background: var(--color-vemio-surface-raised);
+          border: 1px solid var(--color-vemio-border);
+          border-radius: 8px;
+          padding: 10px 12px;
+        }
+        .dsc-info-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          border: 1px solid var(--color-vemio-border);
+          background: transparent;
+          color: var(--color-vemio-text-dim);
+          cursor: pointer;
+          padding: 0;
+          transition: color 0.15s, border-color 0.15s;
+          flex-shrink: 0;
+        }
+        .dsc-info-btn:hover {
+          color: var(--color-vemio-text-muted);
+          border-color: var(--color-vemio-text-muted);
+        }
+
         .dsc-grid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 12px;
-          height: 100%;
+          flex: 1;
         }
 
         @media (max-width: 767px) {

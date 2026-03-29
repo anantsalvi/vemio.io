@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useState, useMemo } from 'react';
+import { Info } from 'lucide-react';
 import {
   AreaChart,
   Area,
@@ -13,11 +14,14 @@ import {
 
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+  const formattedDate = label
+    ? new Date(label).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '';
   return (
     <div className="uc-tip">
-      <p className="uc-tip-date">{label}</p>
+      <p className="uc-tip-date">{formattedDate}</p>
       <p className="uc-tip-val" style={{ color: payload[0].stroke }}>
-        {payload[0].value != null ? payload[0].value.toFixed(1) : '—'}% uptime
+        {payload[0].value != null ? payload[0].value.toFixed(1) : '\u2014'}% uptime
       </p>
       <style>{`
         .uc-tip { border-radius: 8px; padding: 8px 12px; font-size: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border); }
@@ -29,6 +33,7 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 export default function UptimeChart({ data, devices }) {
+  const [showInfo, setShowInfo] = useState(false);
   const chartData = data || [];
 
   const yDomain = useMemo(() => {
@@ -56,8 +61,11 @@ export default function UptimeChart({ data, devices }) {
   return (
     <div className="uc-card">
       <div className="uc-header">
-        <div>
+        <div className="uc-header-left">
           <h3 className="uc-title">Uptime Trend</h3>
+          <button className="uc-info-btn" onClick={() => setShowInfo(p => !p)} title="What is this?">
+            <Info size={10} />
+          </button>
           <p className="uc-sub">Last 7 days · all sites</p>
         </div>
         {latestUptime != null && (
@@ -70,8 +78,15 @@ export default function UptimeChart({ data, devices }) {
         )}
       </div>
 
+      {showInfo && (
+        <div className="uc-info-box">
+          Daily uptime percentage over the last 7 days, calculated from device status change events. Each data point represents the ratio of "up" events to total status events for that day across all monitored devices.
+        </div>
+      )}
+
       {chartData.length > 0 ? (
-        <ResponsiveContainer width="100%" height={220}>
+  <div style={{ flex: 1, minHeight: 0 }}>
+  <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: -15 }}>
             <defs>
               <linearGradient id="uptimeGrad" x1="0" y1="0" x2="0" y2="1">
@@ -101,6 +116,8 @@ export default function UptimeChart({ data, devices }) {
             />
           </AreaChart>
         </ResponsiveContainer>
+  </div>
+        
       ) : (
         <div className="uc-empty">No uptime data yet — status history builds over time</div>
       )}
@@ -123,9 +140,28 @@ export default function UptimeChart({ data, devices }) {
           margin-bottom: 16px;
           flex-shrink: 0;
         }
-        .uc-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; }
-        .uc-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 2px 0 0; }
-        .uc-pct-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+        .uc-header-left {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+        .uc-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; white-space: nowrap; }
+        .uc-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 0; width: 100%; }
+        .uc-info-btn {
+          display: flex; align-items: center; justify-content: center;
+          width: 16px; height: 16px; border-radius: 50%;
+          border: 1px solid var(--color-vemio-border); background: transparent;
+          color: var(--color-vemio-text-dim); cursor: pointer; padding: 0;
+          transition: color 0.15s, border-color 0.15s; flex-shrink: 0;
+        }
+        .uc-info-btn:hover { color: var(--color-vemio-text-muted); border-color: var(--color-vemio-text-muted); }
+        .uc-info-box {
+          font-size: 11px; line-height: 1.5; color: var(--color-vemio-text-muted);
+          background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border);
+          border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; flex-shrink: 0;
+        }
+        .uc-pct-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; }
         .uc-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
         .uc-pct-label { font-size: 9px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
         .uc-empty {

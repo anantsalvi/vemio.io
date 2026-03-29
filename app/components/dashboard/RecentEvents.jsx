@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   CheckCircle2, Bell, Wrench, FileText,
-  ChevronDown, ChevronUp, ArrowRight, Clock, Filter,
+  ChevronDown, ChevronUp, ArrowRight, Clock, Filter, Info,
 } from 'lucide-react';
 
 const eventIcons = {
@@ -59,6 +59,7 @@ export default function RecentEvents({ events }) {
   const items = events || [];
   const [expandedIndex, setExpandedIndex] = useState(null);
   const [deviceFilter, setDeviceFilter] = useState('all');
+  const [showInfo, setShowInfo] = useState(false);
 
   const toggleExpand = (index) => {
     setExpandedIndex(expandedIndex === index ? null : index);
@@ -80,6 +81,9 @@ export default function RecentEvents({ events }) {
       <div className="re-header">
         <div className="re-header-left">
           <h3 className="re-title">Recent Activity</h3>
+          <button className="re-info-btn" onClick={() => setShowInfo(p => !p)} title="What is this?">
+            <Info size={10} />
+          </button>
           {filteredItems.length > 0 && (
             <span className="re-count">{filteredItems.length}</span>
           )}
@@ -90,6 +94,12 @@ export default function RecentEvents({ events }) {
           </button>
         )}
       </div>
+
+      {showInfo && (
+        <div className="re-info-box">
+          Device status changes from the last 24 hours. Shows when devices went offline, came back online, or entered degraded state. Filter by known vs unknown devices to focus on identified infrastructure.
+        </div>
+      )}
 
       {/* Filter bar */}
       {items.length > 0 && (
@@ -214,7 +224,7 @@ export default function RecentEvents({ events }) {
           flex-direction: column;
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
-          height: 340px;
+          max-height: 720px;
         }
 
         .re-header {
@@ -225,8 +235,21 @@ export default function RecentEvents({ events }) {
           margin-bottom: 8px;
           flex-shrink: 0;
         }
-        .re-header-left { display: flex; align-items: center; gap: 8px; }
+        .re-header-left { display: flex; align-items: center; gap: 6px; }
         .re-title { font-size: 13px; font-weight: 600; color: var(--vemio-text); margin: 0; }
+        .re-info-btn {
+          display: flex; align-items: center; justify-content: center;
+          width: 16px; height: 16px; border-radius: 50%;
+          border: 1px solid var(--color-vemio-border); background: transparent;
+          color: var(--color-vemio-text-dim); cursor: pointer; padding: 0;
+          transition: color 0.15s, border-color 0.15s; flex-shrink: 0;
+        }
+        .re-info-btn:hover { color: var(--color-vemio-text-muted); border-color: var(--color-vemio-text-muted); }
+        .re-info-box {
+          font-size: 11px; line-height: 1.5; color: var(--color-vemio-text-muted);
+          background: var(--color-vemio-surface-raised); border: 1px solid var(--color-vemio-border);
+          border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; flex-shrink: 0;
+        }
         .re-count {
           font-size: 10px; color: var(--color-vemio-text-dim);
           background: var(--color-vemio-surface-raised);
@@ -306,12 +329,13 @@ export default function RecentEvents({ events }) {
         .re-empty {
           flex: 1; display: flex; flex-direction: column;
           align-items: center; justify-content: center; gap: 6px;
+          min-height: 200px;
         }
         .re-empty-title { font-size: 13px; font-weight: 500; color: var(--color-vemio-text-muted); margin: 0; }
         .re-empty-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 0; }
 
         @media (max-width: 767px) {
-          .re-card { height: auto; max-height: 340px; }
+          .re-card { max-height: 400px; }
         }
       `}</style>
     </div>

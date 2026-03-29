@@ -347,6 +347,16 @@ export default function TopologyPreview() {
       <div className="tp-preview-header">
         <div className="tp-preview-header-left">
           <h3 className="tp-preview-title">Network Topology</h3>
+<button
+  onClick={(e) => { e.stopPropagation(); const el = e.currentTarget.nextElementSibling; if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none'; }}
+  title="What is this?"
+  style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:18, height:18, borderRadius:'50%', border:'1px solid var(--color-vemio-border)', background:'transparent', color:'var(--color-vemio-text-dim)', cursor:'pointer', padding:0, flexShrink:0, boxSizing:'border-box', lineHeight:0, verticalAlign:'middle' }}
+>
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+</button>
+<div style={{ display:'none', fontSize:11, lineHeight:1.5, color:'var(--color-vemio-text-muted)', background:'var(--color-vemio-surface-raised)', border:'1px solid var(--color-vemio-border)', borderRadius:8, padding:'10px 12px', position:'absolute', top:44, left:16, right:16, zIndex:10 }}>
+  Live network topology showing device hierarchy, connection types (fiber/copper/tunnel), and current status. Click to open the full interactive map.
+</div>
           {statusSummary && (
             <p className="tp-preview-sub">
               {statusSummary.total} devices · {statusSummary.edges} connections
@@ -429,16 +439,17 @@ export default function TopologyPreview() {
           border-radius: 16px;
           background: var(--color-vemio-surface);
           border: 1px solid var(--color-vemio-border);
-          overflow: hidden;
+          overflow: visible;
         }
         .tp-preview-header {
+          position: relative;
           display: flex;
-          align-items: flex-start;
+          align-items: center;
           justify-content: space-between;
           padding: 16px 20px 12px;
           gap: 12px;
         }
-        .tp-preview-header-left { min-width: 0; }
+        .tp-preview-header-left { min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         .tp-preview-title {
           font-size: 13px;
           font-weight: 600;
@@ -446,9 +457,10 @@ export default function TopologyPreview() {
           margin: 0;
         }
         .tp-preview-sub {
-          font-size: 11px;
-          color: var(--color-vemio-text-dim);
-          margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--color-vemio-text-dim);
+  margin: 2px 0 0;
+  width: 100%;
         }
         .tp-preview-down {
           color: var(--color-status-down);

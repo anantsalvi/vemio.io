@@ -1,32 +1,35 @@
 /**
  * VEMIO™ — Availability API
- * GET /api/availability?days=7|30|90&tenantId=...
- *
- * Returns:
- *   - fleet_availability: overall % uptime across all monitored devices
- *   - devices: per-device uptime sorted by worst performers
- *   - outages: per-device outage intervals for Gantt timeline
- *   - summary: total devices, total downtime hours, worst device
+ * GET /api/availability?days=7|30|90&category=network|all&tenantId=...
  */
 
 import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/auth';
 import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
+const NETWORK_TYPES = [
+  'firewall', 'core_switch', 'access_switch', 'access_point',
+  'router', 'server', 'p2p_link',
+];
+
 export const GET = withAuth(async (req, session) => {
   try {
     const { searchParams } = new URL(req.url);
     const days = Math.min(Math.max(parseInt(searchParams.get('days') || '7', 10), 1), 90);
+    const category = searchParams.get('category') || 'network';
     const target = await resolveTargetTenant(session, req);
 
     if (target.error) {
       return NextResponse.json({ error: target.error }, { status: 403 });
     }
 
+    // Build device type filter
+    const deviceTypeFilter = category !== 'all'
+      ? 'AND d.device_type = ANY($2)'
+      : '';
+    const baseParams = category !== 'all' ? [days, NETWORK_TYPES] : [days];
+
     // ── 1. Per-device availability (uptime %) ──
-    // Uses LEFT JOIN to sites for site_name (devices may have site_id FK).
-    // RLS scopes to tenant via queryWithTenant.
-    // $1 = days (integer)
     const deviceAvailSQL = `
       WITH history AS (
         SELECT
@@ -45,27 +48,18 @@ export const GET = withAuth(async (req, session) => {
         LEFT JOIN sites s ON s.id = d.site_id AND s.tenant_id = d.tenant_id
         WHERE dsh.changed_at >= NOW() - make_interval(days => $1::int)
           AND d.is_monitored = true
+          AND d.is_retired = false
+          ${deviceTypeFilter}
       ),
       durations AS (
         SELECT
-          device_id,
-          device_name,
-          device_type,
-          site_name,
-          is_critical,
-          status,
-          EXTRACT(EPOCH FROM (
-            COALESCE(next_change, NOW()) - changed_at
-          )) AS duration_secs
+          device_id, device_name, device_type, site_name, is_critical, status,
+          EXTRACT(EPOCH FROM (COALESCE(next_change, NOW()) - changed_at)) AS duration_secs
         FROM history
       ),
       device_stats AS (
         SELECT
-          device_id,
-          device_name,
-          device_type,
-          site_name,
-          is_critical,
+          device_id, device_name, device_type, site_name, is_critical,
           SUM(duration_secs) AS total_secs,
           SUM(CASE WHEN status = 'up' THEN duration_secs ELSE 0 END) AS up_secs,
           SUM(CASE WHEN status = 'down' THEN duration_secs ELSE 0 END) AS down_secs,
@@ -74,78 +68,52 @@ export const GET = withAuth(async (req, session) => {
         GROUP BY device_id, device_name, device_type, site_name, is_critical
       )
       SELECT
-        device_id,
-        device_name,
-        device_type,
-        site_name,
-        is_critical,
-        total_secs,
-        up_secs,
-        down_secs,
-        degraded_secs,
+        device_id, device_name, device_type, site_name, is_critical,
+        total_secs, up_secs, down_secs, degraded_secs,
         CASE WHEN total_secs > 0
-          THEN ROUND((up_secs / total_secs) * 100, 2)
-          ELSE 100
+          THEN ROUND((up_secs / total_secs) * 100, 2) ELSE 100
         END AS uptime_pct
       FROM device_stats
       ORDER BY uptime_pct ASC, down_secs DESC
     `;
 
-    const deviceResult = await queryForTenant(target, deviceAvailSQL, [days]);
+    const deviceResult = await queryForTenant(target, deviceAvailSQL, baseParams);
     const deviceRows = deviceResult.rows || deviceResult;
 
-    // ── 2. Outage intervals for Gantt chart (down + degraded periods) ──
-    // $1 = days (integer)
+    // ── 2. Outage intervals for Gantt chart ──
     const outageSQL = `
       WITH history AS (
         SELECT
-          dsh.device_id,
-          d.name AS device_name,
-          dsh.status,
-          dsh.changed_at,
-          LEAD(dsh.changed_at) OVER (
-            PARTITION BY dsh.device_id ORDER BY dsh.changed_at
-          ) AS next_change
+          dsh.device_id, d.name AS device_name, dsh.status, dsh.changed_at,
+          LEAD(dsh.changed_at) OVER (PARTITION BY dsh.device_id ORDER BY dsh.changed_at) AS next_change
         FROM device_status_history dsh
         JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
         WHERE dsh.changed_at >= NOW() - make_interval(days => $1::int)
-          AND d.is_monitored = true
+          AND d.is_monitored = true AND d.is_retired = false
           AND dsh.status IN ('down', 'degraded')
+          ${deviceTypeFilter}
       )
-      SELECT
-        device_id,
-        device_name,
-        status,
-        changed_at AS start_time,
-        COALESCE(next_change, NOW()) AS end_time
-      FROM history
-      ORDER BY changed_at DESC
-      LIMIT 500
+      SELECT device_id, device_name, status, changed_at AS start_time, COALESCE(next_change, NOW()) AS end_time
+      FROM history ORDER BY changed_at DESC LIMIT 500
     `;
 
-    const outageResult = await queryForTenant(target, outageSQL, [days]);
+    const outageResult = await queryForTenant(target, outageSQL, baseParams);
     const outageRows = outageResult.rows || outageResult;
 
-    // ── 3. Compute fleet-level stats ──
+    // ── 3. Fleet-level stats ──
     const totalDevices = deviceRows.length;
     const totalUpSecs = deviceRows.reduce((sum, d) => sum + parseFloat(d.up_secs || 0), 0);
     const totalSecs = deviceRows.reduce((sum, d) => sum + parseFloat(d.total_secs || 0), 0);
     const fleetAvailability = totalSecs > 0
-      ? Math.round((totalUpSecs / totalSecs) * 10000) / 100
-      : 100;
-
-    const totalDownHours = deviceRows.reduce(
-      (sum, d) => sum + parseFloat(d.down_secs || 0), 0
-    ) / 3600;
-
+      ? Math.round((totalUpSecs / totalSecs) * 10000) / 100 : 100;
+    const totalDownHours = deviceRows.reduce((sum, d) => sum + parseFloat(d.down_secs || 0), 0) / 3600;
     const worstDevice = deviceRows.length > 0 ? deviceRows[0] : null;
-
-    // Count devices below thresholds
     const devicesBelow99 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 99).length;
     const devicesBelow95 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 95).length;
 
     return NextResponse.json({
       days,
+      category,
       fleet_availability: fleetAvailability,
       summary: {
         total_devices: totalDevices,
@@ -159,21 +127,15 @@ export const GET = withAuth(async (req, session) => {
         } : null,
       },
       devices: deviceRows.map(d => ({
-        device_id: d.device_id,
-        name: d.device_name,
-        device_type: d.device_type,
-        site_name: d.site_name,
-        is_critical: d.is_critical,
+        device_id: d.device_id, name: d.device_name, device_type: d.device_type,
+        site_name: d.site_name, is_critical: d.is_critical,
         uptime_pct: parseFloat(d.uptime_pct),
         down_hours: Math.round((parseFloat(d.down_secs || 0) / 3600) * 10) / 10,
         degraded_hours: Math.round((parseFloat(d.degraded_secs || 0) / 3600) * 10) / 10,
       })),
       outages: outageRows.map(o => ({
-        device_id: o.device_id,
-        device_name: o.device_name,
-        status: o.status,
-        start_time: o.start_time,
-        end_time: o.end_time,
+        device_id: o.device_id, device_name: o.device_name, status: o.status,
+        start_time: o.start_time, end_time: o.end_time,
       })),
     });
   } catch (err) {

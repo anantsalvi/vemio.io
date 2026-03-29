@@ -3,12 +3,6 @@
  * 
  * Dropdown in the TopBar that lets MSP users switch between managed tenants.
  * Hidden entirely for client users.
- * 
- * Shows:
- *   ● All Tenants  (default for MSP)
- *   ● VE HQ
- *   ● AIA Engineering
- *   ... (future tenants auto-appear)
  */
 
 'use client';
@@ -26,27 +20,20 @@ export default function TenantSwitcher() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) {
-        setOpen(false);
-      }
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
     if (open) document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  // Close on escape
   useEffect(() => {
-    function handleKey(e) {
-      if (e.key === 'Escape') setOpen(false);
-    }
+    function handleKey(e) { if (e.key === 'Escape') setOpen(false); }
     if (open) document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [open]);
 
-  // Don't render for client users or while loading
   if (!isMSP || loading) return null;
 
   function handleSelect(tenantId) {
@@ -64,17 +51,16 @@ export default function TenantSwitcher() {
           aria-haspopup="listbox"
         >
           {isAllTenants ? (
-            <Layers size={14} className="ts-trigger-icon" />
+            <Layers size={13} className="ts-trigger-icon" />
           ) : (
-            <Building2 size={14} className="ts-trigger-icon" />
+            <Building2 size={13} className="ts-trigger-icon" />
           )}
           <span className="ts-trigger-label">{selectedTenantName}</span>
-          <ChevronDown size={12} className={`ts-chevron ${open ? 'ts-chevron--open' : ''}`} />
+          <ChevronDown size={11} className={`ts-chevron ${open ? 'ts-chevron--open' : ''}`} />
         </button>
 
         {open && (
           <div className="ts-dropdown" role="listbox">
-            {/* All Tenants option */}
             <button
               className={`ts-option ${selectedTenantId === 'all' ? 'ts-option--active' : ''}`}
               onClick={() => handleSelect('all')}
@@ -88,7 +74,6 @@ export default function TenantSwitcher() {
 
             <div className="ts-divider" />
 
-            {/* Individual tenants */}
             {tenants.map(t => (
               <button
                 key={t.id}
@@ -109,13 +94,15 @@ export default function TenantSwitcher() {
         .ts-wrap {
           position: relative;
           z-index: 50;
+          flex-shrink: 1;
+          min-width: 0;
         }
 
         .ts-trigger {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          padding: 5px 10px;
+          gap: 5px;
+          padding: 4px 8px;
           border-radius: 8px;
           cursor: pointer;
           white-space: nowrap;
@@ -126,6 +113,8 @@ export default function TenantSwitcher() {
           background: color-mix(in srgb, var(--vemio-amber) 8%, transparent);
           border: 1px solid color-mix(in srgb, var(--vemio-amber) 20%, transparent);
           color: var(--vemio-amber);
+          max-width: 100%;
+          overflow: hidden;
         }
 
         .ts-trigger:hover {
@@ -139,13 +128,9 @@ export default function TenantSwitcher() {
         }
 
         .ts-trigger-label {
-          max-width: 140px;
           overflow: hidden;
           text-overflow: ellipsis;
-        }
-
-        @media (max-width: 639px) {
-          .ts-trigger-label { max-width: 80px; }
+          min-width: 0;
         }
 
         .ts-chevron {
@@ -174,14 +159,8 @@ export default function TenantSwitcher() {
         }
 
         @keyframes ts-dropdown-in {
-          from {
-            opacity: 0;
-            transform: translateY(-4px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
         }
 
         .ts-option {

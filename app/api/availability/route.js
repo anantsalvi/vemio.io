@@ -12,7 +12,6 @@
 import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/auth';
 import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
-import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
 export const GET = withAuth(async (req, session) => {
   try {

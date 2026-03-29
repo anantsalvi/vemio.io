@@ -2,29 +2,25 @@
  * VEMIO™ — Tickets API
  * GET /api/tickets
  * 
- * Returns paginated, filterable ticket list for the authenticated tenant.
- * 
- * Query params:
- *   status    — open, pending, resolved, closed (comma-separated for multi)
- *   priority  — critical, high, medium, low
- *   site      — site UUID
- *   search    — text search on title, requester_name, glpi_ticket_id
- *   sort      — created_at, updated_at, priority, status (default: created_at)
- *   order     — asc, desc (default: desc)
- *   page      — 1-indexed (default: 1)
- *   limit     — 10-100 (default: 25)
+ * Returns paginated, filterable ticket list.
+ * PHASE 6.1: Cross-tenant MSP support via resolveTargetTenant().
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
 const VALID_SORT_FIELDS = ['created_at', 'updated_at', 'priority', 'status', 'title'];
 const VALID_PRIORITIES = ['critical', 'high', 'medium', 'low'];
 const VALID_STATUSES = ['open', 'pending', 'resolved', 'closed'];
 
 export const GET = withAuth(async (req, session) => {
-  const tenantId = session.user.tenantId;
   const url = new URL(req.url);
+
+  const target = await resolveTargetTenant(session, req);
+  if (target.error) {
+    return Response.json({ error: target.error }, { status: 403 });
+  }
 
   const statusFilter = url.searchParams.get('status');
   const priorityFilter = url.searchParams.get('priority');
@@ -78,14 +74,10 @@ export const GET = withAuth(async (req, session) => {
     ? 'AND ' + conditions.join(' AND ')
     : '';
 
-  try {
-    const countResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS total FROM tickets t WHERE 1=1 ${whereClause}`,
-      params
-    );
-    const total = parseInt(countResult.rows[0].total);
+  const isAllMode = target.mode === 'all';
 
-    const ticketsResult = await queryWithTenant(tenantId,
+  try {
+    const ticketsResult = await queryForTenant(target,
       `SELECT 
          t.id, t.glpi_ticket_id, t.frappe_ticket_id, t.data_source,
          t.title, t.status, t.priority, t.category,
@@ -98,12 +90,31 @@ export const GET = withAuth(async (req, session) => {
        FROM tickets t
        LEFT JOIN sites s ON s.id = t.site_id
        WHERE 1=1 ${whereClause}
-       ORDER BY t.${sort} ${sortOrder}
-       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-      [...params, limit, offset]
+       ORDER BY t.${sort} ${sortOrder}`,
+      params,
+      { addTenantInfo: isAllMode }
     );
 
-    const tickets = ticketsResult.rows.map(t => ({
+    // Sort merged results and paginate
+    let allTickets = ticketsResult.rows;
+    if (isAllMode) {
+      allTickets.sort((a, b) => {
+        const aVal = a[sort] || '';
+        const bVal = b[sort] || '';
+        if (sort === 'created_at' || sort === 'updated_at') {
+          return sortOrder === 'DESC'
+            ? new Date(bVal) - new Date(aVal)
+            : new Date(aVal) - new Date(bVal);
+        }
+        const cmp = String(aVal).localeCompare(String(bVal));
+        return sortOrder === 'DESC' ? -cmp : cmp;
+      });
+    }
+
+    const total = allTickets.length;
+    const paginatedTickets = allTickets.slice(offset, offset + limit);
+
+    const tickets = paginatedTickets.map(t => ({
       id: t.id,
       sourceId: t.glpi_ticket_id || t.frappe_ticket_id || null,
       dataSource: t.data_source,
@@ -125,10 +136,12 @@ export const GET = withAuth(async (req, session) => {
         resolutionMet: t.sla_resolution_met,
       },
       age: t.created_at ? getAge(new Date(t.created_at), t.closed_at ? new Date(t.closed_at) : new Date()) : null,
+      ...(t._tenant_name && { tenantName: t._tenant_name }),
     }));
 
     return Response.json({
       tickets,
+      isAllTenants: isAllMode,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {

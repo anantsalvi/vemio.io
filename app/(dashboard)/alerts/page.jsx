@@ -39,7 +39,7 @@ function AlertRow({ alert, onAction, canManage, canResolve, showTenant }) {
 
   async function handleAction(action) {
     setActing(true);
-    try { await onAction(alert.id, action, alert._tenant_id); } finally { setActing(false); }
+    try { await onAction(alert.id, action, alert.tenant_id); } finally { setActing(false); }
   }
 
   return (

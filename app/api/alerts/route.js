@@ -144,6 +144,7 @@ export const GET = withAuth(async (req, session) => {
         ...(a._tenant_name && {
           tenant_name: a._tenant_name,
           tenant_slug: a._tenant_slug,
+          tenant_id: a._tenant_id,
         }),
         // Clean internal fields
         _tenant_name: undefined,

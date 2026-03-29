@@ -1,73 +1,86 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { useTenantFetch } from '@/hooks/useTenantFetch';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Info } from 'lucide-react';
 
 /**
  * Compact availability summary for the Overview page.
  * Shows fleet uptime %, worst 5 devices, and a "View all" link to /availability.
- * Replaces the old UptimeChart component.
+ * 
+ * Receives data as props from the Overview API (no separate fetch).
+ * 
+ * Fleet Availability = weighted average uptime across all monitored devices.
+ * Each device's uptime = (time in "up" status / total tracked time) × 100.
+ * A fleet at 99% means on average, devices were reachable 99% of the last 7 days.
  */
 
 function uptimeColor(pct) {
-  if (pct >= 99.9) return 'var(--color-status-up, #10B981)';
-  if (pct >= 99)   return 'var(--color-vemio-amber, #F59E0B)';
+  if (pct >= 99.9) return '#10B981';
+  if (pct >= 99)   return '#F59E0B';
   if (pct >= 95)   return '#F97316';
   return '#EF4444';
 }
 
-export default function AvailabilitySummary() {
-  const { data, loading } = useTenantFetch('/api/availability?days=7', {
-    refreshInterval: 120000,
-    dedupingInterval: 15000,
-  });
+export default function AvailabilitySummary({ availability }) {
+  const [showInfo, setShowInfo] = useState(false);
 
-  if (loading && !data) {
+  if (!availability) {
     return (
-      <div className="avs-card avs-skeleton">
-        <div className="avs-skel-bar" style={{ width: '60%', height: 14 }} />
-        <div className="avs-skel-bar" style={{ width: '40%', height: 32, marginTop: 8 }} />
-        <div className="avs-skel-bar" style={{ width: '100%', height: 10, marginTop: 16 }} />
-        <div className="avs-skel-bar" style={{ width: '100%', height: 10, marginTop: 6 }} />
-        <div className="avs-skel-bar" style={{ width: '100%', height: 10, marginTop: 6 }} />
+      <div className="avs-card avs-empty">
+        <span className="avs-empty-text">Availability data loading...</span>
       </div>
     );
   }
 
-  if (!data) return null;
-
-  const pct = data.fleet_availability;
+  const pct = availability.fleet_pct;
   const color = uptimeColor(pct);
-  const worst = data.devices?.filter(d => d.uptime_pct < 100).slice(0, 5) || [];
+  const worst = availability.worst_performers || [];
 
   return (
     <div className="avs-card">
       <div className="avs-header">
-        <span className="avs-label">Fleet Availability (7d)</span>
+        <div className="avs-header-left">
+          <span className="avs-label">Fleet Availability (7d)</span>
+          <button
+            className="avs-info-btn"
+            onClick={() => setShowInfo(p => !p)}
+            title="What is fleet availability?"
+          >
+            <Info size={12} />
+          </button>
+        </div>
         <Link href="/availability" className="avs-link">
           View all <ArrowRight size={12} />
         </Link>
       </div>
 
+      {showInfo && (
+        <div className="avs-info-box">
+          Fleet availability is the average uptime across all monitored devices over the last 7 days.
+          Each device's uptime is the percentage of time it was reachable ("up") vs total tracked time.
+          A score of 99% means devices were online 99% of the period on average.
+        </div>
+      )}
+
       <div className="avs-score" style={{ color }}>{pct}%</div>
 
       <div className="avs-fleet-bar-wrap">
-        <div className="avs-fleet-bar" style={{ width: `${pct}%`, background: color }} />
+        <div className="avs-fleet-bar" style={{ width: `${Math.min(pct, 100)}%`, background: color }} />
       </div>
 
       <div className="avs-stats-row">
         <span className="avs-stat">
-          <span className="avs-stat-val">{data.summary.total_devices}</span> devices
+          <span className="avs-stat-val">{availability.total_devices}</span> devices
         </span>
         <span className="avs-stat">
-          <span className="avs-stat-val" style={{ color: data.summary.total_down_hours > 0 ? '#EF4444' : undefined }}>
-            {data.summary.total_down_hours}h
+          <span className="avs-stat-val" style={{ color: availability.total_down_hours > 0 ? '#EF4444' : undefined }}>
+            {availability.total_down_hours}h
           </span> downtime
         </span>
         <span className="avs-stat">
-          <span className="avs-stat-val" style={{ color: data.summary.devices_below_99 > 0 ? '#F59E0B' : undefined }}>
-            {data.summary.devices_below_99}
+          <span className="avs-stat-val" style={{ color: availability.devices_below_99 > 0 ? '#F59E0B' : undefined }}>
+            {availability.devices_below_99}
           </span> below 99%
         </span>
       </div>
@@ -100,8 +113,8 @@ export default function AvailabilitySummary() {
 
       <style>{`
         .avs-card {
-          background: var(--vemio-surface);
-          border: 1px solid var(--vemio-border);
+          background: var(--vemio-surface, var(--color-vemio-surface));
+          border: 1px solid var(--vemio-border, var(--color-vemio-border));
           border-radius: 12px;
           padding: 20px;
           display: flex;
@@ -109,17 +122,14 @@ export default function AvailabilitySummary() {
           height: 100%;
           box-sizing: border-box;
         }
-        .avs-skeleton {
-          min-height: 200px;
+        .avs-empty {
+          align-items: center;
+          justify-content: center;
+          min-height: 120px;
         }
-        .avs-skel-bar {
-          border-radius: 4px;
-          background: var(--vemio-surface-raised);
-          animation: avs-pulse 1.2s ease infinite;
-        }
-        @keyframes avs-pulse {
-          0%, 100% { opacity: 0.5; }
-          50% { opacity: 0.8; }
+        .avs-empty-text {
+          font-size: 12px;
+          color: var(--vemio-text-dim, var(--color-vemio-text-dim));
         }
 
         .avs-header {
@@ -128,16 +138,49 @@ export default function AvailabilitySummary() {
           align-items: center;
           margin-bottom: 8px;
         }
+        .avs-header-left {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
         .avs-label {
           font-size: 12px;
           font-weight: 600;
-          color: var(--vemio-text-muted);
+          color: var(--vemio-text-muted, var(--color-vemio-text-muted));
           text-transform: uppercase;
           letter-spacing: 0.06em;
         }
+        .avs-info-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          border: 1px solid var(--vemio-border, var(--color-vemio-border));
+          background: transparent;
+          color: var(--vemio-text-dim, var(--color-vemio-text-dim));
+          cursor: pointer;
+          padding: 0;
+          transition: color 0.15s, border-color 0.15s;
+        }
+        .avs-info-btn:hover {
+          color: var(--vemio-text, var(--color-vemio-text));
+          border-color: var(--vemio-text-muted, var(--color-vemio-text-muted));
+        }
+        .avs-info-box {
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--vemio-text-muted, var(--color-vemio-text-muted));
+          background: var(--vemio-surface-raised, var(--color-vemio-surface-raised));
+          border: 1px solid var(--vemio-border, var(--color-vemio-border));
+          border-radius: 8px;
+          padding: 10px 12px;
+          margin-bottom: 10px;
+        }
         .avs-link {
           font-size: 11px;
-          color: var(--vemio-amber);
+          color: var(--vemio-amber, var(--color-vemio-amber));
           text-decoration: none;
           display: flex;
           align-items: center;
@@ -156,7 +199,7 @@ export default function AvailabilitySummary() {
 
         .avs-fleet-bar-wrap {
           height: 6px;
-          background: var(--vemio-border);
+          background: var(--vemio-border, var(--color-vemio-border));
           border-radius: 3px;
           overflow: hidden;
           margin-bottom: 12px;
@@ -175,11 +218,11 @@ export default function AvailabilitySummary() {
         }
         .avs-stat {
           font-size: 11px;
-          color: var(--vemio-text-dim);
+          color: var(--vemio-text-dim, var(--color-vemio-text-dim));
         }
         .avs-stat-val {
           font-weight: 700;
-          color: var(--vemio-text);
+          color: var(--vemio-text, var(--color-vemio-text));
         }
 
         .avs-worst {
@@ -191,7 +234,7 @@ export default function AvailabilitySummary() {
         .avs-worst-title {
           font-size: 10px;
           font-weight: 600;
-          color: var(--vemio-text-dim);
+          color: var(--vemio-text-dim, var(--color-vemio-text-dim));
           text-transform: uppercase;
           letter-spacing: 0.06em;
           margin-bottom: 2px;
@@ -204,14 +247,14 @@ export default function AvailabilitySummary() {
         }
         .avs-worst-name {
           font-size: 11px;
-          color: var(--vemio-text-muted);
+          color: var(--vemio-text-muted, var(--color-vemio-text-muted));
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
         .avs-worst-bar-wrap {
           height: 5px;
-          background: var(--vemio-border);
+          background: var(--vemio-border, var(--color-vemio-border));
           border-radius: 3px;
           overflow: hidden;
         }
@@ -233,7 +276,7 @@ export default function AvailabilitySummary() {
           align-items: center;
           justify-content: center;
           font-size: 13px;
-          color: var(--color-status-up, #10B981);
+          color: #10B981;
           font-weight: 600;
           opacity: 0.8;
         }

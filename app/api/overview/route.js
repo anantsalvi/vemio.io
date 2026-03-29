@@ -3,13 +3,14 @@
  * GET /api/overview
  * 
  * Returns dashboard overview data: BCS score, device summary,
- * alert count, SLA gauge, uptime trend, recent events.
+ * alert count, SLA gauge, uptime trend, recent events, fleet availability.
  * 
  * Query params:
  *   category — 'network' (default) or 'all'
  *   tenantId — UUID of target tenant, or 'all' (MSP only)
  * 
  * PHASE 6.1: Cross-tenant MSP support via resolveTargetTenant().
+ * PHASE 6.2: Fleet availability stats included in response.
  */
 
 import { withAuth } from '@/lib/auth';
@@ -170,6 +171,98 @@ export const GET = withAuth(async (req, session) => {
         console.error('[VEMIO API] Uptime trend query error:', err.message);
       }
 
+      // ── Phase 6.2: Fleet Availability (7-day, respects category filter) ──
+      try {
+        const availDeviceFilter = category !== 'all'
+          ? 'AND d.device_type = ANY($1)'
+          : '';
+        const availParams = category !== 'all' ? [NETWORK_TYPES] : [];
+
+        const availResult = await queryForTenant(target,
+          `WITH history AS (
+            SELECT
+              dsh.device_id,
+              d.name AS device_name,
+              dsh.status,
+              dsh.changed_at,
+              LEAD(dsh.changed_at) OVER (
+                PARTITION BY dsh.device_id ORDER BY dsh.changed_at
+              ) AS next_change
+            FROM device_status_history dsh
+            JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
+            WHERE dsh.changed_at >= NOW() - INTERVAL '7 days'
+              AND d.is_monitored = true
+              AND d.is_retired = false
+              ${availDeviceFilter}
+          ),
+          durations AS (
+            SELECT
+              device_id,
+              device_name,
+              status,
+              EXTRACT(EPOCH FROM (
+                COALESCE(next_change, NOW()) - changed_at
+              )) AS duration_secs
+            FROM history
+          ),
+          device_stats AS (
+            SELECT
+              device_id,
+              device_name,
+              SUM(duration_secs) AS total_secs,
+              SUM(CASE WHEN status = 'up' THEN duration_secs ELSE 0 END) AS up_secs,
+              SUM(CASE WHEN status = 'down' THEN duration_secs ELSE 0 END) AS down_secs
+            FROM durations
+            GROUP BY device_id, device_name
+          )
+          SELECT
+            device_id,
+            device_name,
+            CASE WHEN total_secs > 0
+              THEN ROUND((up_secs / total_secs) * 100, 2)
+              ELSE 100
+            END AS uptime_pct,
+            ROUND(down_secs / 3600, 1) AS down_hours
+          FROM device_stats
+          ORDER BY uptime_pct ASC, down_secs DESC`,
+          availParams
+        );
+
+        const availRows = availResult.rows || [];
+        const totalDevices = availRows.length;
+        const totalUpSecs = availRows.reduce((s, d) => {
+          // Recalculate from uptime_pct and total time span
+          const pct = parseFloat(d.uptime_pct || 100);
+          return s + pct;
+        }, 0);
+        const fleetPct = totalDevices > 0
+          ? Math.round((totalUpSecs / totalDevices) * 100) / 100
+          : 100;
+        const totalDownHours = availRows.reduce((s, d) => s + parseFloat(d.down_hours || 0), 0);
+        const devicesBelow99 = availRows.filter(d => parseFloat(d.uptime_pct) < 99).length;
+
+        // Worst 5 performers for the compact widget
+        const worst5 = availRows
+          .filter(d => parseFloat(d.uptime_pct) < 100)
+          .slice(0, 5)
+          .map(d => ({
+            device_id: d.device_id,
+            name: d.device_name,
+            uptime_pct: parseFloat(d.uptime_pct),
+          }));
+
+        overview.availability = {
+          fleet_pct: fleetPct,
+          total_devices: totalDevices,
+          total_down_hours: Math.round(totalDownHours * 10) / 10,
+          devices_below_99: devicesBelow99,
+          worst_performers: worst5,
+        };
+      } catch (err) {
+        console.error('[VEMIO API] Availability query error:', err.message);
+        // Non-fatal — overview still returns without availability
+      }
+
       // Recent events
       try {
         const eventsParams = category !== 'all' ? [NETWORK_TYPES] : [];
@@ -313,6 +406,17 @@ function getDemoOverview() {
       { date: '2026-03-28', uptime: 99.5 },
       { date: '2026-03-29', uptime: 99.8 },
     ],
+    availability: {
+      fleet_pct: 99.7,
+      total_devices: 142,
+      total_down_hours: 2.4,
+      devices_below_99: 3,
+      worst_performers: [
+        { device_id: 'demo-1', name: 'SW-01', uptime_pct: 95.2 },
+        { device_id: 'demo-2', name: 'AP-07', uptime_pct: 97.8 },
+        { device_id: 'demo-3', name: 'FW-02', uptime_pct: 98.1 },
+      ],
+    },
     recentEvents: [
       { time: '14:32', type: 'alert', message: 'Core Switch SW-01 went offline', severity: 'high', site: 'HQ - Ahmedabad', deviceType: 'Core Switch' },
       { time: '13:15', type: 'resolved', message: 'AP-CONF-07 back online', severity: 'info', site: 'Warehouse', deviceType: 'AP' },

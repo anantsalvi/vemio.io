@@ -5,6 +5,7 @@ import { useTenantFetch } from '@/hooks/useTenantFetch';
 import { OverviewSkeleton } from '@/app/components/dashboard/Skeletons';
 import BCSGauge from '@/app/components/dashboard/BCSGauge';
 import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
+import UptimeChart from '@/app/components/dashboard/UptimeChart';
 import AvailabilitySummary from '@/app/components/dashboard/AvailabilitySummary';
 import RecentEvents from '@/app/components/dashboard/RecentEvents';
 import TopologyPreview from '@/app/components/dashboard/TopologyPreview';
@@ -25,7 +26,6 @@ export default function OverviewPage() {
   const { category } = useDeviceCategory();
   const { isAllTenants, selectedTenantName } = useTenantSwitcher();
 
-  // Phase 6.1: useTenantFetch auto-injects tenantId param
   const { data, loading, error, refresh } = useTenantFetch(`/api/overview?category=${category}`, {
     refreshInterval: 60000,
     dedupingInterval: 5000,
@@ -88,12 +88,20 @@ export default function OverviewPage() {
         </motion.div>
       </div>
 
-      {/* ── Row 2: Availability Summary + Recent Events ── */}
+      {/* ── Row 2: Uptime Trend + Availability (stacked left) | Recent Events (right) ── */}
       <div className="overview-row-2">
-        <motion.div variants={fadeUp}>
-          <AvailabilitySummary />
-        </motion.div>
-        <motion.div variants={fadeUp}>
+        <div className="overview-left-stack">
+          <motion.div variants={fadeUp}>
+            <UptimeChart
+              data={data?.uptimeTrend}
+              devices={data?.devices}
+            />
+          </motion.div>
+          <motion.div variants={fadeUp}>
+            <AvailabilitySummary availability={data?.availability} />
+          </motion.div>
+        </div>
+        <motion.div variants={fadeUp} className="overview-events">
           <RecentEvents events={data?.recentEvents} showTenant={isAllTenants} />
         </motion.div>
       </div>
@@ -176,6 +184,19 @@ export default function OverviewPage() {
           align-items: start;
         }
 
+        .overview-left-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .overview-events {
+          align-self: stretch;
+        }
+        .overview-events > * {
+          height: 100%;
+        }
+
         @media (max-width: 1023px) {
           .overview-row-1 {
             grid-template-columns: 1fr;
@@ -199,6 +220,10 @@ export default function OverviewPage() {
           .overview-row-2 {
             grid-template-columns: 1fr;
             gap: 12px;
+          }
+
+          .overview-events > * {
+            height: auto;
           }
         }
       `}</style>

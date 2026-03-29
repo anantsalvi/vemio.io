@@ -27,6 +27,7 @@ import {
   Palette,
   User,
   Webhook,
+  Signal,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -37,8 +38,9 @@ const NAV_STRUCTURE = [
     group: "Monitoring",
     icon: Shield,
     children: [
-      { href: "/devices", label: "Device Health", icon: Monitor },
-      { href: "/alerts",  label: "Alerts",        icon: BellDot },
+      { href: "/devices",      label: "Device Health",  icon: Monitor },
+      { href: "/availability", label: "Availability",   icon: Signal },
+      { href: "/alerts",       label: "Alerts",         icon: BellDot },
     ],
   },
   { href: "/topology",    label: "Topology",      icon: Network },

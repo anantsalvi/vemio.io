@@ -12,19 +12,29 @@ async function resolveDeviceTenant(session, deviceId) {
   const isMSP = session.user.isMSP === true;
   const userTenantId = session.user.tenantId;
 
-  if (!isMSP) return { tenantId: userTenantId };
+  if (!isMSP) {
+    return { tenantId: userTenantId };
+  }
 
-  const result = await queryRaw('SELECT tenant_id FROM devices WHERE id = $1', [deviceId]);
-  if (result.rows.length === 0) return { error: 'Device not found', status: 404 };
-
-  const deviceTenantId = result.rows[0].tenant_id;
-  const accessCheck = await queryWithTenant(userTenantId,
-    `SELECT 1 FROM msp_tenant_access WHERE msp_tenant_id = $1 AND managed_tenant_id = $2`,
-    [userTenantId, deviceTenantId]
+  // MSP user — find which managed tenant owns this device
+  // Query msp_tenant_access to get managed tenants, then check each
+  const managedResult = await queryWithTenant(userTenantId,
+    `SELECT managed_tenant_id FROM msp_tenant_access WHERE msp_tenant_id = $1`,
+    [userTenantId]
   );
-  if (accessCheck.rows.length === 0) return { error: 'Access denied', status: 403 };
 
-  return { tenantId: deviceTenantId };
+  for (const row of managedResult.rows) {
+    const tid = row.managed_tenant_id;
+    const check = await queryWithTenant(tid,
+      'SELECT id FROM devices WHERE id = $1',
+      [deviceId]
+    );
+    if (check.rows.length > 0) {
+      return { tenantId: tid };
+    }
+  }
+
+  return { error: 'Device not found', status: 404 };
 }
 
 export const GET = withAuth(async (req, session, { params }) => {

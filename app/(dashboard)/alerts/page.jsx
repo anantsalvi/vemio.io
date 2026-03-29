@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, CheckCircle2, ExternalLink } from 'lucide-react';
 import ExportButton from '@/app/components/ExportButton';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 const stagger = { hidden: {}, visible: { transition: { staggerChildren: 0.05 } } };
 const fadeUp = {
@@ -30,7 +31,7 @@ function getTimeAgo(dateStr) {
   return new Date(dateStr).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
-function AlertRow({ alert, onAction, canManage, canResolve }) {
+function AlertRow({ alert, onAction, canManage, canResolve, showTenant }) {
   const [acting, setActing] = useState(false);
   const sev = SEVERITY_STYLES[alert.severity] || SEVERITY_STYLES.medium;
   const canAck = canManage && alert.state === 'active';
@@ -38,7 +39,7 @@ function AlertRow({ alert, onAction, canManage, canResolve }) {
 
   async function handleAction(action) {
     setActing(true);
-    try { await onAction(alert.id, action); } finally { setActing(false); }
+    try { await onAction(alert.id, action, alert._tenant_id); } finally { setActing(false); }
   }
 
   return (
@@ -53,7 +54,7 @@ function AlertRow({ alert, onAction, canManage, canResolve }) {
         border: `1px solid ${alert.state === 'active' ? 'var(--color-vemio-border)' : 'transparent'}`,
       }}
     >
-      {/* Top: badges + time */}
+      {/* Top: badges + tenant + time */}
       <div className="alert-meta">
         <span className="alert-sev-badge" style={{ background: sev.bg, border: `1px solid ${sev.border}` }}>
           <span
@@ -69,13 +70,15 @@ function AlertRow({ alert, onAction, canManage, canResolve }) {
         }`}>
           {alert.state === 'acknowledged' ? 'Ack' : alert.state}
         </span>
+        {/* Phase 6.1: Tenant badge in all-tenants mode */}
+        {showTenant && alert.tenant_name && (
+          <span className="alert-tenant-badge">{alert.tenant_name}</span>
+        )}
         <span className="alert-time">{getTimeAgo(alert.triggered_at)}</span>
       </div>
 
-      {/* Title */}
       <p className="alert-title">{alert.title}</p>
 
-      {/* Device / site / type */}
       <div className="alert-details">
         {alert.device_name && <span>{alert.device_name}</span>}
         {alert.site_name && <span>{alert.site_name}</span>}
@@ -112,7 +115,7 @@ function AlertRow({ alert, onAction, canManage, canResolve }) {
         </div>
       )}
 
-      {/* Actions — only for MSP users */}
+      {/* Actions */}
       {(canAck || canRes) && (
         <div className="alert-actions">
           {canAck && (
@@ -133,14 +136,17 @@ function AlertRow({ alert, onAction, canManage, canResolve }) {
 
 export default function AlertsPage() {
   const { category } = useDeviceCategory();
+  const { selectedTenantId, isAllTenants, loading: tenantLoading } = useTenantSwitcher();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ state: '', severity: '', type: '' });
 
   const canManage = data?.canManage ?? false;
   const canResolve = data?.canResolve ?? false;
+  const showTenant = data?.isAllTenants === true;
 
   const fetchAlerts = useCallback(async () => {
+    if (!selectedTenantId || tenantLoading) return;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -149,32 +155,31 @@ export default function AlertsPage() {
       if (filters.type) params.set('type', filters.type);
       params.set('category', category);
       params.set('limit', '50');
+      params.set('tenantId', selectedTenantId);  // Phase 6.1
       const res = await fetch(`/api/alerts?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (err) { console.error('Alerts fetch:', err); }
     finally { setLoading(false); }
-  }, [filters, category]);
+  }, [filters, category, selectedTenantId, tenantLoading]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
   useEffect(() => { const id = setInterval(fetchAlerts, 60000); return () => clearInterval(id); }, [fetchAlerts]);
 
-  async function handleAction(alertId, action) {
+  async function handleAction(alertId, action, alertTenantId) {
     try {
       const res = await fetch('/api/alerts', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ alertId, action }),
+        body: JSON.stringify({ alertId, action, alertTenantId }),
       });
       const result = await res.json();
       if (res.ok) {
-        // Show GLPI ticket link if created
         if (result.glpiTicket?.url && !result.glpiTicket?.existing) {
           console.log(`[VEMIO] GLPI ticket created: ${result.glpiTicket.url}`);
         }
         await fetchAlerts();
       } else {
-        // Show error to user
         alert(result.error || 'Action failed');
       }
     } catch (err) { console.error('Action failed:', err); }
@@ -199,7 +204,9 @@ export default function AlertsPage() {
           <div>
             <h1 className="alerts-title">Alerts</h1>
             <p className="alerts-subtitle">
-              Real-time infrastructure alerts
+              {isAllTenants
+                ? 'Alerts across all managed tenants'
+                : 'Real-time infrastructure alerts'}
               {!canManage && <span className="alerts-readonly"> · View only</span>}
             </p>
           </div>
@@ -207,8 +214,16 @@ export default function AlertsPage() {
             <ExportButton
               data={alerts}
               filename="vemio-alerts"
-              columns={['severity', 'title', 'state', 'alert_type', 'device_name', 'site_name', 'triggered_at', 'acknowledged_by', 'resolved_by']}
-              headers={{ alert_type: 'Type', device_name: 'Device', site_name: 'Site', triggered_at: 'Triggered', acknowledged_by: 'Ack By', resolved_by: 'Resolved By' }}
+              columns={[
+                'severity', 'title', 'state', 'alert_type', 'device_name', 'site_name',
+                'triggered_at', 'acknowledged_by', 'resolved_by',
+                ...(showTenant ? ['tenant_name'] : []),
+              ]}
+              headers={{
+                alert_type: 'Type', device_name: 'Device', site_name: 'Site',
+                triggered_at: 'Triggered', acknowledged_by: 'Ack By', resolved_by: 'Resolved By',
+                tenant_name: 'Tenant',
+              }}
               label="Export CSV"
             />
             <button onClick={fetchAlerts} className="alerts-refresh-btn">Refresh</button>
@@ -289,7 +304,14 @@ export default function AlertsPage() {
               </motion.div>
             ) : (
               alerts.map(a => (
-                <AlertRow key={a.id} alert={a} onAction={handleAction} canManage={canManage} canResolve={canResolve} />
+                <AlertRow
+                  key={a.id}
+                  alert={a}
+                  onAction={handleAction}
+                  canManage={canManage}
+                  canResolve={canResolve}
+                  showTenant={showTenant}
+                />
               ))
             )}
           </AnimatePresence>
@@ -342,19 +364,33 @@ export default function AlertsPage() {
         .alert-state--ack { color: var(--vemio-amber); }
         .alert-state--resolved { color: var(--color-status-up); }
         .alert-state--dim { color: var(--color-vemio-text-dim); }
+
+        /* Phase 6.1: Tenant badge in alert row */
+        .alert-tenant-badge {
+          display: inline-block;
+          padding: 1px 6px;
+          border-radius: 4px;
+          font-size: 9px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          background: rgba(99, 102, 241, 0.08);
+          color: rgb(129, 140, 248);
+          border: 1px solid rgba(99, 102, 241, 0.15);
+          white-space: nowrap;
+        }
+
         .alert-time { font-size: 10px; color: var(--color-vemio-text-dim); margin-left: auto; }
         .alert-title { font-size: 13.5px; font-weight: 500; color: var(--vemio-text); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .alert-details { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--color-vemio-text-muted); }
         .alert-details span { white-space: nowrap; }
 
-        /* Audit trail */
         .alert-audit { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 10px; color: var(--color-vemio-text-dim); padding-top: 2px; }
         .alert-audit-item { display: inline-flex; align-items: center; gap: 2px; }
         .alert-audit-item strong { color: var(--color-vemio-text-muted); font-weight: 600; }
         .alert-ticket-link { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--color-vemio-amber); text-decoration: none; font-weight: 500; transition: opacity 0.12s; }
         .alert-ticket-link:hover { opacity: 0.8; }
 
-        /* Actions */
         .alert-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
         @media (hover: hover) and (pointer: fine) {
           .alert-actions { opacity: 0; transition: opacity 0.15s; }

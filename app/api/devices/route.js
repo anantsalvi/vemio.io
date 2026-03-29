@@ -3,11 +3,15 @@
  * GET /api/devices
  * 
  * Returns tenant-scoped device list with filters.
- * Query params: type, status, site, search, sort, page, limit, include_retired, category
+ * Query params: type, status, site, search, sort, page, limit, include_retired, category, tenantId
+ * 
+ * PHASE 6.1: Cross-tenant MSP support via resolveTargetTenant().
+ * In "all tenants" mode, returns devices from all managed tenants with tenant_name column.
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+import { resolveTargetTenant, queryForTenant, queryAggregateForTenant } from '@/lib/tenant';
 
 const NETWORK_TYPES = [
   'firewall', 'core_switch', 'access_switch', 'access_point',
@@ -15,8 +19,13 @@ const NETWORK_TYPES = [
 ];
 
 export const GET = withAuth(async (req, session) => {
-  const tenantId = session.user.tenantId;
   const url = new URL(req.url);
+
+  // ── Phase 6.1: Resolve target tenant(s) ──
+  const target = await resolveTargetTenant(session, req);
+  if (target.error) {
+    return Response.json({ error: target.error }, { status: 403 });
+  }
 
   // Parse filters
   const type = url.searchParams.get('type');
@@ -26,22 +35,20 @@ export const GET = withAuth(async (req, session) => {
   const sort = url.searchParams.get('sort') || 'name';
   const order = url.searchParams.get('order') || 'asc';
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
-  const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '50')));
+  const limit = Math.min(250, Math.max(1, parseInt(url.searchParams.get('limit') || '50')));
   const offset = (page - 1) * limit;
   const includeRetired = url.searchParams.get('include_retired') === 'true';
   const category = url.searchParams.get('category') || 'network';
 
-  // Build query
+  // Build query conditions
   const conditions = [];
   const params = [];
   let paramIndex = 1;
 
-  // Exclude retired devices by default
   if (!includeRetired) {
     conditions.push(`d.is_retired = false`);
   }
 
-  // Category filter: network-only by default unless a specific type is requested
   if (category !== 'all' && !type) {
     conditions.push(`d.device_type = ANY($${paramIndex++})`);
     params.push(NETWORK_TYPES);
@@ -72,20 +79,17 @@ export const GET = withAuth(async (req, session) => {
     ? 'WHERE ' + conditions.join(' AND ')
     : '';
 
-  // Validate sort column
   const validSorts = ['name', 'device_type', 'current_status', 'last_seen_at', 'ip_address', 'make'];
   const sortCol = validSorts.includes(sort) ? sort : 'name';
   const sortOrder = order === 'desc' ? 'DESC' : 'ASC';
 
   try {
-    // Get total count
-    const countResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS total FROM devices d ${whereClause}`,
-      params
-    );
+    // For all-tenants mode, we need to handle pagination differently
+    // since we're merging results from multiple tenants
+    const isAllMode = target.mode === 'all';
 
-    // Get paginated devices with site name
-    const devicesResult = await queryWithTenant(tenantId,
+    // Get devices (with tenant info in all mode)
+    const devicesResult = await queryForTenant(target,
       `SELECT 
          d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
          d.ip_address, d.current_status, d.last_seen_at, d.uptime_percent_30d,
@@ -94,18 +98,32 @@ export const GET = withAuth(async (req, session) => {
        FROM devices d
        LEFT JOIN sites s ON s.id = d.site_id
        ${whereClause}
-       ORDER BY d.${sortCol} ${sortOrder}
-       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-      [...params, limit, offset]
+       ORDER BY d.${sortCol} ${sortOrder}`,
+      params,
+      { addTenantInfo: isAllMode }
     );
 
-    // Get summary counts (exclude retired, respect category)
+    // Apply sorting and pagination on merged results (all-tenants mode)
+    let allDevices = devicesResult.rows;
+    if (isAllMode) {
+      // Re-sort merged results
+      allDevices.sort((a, b) => {
+        const aVal = a[sortCol] || '';
+        const bVal = b[sortCol] || '';
+        const cmp = String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+        return sortOrder === 'DESC' ? -cmp : cmp;
+      });
+    }
+
+    const total = allDevices.length;
+    const paginatedDevices = allDevices.slice(offset, offset + limit);
+
+    // Get summary counts
     const summaryTypeFilter = category !== 'all' && !type
-      ? 'AND device_type = ANY($1)'
-      : '';
+      ? 'AND device_type = ANY($1)' : '';
     const summaryParams = category !== 'all' && !type ? [NETWORK_TYPES] : [];
 
-    const summaryResult = await queryWithTenant(tenantId,
+    const summaryAgg = await queryAggregateForTenant(target,
       `SELECT 
          COUNT(*) AS total,
          COUNT(*) FILTER (WHERE current_status = 'up') AS up,
@@ -117,8 +135,8 @@ export const GET = withAuth(async (req, session) => {
       summaryParams
     );
 
-    // Get device type breakdown (exclude retired, respect category)
-    const typeResult = await queryWithTenant(tenantId,
+    // Device type breakdown
+    const typeResult = await queryForTenant(target,
       `SELECT device_type, COUNT(*) AS count
        FROM devices
        WHERE is_retired = false ${summaryTypeFilter}
@@ -127,10 +145,14 @@ export const GET = withAuth(async (req, session) => {
       summaryParams
     );
 
-    const total = parseInt(countResult.rows[0].total);
+    // Merge type counts across tenants
+    const typeCounts = {};
+    for (const r of typeResult.rows) {
+      typeCounts[r.device_type] = (typeCounts[r.device_type] || 0) + parseInt(r.count);
+    }
 
     return Response.json({
-      devices: devicesResult.rows.map(row => ({
+      devices: paginatedDevices.map(row => ({
         id: row.id,
         auvikDeviceId: row.auvik_device_id,
         name: row.name,
@@ -144,15 +166,23 @@ export const GET = withAuth(async (req, session) => {
         siteName: row.site_name,
         siteId: row.site_id,
         isRetired: row.is_retired,
+        // Phase 6.1: tenant info in all-tenants mode
+        ...(row._tenant_name && {
+          tenantName: row._tenant_name,
+          tenantSlug: row._tenant_slug,
+        }),
       })),
+      isAllTenants: isAllMode,
       summary: {
-        total: parseInt(summaryResult.rows[0].total),
-        up: parseInt(summaryResult.rows[0].up),
-        down: parseInt(summaryResult.rows[0].down),
-        degraded: parseInt(summaryResult.rows[0].degraded),
-        unknown: parseInt(summaryResult.rows[0].unknown),
+        total: parseInt(summaryAgg.total || 0),
+        up: parseInt(summaryAgg.up || 0),
+        down: parseInt(summaryAgg.down || 0),
+        degraded: parseInt(summaryAgg.degraded || 0),
+        unknown: parseInt(summaryAgg.unknown || 0),
       },
-      types: typeResult.rows.map(r => ({ type: r.device_type, count: parseInt(r.count) })),
+      types: Object.entries(typeCounts)
+        .map(([type, count]) => ({ type, count }))
+        .sort((a, b) => b.count - a.count),
       pagination: {
         page,
         limit,

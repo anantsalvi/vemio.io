@@ -1,7 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { useSWRFetch } from '@/hooks/useSWRFetch';
+import { useTenantFetch } from '@/hooks/useTenantFetch';
 import { OverviewSkeleton } from '@/app/components/dashboard/Skeletons';
 import BCSGauge from '@/app/components/dashboard/BCSGauge';
 import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
@@ -10,6 +10,7 @@ import RecentEvents from '@/app/components/dashboard/RecentEvents';
 import TopologyPreview from '@/app/components/dashboard/TopologyPreview';
 import { AlertTriangle } from 'lucide-react';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 const stagger = {
   hidden: {},
@@ -22,8 +23,10 @@ const fadeUp = {
 
 export default function OverviewPage() {
   const { category } = useDeviceCategory();
+  const { isAllTenants, selectedTenantName } = useTenantSwitcher();
 
-  const { data, loading, error, refresh } = useSWRFetch(`/api/overview?category=${category}`, {
+  // Phase 6.1: useTenantFetch auto-injects tenantId param
+  const { data, loading, error, refresh } = useTenantFetch(`/api/overview?category=${category}`, {
     refreshInterval: 60000,
     dedupingInterval: 5000,
   });
@@ -58,11 +61,16 @@ export default function OverviewPage() {
           <p className="overview-subtitle">
             {data?.source === 'demo'
               ? 'Demo data — connect Auvik to see live metrics'
-              : 'Real-time infrastructure health'}
+              : isAllTenants
+                ? 'Aggregated view across all managed tenants'
+                : 'Real-time infrastructure health'}
           </p>
         </div>
         {data?.source === 'demo' && (
           <span className="demo-badge">Demo Mode</span>
+        )}
+        {isAllTenants && data?.source !== 'demo' && (
+          <span className="msp-badge">MSP View</span>
         )}
       </motion.div>
 
@@ -89,7 +97,7 @@ export default function OverviewPage() {
           />
         </motion.div>
         <motion.div variants={fadeUp}>
-          <RecentEvents events={data?.recentEvents} />
+          <RecentEvents events={data?.recentEvents} showTenant={isAllTenants} />
         </motion.div>
       </div>
 
@@ -128,7 +136,7 @@ export default function OverviewPage() {
           margin: 3px 0 0;
         }
 
-        .demo-badge {
+        .demo-badge, .msp-badge {
           font-size: 10px;
           font-weight: 700;
           text-transform: uppercase;
@@ -138,12 +146,20 @@ export default function OverviewPage() {
           white-space: nowrap;
           flex-shrink: 0;
           margin-top: 2px;
+        }
+
+        .demo-badge {
           background: rgba(245, 158, 11, 0.10);
           border: 1px solid rgba(245, 158, 11, 0.22);
           color: var(--vemio-amber);
         }
 
-        /* Row 1: BCS + cards — stretch so cards fill BCS height */
+        .msp-badge {
+          background: rgba(99, 102, 241, 0.10);
+          border: 1px solid rgba(99, 102, 241, 0.22);
+          color: rgb(129, 140, 248);
+        }
+
         .overview-row-1 {
           display: grid;
           grid-template-columns: 1fr 2fr;
@@ -151,13 +167,11 @@ export default function OverviewPage() {
           align-items: stretch;
         }
 
-        /* Propagate height to children */
         .overview-bcs > *,
         .overview-devices > * {
           height: 100%;
         }
 
-        /* Row 2: fixed height panels side by side */
         .overview-row-2 {
           display: grid;
           grid-template-columns: 7fr 5fr;

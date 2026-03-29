@@ -8,6 +8,8 @@ import {
   Wifi, Shield, MonitorSpeaker, HardDrive, Radio, Cpu,
 } from 'lucide-react';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
+
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'   },
   down:     { label: 'Offline',  color: 'var(--color-status-down)',     bg: 'rgba(239,68,68,0.1)'   },
@@ -34,16 +36,18 @@ const fadeUp = {
 
 function timeAgo(date) {
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
-if (s < 60)    return 'just now';
-if (s < 3600)  return `${Math.floor(s / 60)}m`;
-if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
 export default function DevicesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { category } = useDeviceCategory();
+  const { selectedTenantId, isAllTenants, loading: tenantLoading } = useTenantSwitcher();
+
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
@@ -55,7 +59,6 @@ export default function DevicesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [exporting, setExporting] = useState(false);
 
-  // Sync URL when filters change (shallow update, no navigation)
   useEffect(() => {
     const params = new URLSearchParams();
     if (filters.status) params.set('status', filters.status);
@@ -67,6 +70,7 @@ export default function DevicesPage() {
   }, [filters, router]);
 
   const fetchDevices = useCallback(async () => {
+    if (!selectedTenantId || tenantLoading) return;
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -76,14 +80,14 @@ export default function DevicesPage() {
       params.set('category', category);
       params.set('page',  page.toString());
       params.set('limit', pageSize.toString());
+      params.set('tenantId', selectedTenantId);  // Phase 6.1
       const res = await fetch(`/api/devices?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (err) { console.error('Failed to fetch devices:', err); }
     finally { setLoading(false); }
-  }, [filters, page, pageSize, category]);
+  }, [filters, page, pageSize, category, selectedTenantId, tenantLoading]);
 
-  // Export all devices (fetches without pagination limit)
   const handleExportAll = useCallback(async () => {
     setExporting(true);
     try {
@@ -92,26 +96,32 @@ export default function DevicesPage() {
       if (filters.status) params.set('status', filters.status);
       if (filters.search) params.set('search', filters.search);
       params.set('page', '1');
-      params.set('limit', '10000'); // Fetch all
+      params.set('limit', '10000');
+      params.set('tenantId', selectedTenantId);
       const res = await fetch(`/api/devices?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const allData = await res.json();
       const { downloadCSV } = await import('@/lib/exportCSV');
-      downloadCSV(
-        allData.devices || [],
-        'vemio-devices',
-        ['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt'],
-        { ipAddress: 'IP Address', lastSeenAt: 'Status Since', siteName: 'Site', make: 'Manufacturer' }
-      );
+      const cols = ['name', 'status', 'type', 'ipAddress', 'make', 'model', 'siteName', 'lastSeenAt'];
+      const hdrs = { ipAddress: 'IP Address', lastSeenAt: 'Status Since', siteName: 'Site', make: 'Manufacturer' };
+      if (allData.isAllTenants) {
+        cols.splice(1, 0, 'tenantName');
+        hdrs.tenantName = 'Tenant';
+      }
+      downloadCSV(allData.devices || [], 'vemio-devices', cols, hdrs);
     } catch (err) { console.error('Export failed:', err); }
     finally { setExporting(false); }
-  }, [filters]);
+  }, [filters, selectedTenantId]);
 
   useEffect(() => { fetchDevices(); }, [fetchDevices]);
+
+  // Re-fetch when tenant changes
+  useEffect(() => { setPage(1); }, [selectedTenantId]);
 
   const summary    = data?.summary;
   const devices    = data?.devices    || [];
   const pagination = data?.pagination;
+  const showTenantCol = data?.isAllTenants === true;
 
   return (
     <>
@@ -126,7 +136,9 @@ export default function DevicesPage() {
           <div>
             <h1 className="dv-title">Device Health</h1>
             <p className="dv-subtitle">
-              {summary ? `${summary.total} devices across your network` : 'Loading…'}
+              {summary
+                ? `${summary.total} devices${showTenantCol ? ' across all tenants' : ''}`
+                : 'Loading…'}
             </p>
           </div>
           <div className="dv-header-actions">
@@ -145,7 +157,7 @@ export default function DevicesPage() {
           </div>
         </motion.div>
 
-        {/* ── Status pills — scrollable row on mobile ── */}
+        {/* ── Status pills ── */}
         {summary && (
           <motion.div variants={fadeUp} className="dv-pills">
             {Object.entries(STATUS_CONFIG).map(([key, cfg]) => {
@@ -208,6 +220,8 @@ export default function DevicesPage() {
                 <tr className="dv-thead-row">
                   <th className="dv-th">Status</th>
                   <th className="dv-th dv-th--wide">Device Name</th>
+                  {/* Phase 6.1: Tenant column in all-tenants mode */}
+                  {showTenantCol && <th className="dv-th dv-th--md-only">Tenant</th>}
                   <th className="dv-th dv-th--md-only">Type</th>
                   <th className="dv-th dv-th--md-only">IP Address</th>
                   <th className="dv-th dv-th--lg-only">Make / Model</th>
@@ -225,7 +239,6 @@ export default function DevicesPage() {
                       onClick={() => router.push(`/devices/${device.id}`)}
                       className="dv-tr"
                     >
-                      {/* Status */}
                       <td className="dv-td">
                         <span className="dv-status-badge"
                           style={{ background: statusCfg.bg, color: statusCfg.color }}>
@@ -237,45 +250,49 @@ export default function DevicesPage() {
                         </span>
                       </td>
 
-                      {/* Name */}
                       <td className="dv-td dv-td--wide">
                         <div className="dv-name-cell">
                           <TypeIcon className="dv-type-icon" />
                           <span className="dv-name">{device.name}</span>
                         </div>
-                        {/* On mobile, show type + IP below name */}
                         <div className="dv-name-sub">
                           <span>{device.type?.replace('_', ' ')}</span>
                           {device.ipAddress && <span className="dv-name-ip">{device.ipAddress}</span>}
+                          {showTenantCol && device.tenantName && (
+                            <span className="dv-name-tenant">{device.tenantName}</span>
+                          )}
                         </div>
                       </td>
 
-                      {/* Type — hidden on mobile */}
+                      {/* Phase 6.1: Tenant column */}
+                      {showTenantCol && (
+                        <td className="dv-td dv-td--md-only dv-td--tenant">
+                          <span className="dv-tenant-badge">{device.tenantName}</span>
+                        </td>
+                      )}
+
                       <td className="dv-td dv-td--md-only dv-td--muted dv-td--capitalize">
                         {device.type?.replace('_', ' ')}
                       </td>
 
-                      {/* IP — hidden on mobile */}
                       <td className="dv-td dv-td--md-only dv-td--mono">{device.ipAddress || '—'}</td>
 
-                      {/* Make/Model — hidden below 1024px */}
                       <td className="dv-td dv-td--lg-only dv-td--muted">
                         {[device.make, device.model].filter(Boolean).join(' ') || '—'}
                       </td>
 
-                      {/* Site — hidden below 1024px */}
                       <td className="dv-td dv-td--lg-only dv-td--muted">{device.siteName || '—'}</td>
 
                       <td className="dv-td dv-td--sm-only dv-td--dim">
-  {device.lastSeenAt
-    ? `${device.status === 'up' ? 'Up' : device.status === 'down' ? 'Down' : 'Idle'} ${timeAgo(new Date(device.lastSeenAt))}`
-    : '—'}
-</td>
+                        {device.lastSeenAt
+                          ? `${device.status === 'up' ? 'Up' : device.status === 'down' ? 'Down' : 'Idle'} ${timeAgo(new Date(device.lastSeenAt))}`
+                          : '—'}
+                      </td>
                     </tr>
                   );
                 }) : (
                   <tr>
-                    <td colSpan={7} className="dv-empty">
+                    <td colSpan={showTenantCol ? 8 : 7} className="dv-empty">
                       {loading ? 'Loading devices…' : 'No devices found matching your filters'}
                     </td>
                   </tr>
@@ -333,7 +350,6 @@ export default function DevicesPage() {
         }
         @media (max-width: 767px) { .dv-root { gap: 12px; } }
 
-        /* Header */
         .dv-header {
           display: flex;
           align-items: flex-start;
@@ -362,7 +378,6 @@ export default function DevicesPage() {
         }
         .dv-refresh-btn:hover { background: var(--color-vemio-surface-raised); }
 
-        /* Pills */
         .dv-pills {
           display: flex;
           gap: 8px;
@@ -392,7 +407,6 @@ export default function DevicesPage() {
           flex-shrink: 0;
         }
 
-        /* Search + filter row */
         .dv-filters {
           display: flex;
           gap: 10px;
@@ -443,7 +457,6 @@ export default function DevicesPage() {
           .dv-type-select { width: 120px; font-size: 12px; }
         }
 
-        /* Table panel */
         .dv-table-panel {
           border-radius: 16px;
           overflow: hidden;
@@ -500,6 +513,31 @@ export default function DevicesPage() {
         .dv-td--mono      { font-family: monospace; font-size: 11px; color: var(--vemio-text-muted); }
         .dv-td--dim       { font-size: 11px; color: var(--color-vemio-text-dim); }
         .dv-td--capitalize { text-transform: capitalize; }
+
+        /* Phase 6.1: Tenant badge in table */
+        .dv-td--tenant { font-size: 12px; }
+        .dv-tenant-badge {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          background: rgba(99, 102, 241, 0.08);
+          color: rgb(129, 140, 248);
+          border: 1px solid rgba(99, 102, 241, 0.15);
+          white-space: nowrap;
+        }
+
+        /* Mobile tenant label in name sub-row */
+        .dv-name-tenant {
+          font-size: 10px;
+          font-weight: 600;
+          color: rgb(129, 140, 248);
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+        }
 
         .dv-status-badge {
           display: inline-flex;
@@ -625,7 +663,6 @@ export default function DevicesPage() {
           text-align: center;
         }
 
-        /* Export button */
         .dv-export-btn {
           display: inline-flex;
           align-items: center;

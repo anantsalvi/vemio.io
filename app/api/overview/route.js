@@ -7,10 +7,14 @@
  * 
  * Query params:
  *   category — 'network' (default) or 'all'
+ *   tenantId — UUID of target tenant, or 'all' (MSP only)
+ * 
+ * PHASE 6.1: Cross-tenant MSP support via resolveTargetTenant().
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+import { resolveTargetTenant, queryForTenant, queryAggregateForTenant } from '@/lib/tenant';
 
 const NETWORK_TYPES = [
   'firewall', 'core_switch', 'access_switch', 'access_point',
@@ -18,9 +22,14 @@ const NETWORK_TYPES = [
 ];
 
 export const GET = withAuth(async (req, session) => {
-  const tenantId = session.user.tenantId;
   const url = new URL(req.url);
   const category = url.searchParams.get('category') || 'network';
+
+  // ── Phase 6.1: Resolve target tenant(s) ──
+  const target = await resolveTargetTenant(session, req);
+  if (target.error) {
+    return Response.json({ error: target.error }, { status: 403 });
+  }
 
   // Build device type filter
   const deviceTypeFilter = category !== 'all'
@@ -31,8 +40,8 @@ export const GET = withAuth(async (req, session) => {
   let overview;
 
   try {
-    // Device summary
-    const deviceSummary = await queryWithTenant(tenantId,
+    // Device summary (aggregated across tenants if MSP "all" mode)
+    const deviceSummary = await queryAggregateForTenant(target,
       `SELECT 
          COUNT(*) AS total,
          COUNT(*) FILTER (WHERE current_status = 'up') AS up,
@@ -44,36 +53,57 @@ export const GET = withAuth(async (req, session) => {
       typeParams
     );
 
-    // Latest BCS score (filtered by category)
-    const bcsResult = await queryWithTenant(tenantId,
-      `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
-       FROM bcs_scores
-       WHERE category = $1
-       ORDER BY computed_at DESC
-       LIMIT 1`,
-      [category]
-    );
+    // Latest BCS score — for "all" mode, average across tenants
+    let bcs = null;
+    if (target.mode === 'single') {
+      const bcsResult = await queryWithTenant(target.tenantId,
+        `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
+         FROM bcs_scores
+         WHERE category = $1
+         ORDER BY computed_at DESC
+         LIMIT 1`,
+        [category]
+      );
+      bcs = bcsResult.rows[0] || null;
+    } else {
+      // All-tenants: fetch latest per tenant and average
+      const bcsResult = await queryForTenant(target,
+        `SELECT score, visibility_coverage, redundancy_readiness, alerting_maturity, response_discipline, computed_at
+         FROM bcs_scores
+         WHERE category = $1
+         ORDER BY computed_at DESC
+         LIMIT 1`,
+        [category]
+      );
+      if (bcsResult.rows.length > 0) {
+        const scores = bcsResult.rows;
+        bcs = {
+          score: (scores.reduce((s, r) => s + parseFloat(r.score), 0) / scores.length).toFixed(1),
+          visibility_coverage: (scores.reduce((s, r) => s + parseFloat(r.visibility_coverage), 0) / scores.length).toFixed(2),
+          alerting_maturity: (scores.reduce((s, r) => s + parseFloat(r.alerting_maturity), 0) / scores.length).toFixed(2),
+          response_discipline: (scores.reduce((s, r) => s + parseFloat(r.response_discipline), 0) / scores.length).toFixed(2),
+          computed_at: scores[0].computed_at,
+        };
+      }
+    }
 
     // Active alerts count
-    const alertResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS count
-       FROM alerts
-       WHERE state = 'active'`
+    const alertAgg = await queryAggregateForTenant(target,
+      `SELECT COUNT(*) AS count FROM alerts WHERE state = 'active'`
     );
 
     // Site count
-    const siteResult = await queryWithTenant(tenantId,
+    const siteAgg = await queryAggregateForTenant(target,
       `SELECT COUNT(*) AS count FROM sites WHERE is_active = TRUE`
     );
 
-    const devices = deviceSummary.rows[0];
-    const hasRealData = parseInt(devices.total) > 0;
+    const hasRealData = parseInt(deviceSummary.total || 0) > 0;
 
     if (hasRealData) {
-      const bcs = bcsResult.rows[0] || null;
       overview = {
         source: 'live',
         category,
+        isAllTenants: target.mode === 'all',
         bcs: bcs ? {
           overall: parseFloat(bcs.score),
           deviceHealth: parseFloat(bcs.visibility_coverage),
@@ -82,19 +112,19 @@ export const GET = withAuth(async (req, session) => {
           calculatedAt: bcs.computed_at,
         } : null,
         devices: {
-          total: parseInt(devices.total),
-          up: parseInt(devices.up),
-          down: parseInt(devices.down),
-          degraded: parseInt(devices.degraded),
-          unknown: parseInt(devices.unknown),
+          total: parseInt(deviceSummary.total || 0),
+          up: parseInt(deviceSummary.up || 0),
+          down: parseInt(deviceSummary.down || 0),
+          degraded: parseInt(deviceSummary.degraded || 0),
+          unknown: parseInt(deviceSummary.unknown || 0),
         },
-        alerts: { active: parseInt(alertResult.rows[0].count) },
-        sites: { total: parseInt(siteResult.rows[0].count) },
+        alerts: { active: parseInt(alertAgg.count || 0) },
+        sites: { total: parseInt(siteAgg.count || 0) },
       };
 
-      // Uptime trend — daily average from device_status_history
+      // Uptime trend
       try {
-        const trendResult = await queryWithTenant(tenantId,
+        const trendResult = await queryForTenant(target,
           `WITH daily AS (
              SELECT 
                DATE(changed_at) AS day,
@@ -113,23 +143,41 @@ export const GET = withAuth(async (req, session) => {
         );
 
         if (trendResult.rows.length > 0) {
-          overview.uptimeTrend = trendResult.rows.map(r => ({
-            date: r.day.toISOString().split('T')[0],
-            uptime: r.uptime ? parseFloat(r.uptime) : null,
-          }));
+          // For all-tenants mode, group by day and average
+          if (target.mode === 'all') {
+            const byDay = {};
+            for (const r of trendResult.rows) {
+              const day = r.day.toISOString().split('T')[0];
+              if (!byDay[day]) byDay[day] = [];
+              if (r.uptime != null) byDay[day].push(parseFloat(r.uptime));
+            }
+            overview.uptimeTrend = Object.entries(byDay)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([date, values]) => ({
+                date,
+                uptime: values.length > 0
+                  ? parseFloat((values.reduce((s, v) => s + v, 0) / values.length).toFixed(1))
+                  : null,
+              }));
+          } else {
+            overview.uptimeTrend = trendResult.rows.map(r => ({
+              date: r.day.toISOString().split('T')[0],
+              uptime: r.uptime ? parseFloat(r.uptime) : null,
+            }));
+          }
         }
       } catch (err) {
         console.error('[VEMIO API] Uptime trend query error:', err.message);
       }
 
-      // Recent events from device_status_history
+      // Recent events
       try {
         const eventsParams = category !== 'all' ? [NETWORK_TYPES] : [];
         const eventsTypeFilter = category !== 'all'
           ? 'AND d.device_type = ANY($1)'
           : '';
 
-        const eventsResult = await queryWithTenant(tenantId,
+        const eventsResult = await queryForTenant(target,
           `SELECT 
              dsh.status,
              dsh.changed_at,
@@ -147,11 +195,17 @@ export const GET = withAuth(async (req, session) => {
              ${eventsTypeFilter}
            ORDER BY dsh.changed_at DESC
            LIMIT 20`,
-          eventsParams
+          eventsParams,
+          { addTenantInfo: target.mode === 'all' }
         );
 
         if (eventsResult.rows.length > 0) {
-          overview.recentEvents = eventsResult.rows.map(r => {
+          // Sort merged results by time (all-tenants may interleave)
+          const sorted = eventsResult.rows.sort(
+            (a, b) => new Date(b.changed_at) - new Date(a.changed_at)
+          ).slice(0, 20);
+
+          overview.recentEvents = sorted.map(r => {
             const name = r.device_name || 'Unknown device';
             const type = formatDeviceType(r.device_type);
             let message, eventType, severity;
@@ -191,6 +245,11 @@ export const GET = withAuth(async (req, session) => {
               device_name: r.device_name,
               device_id: r.device_id,
               ip_address: r.ip_address,
+              // Phase 6.1: Tenant info in all-tenants mode
+              ...(r._tenant_name && {
+                tenant_name: r._tenant_name,
+                tenant_slug: r._tenant_slug,
+              }),
             };
           });
         }

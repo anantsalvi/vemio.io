@@ -4,11 +4,9 @@ import { Menu } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useBranding } from '@/hooks/useBranding';
-import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 import ThemeToggle from '@/app/components/ThemeToggle';
 import AlertNotificationToggle from '@/app/components/AlertNotificationToggle';
 import DeviceCategoryToggle from '@/app/components/DeviceCategoryToggle';
-import TenantSwitcher from '@/app/components/dashboard/TenantSwitcher';
 
 const PAGE_TITLES = {
   '/':                      'Overview',
@@ -28,6 +26,7 @@ const PAGE_TITLES = {
   '/settings/webhooks':      'Webhook Log',
 };
 
+/* Shorter titles for mobile to prevent truncation */
 const PAGE_TITLES_SHORT = {
   '/intelligence':          'BCS',
   '/settings/notifications': 'Notifications',
@@ -40,23 +39,17 @@ export default function TopBar({ onMenuClick, isMobile }) {
   const pathname = usePathname();
   const { data: session, status } = useSession();
   const branding = useBranding();
-  const { isMSP, selectedTenantName, isAllTenants } = useTenantSwitcher();
 
   const title = PAGE_TITLES[pathname] ?? 'VEMIO';
   const shortTitle = PAGE_TITLES_SHORT[pathname] || title;
-
-  // For MSP users: show selected tenant name. For clients: show branding/tenant name.
-  const tenantDisplay = isMSP
-    ? null  // MSP users see the TenantSwitcher dropdown instead
-    : (branding.company_name || session?.user?.tenantName || '');
-
+  const tenantDisplay = branding.company_name || session?.user?.tenantName || '';
   const user = session?.user;
   const isLoading = status === 'loading';
 
   return (
     <>
       <header className="topbar">
-        {/* Left: hamburger + page title + tenant switcher */}
+        {/* Left: hamburger + page title */}
         <div className="topbar-left">
           {isMobile && (
             <button
@@ -70,13 +63,9 @@ export default function TopBar({ onMenuClick, isMobile }) {
           <div className="topbar-title-wrap">
             <h1 className="topbar-title topbar-title--full">{title}</h1>
             <h1 className="topbar-title topbar-title--short">{shortTitle}</h1>
-
-            {/* Phase 6.1: Tenant switcher for MSP users, static badge for clients */}
-            {isMSP ? (
-              <TenantSwitcher />
-            ) : tenantDisplay ? (
+            {tenantDisplay && (
               <span className="topbar-tenant">{tenantDisplay}</span>
-            ) : null}
+            )}
           </div>
         </div>
 
@@ -121,6 +110,7 @@ export default function TopBar({ onMenuClick, isMobile }) {
           .topbar { padding: 0 12px; gap: 8px; }
         }
 
+        /* ── Left side ── */
         .topbar-left {
           display: flex;
           align-items: center;
@@ -147,7 +137,7 @@ export default function TopBar({ onMenuClick, isMobile }) {
 
         .topbar-title-wrap {
           display: flex;
-          align-items: center;
+          align-items: baseline;
           gap: 10px;
           min-width: 0;
         }
@@ -160,6 +150,7 @@ export default function TopBar({ onMenuClick, isMobile }) {
           color: var(--vemio-text);
         }
 
+        /* Full title on desktop, short on mobile */
         .topbar-title--short { display: none; }
         .topbar-title--full { display: block; }
 
@@ -183,6 +174,7 @@ export default function TopBar({ onMenuClick, isMobile }) {
           .topbar-tenant { display: none; }
         }
 
+        /* ── Right side ── */
         .topbar-right {
           display: flex;
           align-items: center;
@@ -231,6 +223,7 @@ export default function TopBar({ onMenuClick, isMobile }) {
           color: var(--color-vemio-text-muted);
         }
 
+        /* Hide username and avatar on very small screens */
         @media (max-width: 639px) {
           .topbar-username { display: none; }
         }

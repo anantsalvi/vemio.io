@@ -3,22 +3,18 @@
  * GET  /api/alerts  — List alerts with filters
  * PATCH /api/alerts — Acknowledge or resolve an alert
  *
+ * PHASE 6.1: Cross-tenant MSP support.
+ *   GET: MSP users can view alerts across all managed tenants.
+ *   PATCH: MSP users can manage alerts for any managed tenant.
+ *
  * ACCESS CONTROL:
- *   Only MSP tenant (VE HQ) users can acknowledge/resolve.
- *   Client tenant users are read-only for alert management.
- *   VE HQ admins → acknowledge + resolve
- *   VE HQ viewers → acknowledge only (escalate resolve to admin)
- *
- * GLPI INTEGRATION:
- *   Acknowledge → creates GLPI ticket (best-effort, state change always succeeds)
- *   Resolve → closes GLPI ticket with downtime duration
- *
- * AUDIT TRAIL:
- *   acknowledged_by / resolved_by stored on the alert row
+ *   MSP tenant users → acknowledge + resolve (admin) / acknowledge only (viewer)
+ *   Client tenant users → read-only for alert management
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+import { resolveTargetTenant, queryForTenant, queryAggregateForTenant } from '@/lib/tenant';
 import { createGLPITicket, closeGLPITicket } from '@/lib/glpi';
 
 const NETWORK_TYPES = [
@@ -26,12 +22,8 @@ const NETWORK_TYPES = [
   'router', 'server', 'p2p_link',
 ];
 
-// MSP tenant ID — Vinay Enterprises HQ
-// Only users on this tenant can manage alerts across all tenants
-const MSP_TENANT_ID = '0a3de3a4-1f08-422d-bdb2-03e98344ceff';
-
 function isMSPUser(session) {
-  return session.user.tenantId === MSP_TENANT_ID;
+  return session.user.isMSP === true;
 }
 
 function isMSPAdmin(session) {
@@ -50,7 +42,6 @@ function formatDowntime(ms) {
 
 
 export const GET = withAuth(async (req, session) => {
-  const tenantId = session.user.tenantId;
   const { searchParams } = new URL(req.url);
   const state    = searchParams.get('state');
   const severity = searchParams.get('severity');
@@ -58,6 +49,14 @@ export const GET = withAuth(async (req, session) => {
   const category = searchParams.get('category') || 'network';
   const limit    = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);
   const offset   = parseInt(searchParams.get('offset') || '0', 10);
+
+  // ── Phase 6.1: Resolve target tenant(s) ──
+  const target = await resolveTargetTenant(session, req);
+  if (target.error) {
+    return Response.json({ error: target.error }, { status: 403 });
+  }
+
+  const isAllMode = target.mode === 'all';
 
   try {
     const conditions = [];
@@ -76,10 +75,8 @@ export const GET = withAuth(async (req, session) => {
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const countResult = await queryWithTenant(tenantId,
-      `SELECT COUNT(*) AS total FROM alerts a LEFT JOIN devices d ON d.id = a.device_id ${where}`, params);
-
-    const alerts = await queryWithTenant(tenantId, `
+    // Fetch alerts (across tenants if MSP all mode)
+    const alertsResult = await queryForTenant(target, `
       SELECT
         a.id, a.alert_type, a.severity, a.state,
         a.title, a.description, a.source_type,
@@ -96,11 +93,30 @@ export const GET = withAuth(async (req, session) => {
       ORDER BY
         CASE a.state WHEN 'active' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END,
         CASE a.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-        a.triggered_at DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, [...params, limit, offset]);
+        a.triggered_at DESC`,
+      params,
+      { addTenantInfo: isAllMode }
+    );
 
-    // Summary
+    // Apply pagination on merged results
+    let allAlerts = alertsResult.rows;
+    if (isAllMode) {
+      // Re-sort merged results (state priority → severity priority → time)
+      const stateOrder = { active: 0, acknowledged: 1, resolved: 2, suppressed: 3 };
+      const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+      allAlerts.sort((a, b) => {
+        const sd = (stateOrder[a.state] ?? 9) - (stateOrder[b.state] ?? 9);
+        if (sd !== 0) return sd;
+        const svd = (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9);
+        if (svd !== 0) return svd;
+        return new Date(b.triggered_at) - new Date(a.triggered_at);
+      });
+    }
+
+    const total = allAlerts.length;
+    const paginatedAlerts = allAlerts.slice(offset, offset + limit);
+
+    // Summary (aggregated across tenants)
     const sConds = [];
     const sParams = [];
     let sIdx = 1;
@@ -111,7 +127,7 @@ export const GET = withAuth(async (req, session) => {
     sConds.push(`(d.is_retired = false OR d.id IS NULL)`);
     const sWhere = sConds.length > 0 ? 'WHERE ' + sConds.join(' AND ') : '';
 
-    const summary = await queryWithTenant(tenantId, `
+    const summaryAgg = await queryAggregateForTenant(target, `
       SELECT
         COUNT(*) FILTER (WHERE a.state = 'active')       AS active,
         COUNT(*) FILTER (WHERE a.state = 'acknowledged')  AS acknowledged,
@@ -122,19 +138,30 @@ export const GET = withAuth(async (req, session) => {
     `, sParams);
 
     return Response.json({
-      alerts: alerts.rows,
+      alerts: paginatedAlerts.map(a => ({
+        ...a,
+        // Phase 6.1: include tenant info in all-tenants mode
+        ...(a._tenant_name && {
+          tenant_name: a._tenant_name,
+          tenant_slug: a._tenant_slug,
+        }),
+        // Clean internal fields
+        _tenant_name: undefined,
+        _tenant_slug: undefined,
+        _tenant_id: undefined,
+      })),
+      isAllTenants: isAllMode,
       category,
-      // Tell the frontend whether this user can manage alerts
       canManage: isMSPUser(session),
       canResolve: isMSPAdmin(session),
       summary: {
-        active:          parseInt(summary.rows[0].active),
-        acknowledged:    parseInt(summary.rows[0].acknowledged),
-        resolved_24h:    parseInt(summary.rows[0].resolved_24h),
-        suppressed:      parseInt(summary.rows[0].suppressed),
-        critical_active: parseInt(summary.rows[0].critical_active),
+        active:          parseInt(summaryAgg.active || 0),
+        acknowledged:    parseInt(summaryAgg.acknowledged || 0),
+        resolved_24h:    parseInt(summaryAgg.resolved_24h || 0),
+        suppressed:      parseInt(summaryAgg.suppressed || 0),
+        critical_active: parseInt(summaryAgg.critical_active || 0),
       },
-      pagination: { total: parseInt(countResult.rows[0].total), limit, offset },
+      pagination: { total, limit, offset },
     });
   } catch (err) {
     console.error('[API /alerts GET] Error:', err.message);
@@ -148,26 +175,43 @@ export const PATCH = withAuth(async (req, session) => {
   const tenantSlug = session.user.tenantSlug;
   const userName = session.user.name || session.user.email || 'Unknown';
 
-  // ── Access control: only MSP (VE HQ) users can manage alerts ──
+  // ── Access control: only MSP users can manage alerts ──
   if (!isMSPUser(session)) {
     return Response.json(
-      { error: 'Alert management is restricted to Vinay Enterprises operations team' },
+      { error: 'Alert management is restricted to MSP operations team' },
       { status: 403 }
     );
   }
 
   try {
     const body = await req.json();
-    const { alertId, action } = body;
+    const { alertId, action, alertTenantId } = body;
 
     if (!alertId || !['acknowledge', 'resolve'].includes(action)) {
       return Response.json({ error: 'Invalid request — need alertId and action (acknowledge|resolve)' }, { status: 400 });
     }
 
+    // Determine which tenant's alert we're acting on
+    // The alertTenantId comes from the frontend (set in all-tenants mode)
+    // We validate MSP has access to this tenant
+    const targetTenantId = alertTenantId || tenantId;
+
+    // For MSP users operating on a different tenant's alert,
+    // validate access via msp_tenant_access
+    if (alertTenantId && alertTenantId !== tenantId) {
+      const accessCheck = await queryWithTenant(tenantId,
+        `SELECT 1 FROM msp_tenant_access
+         WHERE msp_tenant_id = $1 AND managed_tenant_id = $2`,
+        [tenantId, alertTenantId]
+      );
+      if (accessCheck.rows.length === 0) {
+        return Response.json({ error: 'Access denied to this tenant' }, { status: 403 });
+      }
+    }
+
     // ── ACKNOWLEDGE ──
     if (action === 'acknowledge') {
-      // Get alert details
-      const alertResult = await queryWithTenant(tenantId, `
+      const alertResult = await queryWithTenant(targetTenantId, `
         SELECT a.id, a.title, a.description, a.severity, a.alert_type,
                a.state, a.glpi_ticket_id, a.triggered_at,
                d.name AS device_name, d.device_type, d.ip_address,
@@ -186,14 +230,12 @@ export const PATCH = withAuth(async (req, session) => {
 
       const alert = alertResult.rows[0];
 
-      // Update state + audit trail
-      await queryWithTenant(tenantId, `
+      await queryWithTenant(targetTenantId, `
         UPDATE alerts
         SET state = 'acknowledged', acknowledged_at = NOW(), acknowledged_by = $1
         WHERE id = $2
       `, [userName, alertId]);
 
-      // Create GLPI ticket (best-effort — never blocks state change)
       let glpiTicket = null;
       if (!alert.glpi_ticket_id) {
         const desc = [
@@ -219,9 +261,8 @@ export const PATCH = withAuth(async (req, session) => {
         });
 
         if (glpiTicket?.ticketId) {
-          // Store ticket ID — best effort, don't fail if this UPDATE fails
           try {
-            await queryWithTenant(tenantId, `
+            await queryWithTenant(targetTenantId, `
               UPDATE alerts SET glpi_ticket_id = $1 WHERE id = $2
             `, [glpiTicket.ticketId.toString(), alertId]);
           } catch (e) {
@@ -243,7 +284,6 @@ export const PATCH = withAuth(async (req, session) => {
 
     // ── RESOLVE ──
     if (action === 'resolve') {
-      // Only MSP admins can resolve
       if (!isMSPAdmin(session)) {
         return Response.json(
           { error: 'Only administrators can resolve alerts. Please escalate to an admin.' },
@@ -251,7 +291,7 @@ export const PATCH = withAuth(async (req, session) => {
         );
       }
 
-      const alertResult = await queryWithTenant(tenantId, `
+      const alertResult = await queryWithTenant(targetTenantId, `
         SELECT a.id, a.title, a.severity, a.state,
                a.triggered_at, a.acknowledged_at, a.acknowledged_by, a.glpi_ticket_id,
                d.name AS device_name, s.name AS site_name
@@ -270,14 +310,12 @@ export const PATCH = withAuth(async (req, session) => {
       const triggeredAt = new Date(alert.triggered_at);
       const downtimeStr = formatDowntime(resolvedAt.getTime() - triggeredAt.getTime());
 
-      // Update state + audit trail
-      await queryWithTenant(tenantId, `
+      await queryWithTenant(targetTenantId, `
         UPDATE alerts
         SET state = 'resolved', resolved_at = NOW(), resolved_by = $1
         WHERE id = $2
       `, [userName, alertId]);
 
-      // Close GLPI ticket (best-effort)
       let ticketClosed = false;
       if (alert.glpi_ticket_id) {
         const note = [

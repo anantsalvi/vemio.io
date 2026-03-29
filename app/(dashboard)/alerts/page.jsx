@@ -38,8 +38,8 @@ function AlertRow({ alert, onAction, canManage, canResolve, showTenant }) {
   const canRes = canResolve && (alert.state === 'active' || alert.state === 'acknowledged');
 
   async function handleAction(action) {
-    setActing(true);
-    try { await onAction(alert.id, action, alert.tenant_id); } finally { setActing(false); }
+    setActing(action);
+    try { await onAction(alert.id, action, alert.tenant_id); } finally { setActing(null); }
   }
 
   return (
@@ -119,13 +119,13 @@ function AlertRow({ alert, onAction, canManage, canResolve, showTenant }) {
       {(canAck || canRes) && (
         <div className="alert-actions">
           {canAck && (
-            <button onClick={() => handleAction('acknowledge')} disabled={acting} className="alert-btn alert-btn--ack">
-              {acting ? 'Working…' : 'Acknowledge'}
+            <button onClick={() => handleAction('acknowledge')} disabled={!!acting} className="alert-btn alert-btn--ack">
+              {acting === 'acknowledge' ? 'Working…' : 'Acknowledge'}
             </button>
           )}
           {canRes && (
-            <button onClick={() => handleAction('resolve')} disabled={acting} className="alert-btn alert-btn--resolve">
-              {acting ? 'Working…' : 'Resolve'}
+            <button onClick={() => handleAction('resolve')} disabled={!!acting} className="alert-btn alert-btn--resolve">
+              {acting === 'resolve' ? 'Working…' : 'Resolve'}
             </button>
           )}
         </div>

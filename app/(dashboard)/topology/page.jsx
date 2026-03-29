@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Network, X, RefreshCw, Search, Minus, Plus, Maximize2, Crosshair, ChevronRight } from 'lucide-react';
 import * as d3 from 'd3';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 /* ═══════════ DEVICE COLOR SYSTEM ═══════════ */
 const TYPE_COLORS = {
@@ -457,8 +458,9 @@ export default function TopologyPage() {
   const [highlightedId, setHighlightedId] = useState(null);
   const [expandedClusters, setExpandedClusters] = useState(new Set());
   const [cableFilter, setCableFilter] = useState('all');
+  const { selectedTenantId } = useTenantSwitcher();
 
-  useEffect(() => { fetch('/api/sites').then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, []);
+  useEffect(() => { fetch(`/api/sites?tenantId=${selectedTenantId || ''}`).then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, []);
 
   const fetchTopology = useCallback(async () => {
     setLoading(true); setError(null);
@@ -466,13 +468,14 @@ export default function TopologyPage() {
       const p = new URLSearchParams();
       if (selectedSite) p.set('site', selectedSite);
       if (category !== 'network') p.set('category', category);
+      if (selectedTenantId) p.set('tenantId', selectedTenantId);
       const res = await fetch(`/api/topology?${p}`);
       if (!res.ok) throw new Error();
       setData(await res.json());
       setSelected(null); setHighlightedId(null); setSearchQuery(''); setSearchResults([]);
     } catch { setError('Failed to load topology data'); }
     finally { setLoading(false); }
-  }, [selectedSite, category]);
+  }, [selectedSite, category, selectedTenantId]);
 
   useEffect(() => { fetchTopology(); }, [fetchTopology]);
 

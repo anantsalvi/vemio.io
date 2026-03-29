@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { RefreshCw, Download, FileText, Shield, Server } from 'lucide-react';
 import { useBranding } from '@/hooks/useBranding';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 const stagger = {
   hidden: {},
@@ -387,12 +388,13 @@ export default function ReportsPage() {
   const [loading, setLoading]         = useState(false);
   const [downloading, setDownloading] = useState(false);
   const months = getMonthOptions();
+  const { selectedTenantId } = useTenantSwitcher();
 
   async function generateReport() {
     setLoading(true);
     setData(null);
     try {
-      const res = await fetch(`/api/reports?type=${reportType}&month=${month}`);
+      const res = await fetch(`/api/reports?type=${reportType}&month=${month}&tenantId=${selectedTenantId}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (err) { console.error('Report generation failed:', err); }

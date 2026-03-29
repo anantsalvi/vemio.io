@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, ChevronRight, ChevronDown, Clock, LinkIcon } from 'lucide-react';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 const stagger = {
   hidden: {},
@@ -405,7 +406,7 @@ export default function RCAPage() {
   const [loading, setLoading]     = useState(true);
   const [selectedId, setSelectedId] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
-
+  const { selectedTenantId } = useTenantSwitcher();
   useEffect(() => {
     async function fetchRCAs() {
       setLoading(true);
@@ -413,13 +414,14 @@ export default function RCAPage() {
         const params = new URLSearchParams();
         if (statusFilter) params.set('status', statusFilter);
         params.set('limit', '20');
+        params.set('tenantId', selectedTenantId);
         const res = await fetch(`/api/rca?${params}`);
         if (res.ok) setData(await res.json());
       } catch (err) { console.error('RCA fetch:', err); }
       finally { setLoading(false); }
     }
     fetchRCAs();
-  }, [statusFilter]);
+  }, [statusFilter, selectedTenantId]);
 
   const rcas = data?.rca_reports || [];
 

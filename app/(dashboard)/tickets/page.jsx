@@ -10,6 +10,8 @@ import {
   CheckCircle2, XCircle, Clock, Ticket,
 } from 'lucide-react';
 import ExportButton from '@/app/components/ExportButton';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
+
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.08 } },
@@ -113,7 +115,7 @@ export default function TicketsPage() {
   const [search,         setSearch]         = useState('');
   const [searchInput,    setSearchInput]    = useState('');
   const [period,         setPeriod]         = useState('mtd');
-
+  const { selectedTenantId, loading: tenantLoading } = useTenantSwitcher();
   const fetchTickets = useCallback(async (page = 1) => {
     try {
       const params = new URLSearchParams();
@@ -121,21 +123,22 @@ export default function TicketsPage() {
       if (statusFilter)   params.set('status',   statusFilter);
       if (priorityFilter) params.set('priority', priorityFilter);
       if (search)         params.set('search',   search);
+      params.set('tenantId', selectedTenantId);
       const res = await fetch(`/api/tickets?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setTickets(json.tickets);
       setPagination(json.pagination);
     } catch (err) { setError(err.message); }
-  }, [statusFilter, priorityFilter, search]);
+  }, [statusFilter, priorityFilter, search, selectedTenantId]);
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch(`/api/tickets/stats?period=${period}`);
+      const res = await fetch(`/api/tickets/stats?period=${period}&tenantId=${selectedTenantId}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setStats(await res.json());
     } catch (err) { console.error('Stats fetch failed:', err.message); }
-  }, [period]);
+  }, [period, selectedTenantId]);
 
   useEffect(() => {
     const load = async () => {

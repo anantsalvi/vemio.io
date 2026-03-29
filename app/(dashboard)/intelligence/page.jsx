@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RefreshCw, TrendingDown, TrendingUp, HelpCircle, X, Eye, Shield, Cpu, Settings, Bell, Clock } from 'lucide-react';
-
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 const stagger = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.08 } },
@@ -327,19 +327,20 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(true);
   const [range, setRange]     = useState('90d');
   const [showExplain, setShowExplain] = useState(false);
+  const { selectedTenantId } = useTenantSwitcher();
 
   useEffect(() => {
     async function fetchBCS() {
       setLoading(true);
       try {
-        const res = await fetch(`/api/bcs?range=${range}`);
+        const res = await fetch(`/api/bcs?range=${range}&tenantId=${selectedTenantId}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         setData(await res.json());
       } catch (err) { console.error('BCS fetch error:', err); }
       finally { setLoading(false); }
     }
     fetchBCS();
-  }, [range]);
+  }, [range, selectedTenantId]);
 
   if (loading && !data) {
     return (

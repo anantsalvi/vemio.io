@@ -6,6 +6,7 @@ import {
   RefreshCw, ChevronRight, ChevronDown, MapPin,
   Shield, AlertTriangle, Server, Wifi, HardDrive,
 } from 'lucide-react';
+import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 
 const stagger = {
   hidden: {},
@@ -45,7 +46,7 @@ function SiteDetail({ siteId }) {
   useEffect(() => {
     async function fetchDetail() {
       try {
-        const res = await fetch(`/api/sites?id=${siteId}`);
+        const res = await fetch(`/api/sites?id=${siteId}&tenantId=${selectedTenantId}`);
         if (res.ok) setDetail(await res.json());
       } catch (err) { console.error('Site detail fetch:', err); }
       finally { setLoading(false); }
@@ -418,12 +419,12 @@ export default function SitesPage() {
   const [data, setData]           = useState(null);
   const [loading, setLoading]     = useState(true);
   const [selectedId, setSelectedId] = useState(null);
-
+  const { selectedTenantId } = useTenantSwitcher();
   useEffect(() => {
     async function fetchSites() {
       setLoading(true);
       try {
-        const res = await fetch('/api/sites');
+        const res = await fetch(`/api/sites?tenantId=${selectedTenantId}`);
         if (res.ok) setData(await res.json());
       } catch (err) { console.error('Sites fetch:', err); }
       finally { setLoading(false); }
@@ -431,7 +432,7 @@ export default function SitesPage() {
     fetchSites();
     const interval = setInterval(fetchSites, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedTenantId]);
 
   if (loading && !data) return (
     <div className="flex items-center justify-center h-64">

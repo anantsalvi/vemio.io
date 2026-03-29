@@ -63,8 +63,28 @@ export const GET = withAuth(async (req, session) => {
     const params = [];
     let idx = 1;
 
-    if (state)    { conditions.push(`a.state = $${idx}`);    params.push(state);    idx++; }
-    if (severity) { conditions.push(`a.severity = $${idx}`); params.push(severity); idx++; }
+    if (state) {
+  const stateArr = state.split(',').map(s => s.trim()).filter(Boolean);
+  if (stateArr.length === 1) {
+    conditions.push(`a.state = $${idx}`);
+    params.push(stateArr[0]);
+  } else {
+    conditions.push(`a.state = ANY($${idx}::alert_state[])`);
+    params.push(stateArr);
+  }
+  idx++;
+}
+    if (severity) {
+  const sevArr = severity.split(',').map(s => s.trim()).filter(Boolean);
+  if (sevArr.length === 1) {
+    conditions.push(`a.severity = $${idx}`);
+    params.push(sevArr[0]);
+  } else {
+    conditions.push(`a.severity = ANY($${idx}::alert_severity[])`);
+    params.push(sevArr);
+  }
+  idx++;
+}
     if (type)     { conditions.push(`a.alert_type = $${idx}`); params.push(type);   idx++; }
 
     if (category !== 'all') {

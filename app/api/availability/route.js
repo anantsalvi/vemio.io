@@ -23,7 +23,6 @@ export const GET = withAuth(async (req, session) => {
       return NextResponse.json({ error: target.error }, { status: 403 });
     }
 
-    // Build device type filter
     const deviceTypeFilter = category !== 'all'
       ? 'AND d.device_type = ANY($2)'
       : '';
@@ -102,14 +101,31 @@ export const GET = withAuth(async (req, session) => {
 
     // ── 3. Fleet-level stats ──
     const totalDevices = deviceRows.length;
+
+    // Compute fleet availability (weighted by tracked time)
     const totalUpSecs = deviceRows.reduce((sum, d) => sum + parseFloat(d.up_secs || 0), 0);
     const totalSecs = deviceRows.reduce((sum, d) => sum + parseFloat(d.total_secs || 0), 0);
     const fleetAvailability = totalSecs > 0
       ? Math.round((totalUpSecs / totalSecs) * 10000) / 100 : 100;
+
     const totalDownHours = deviceRows.reduce((sum, d) => sum + parseFloat(d.down_secs || 0), 0) / 3600;
+    const avgDownHoursPerDevice = totalDevices > 0
+      ? Math.round((totalDownHours / totalDevices) * 10) / 10 : 0;
+
     const worstDevice = deviceRows.length > 0 ? deviceRows[0] : null;
+
+    // Count devices at each threshold
+    const devicesAt100 = deviceRows.filter(d => parseFloat(d.uptime_pct) >= 100).length;
+    const devicesBelow9999 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 99.9).length;
     const devicesBelow99 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 99).length;
     const devicesBelow95 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 95).length;
+    const devicesBelow90 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 90).length;
+
+    // Target analysis: what fleet score would be if worst N devices were fixed
+    const sortedByUptime = [...deviceRows].sort((a, b) => parseFloat(a.uptime_pct) - parseFloat(b.uptime_pct));
+    const targetIfWorst5Fixed = computeFleetWithout(deviceRows, sortedByUptime.slice(0, 5));
+    const targetIfWorst10Fixed = computeFleetWithout(deviceRows, sortedByUptime.slice(0, 10));
+    const targetIfAllAbove95 = computeFleetIfMinimum(deviceRows, 95);
 
     return NextResponse.json({
       days,
@@ -118,24 +134,38 @@ export const GET = withAuth(async (req, session) => {
       summary: {
         total_devices: totalDevices,
         total_down_hours: Math.round(totalDownHours * 10) / 10,
+        avg_down_hours: avgDownHoursPerDevice,
+        devices_at_100: devicesAt100,
         devices_below_99: devicesBelow99,
         devices_below_95: devicesBelow95,
+        devices_below_90: devicesBelow90,
         worst_device: worstDevice ? {
           name: worstDevice.device_name,
           uptime_pct: parseFloat(worstDevice.uptime_pct),
           down_hours: Math.round((parseFloat(worstDevice.down_secs || 0) / 3600) * 10) / 10,
         } : null,
       },
+      targets: {
+        if_worst_5_fixed: targetIfWorst5Fixed,
+        if_worst_10_fixed: targetIfWorst10Fixed,
+        if_all_above_95: targetIfAllAbove95,
+      },
       devices: deviceRows.map(d => ({
-        device_id: d.device_id, name: d.device_name, device_type: d.device_type,
-        site_name: d.site_name, is_critical: d.is_critical,
+        device_id: d.device_id,
+        name: d.device_name,
+        device_type: d.device_type,
+        site_name: d.site_name,
+        is_critical: d.is_critical,
         uptime_pct: parseFloat(d.uptime_pct),
         down_hours: Math.round((parseFloat(d.down_secs || 0) / 3600) * 10) / 10,
         degraded_hours: Math.round((parseFloat(d.degraded_secs || 0) / 3600) * 10) / 10,
       })),
       outages: outageRows.map(o => ({
-        device_id: o.device_id, device_name: o.device_name, status: o.status,
-        start_time: o.start_time, end_time: o.end_time,
+        device_id: o.device_id,
+        device_name: o.device_name,
+        status: o.status,
+        start_time: o.start_time,
+        end_time: o.end_time,
       })),
     });
   } catch (err) {
@@ -143,3 +173,28 @@ export const GET = withAuth(async (req, session) => {
     return NextResponse.json({ error: 'Failed to compute availability' }, { status: 500 });
   }
 });
+
+/**
+ * Compute what fleet availability would be if we excluded certain devices.
+ */
+function computeFleetWithout(allDevices, excludeDevices) {
+  const excludeIds = new Set(excludeDevices.map(d => d.device_id));
+  const remaining = allDevices.filter(d => !excludeIds.has(d.device_id));
+  if (remaining.length === 0) return 100;
+  const totalUp = remaining.reduce((s, d) => s + parseFloat(d.up_secs || 0), 0);
+  const totalAll = remaining.reduce((s, d) => s + parseFloat(d.total_secs || 0), 0);
+  return totalAll > 0 ? Math.round((totalUp / totalAll) * 10000) / 100 : 100;
+}
+
+/**
+ * Compute what fleet availability would be if every device had at least `minPct`% uptime.
+ */
+function computeFleetIfMinimum(allDevices, minPct) {
+  if (allDevices.length === 0) return 100;
+  const adjustedPcts = allDevices.map(d => {
+    const pct = parseFloat(d.uptime_pct);
+    return pct < minPct ? minPct : pct;
+  });
+  const avg = adjustedPcts.reduce((s, p) => s + p, 0) / adjustedPcts.length;
+  return Math.round(avg * 100) / 100;
+}

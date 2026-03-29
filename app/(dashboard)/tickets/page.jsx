@@ -141,14 +141,14 @@ export default function TicketsPage() {
   }, [period, selectedTenantId]);
 
   useEffect(() => {
+    if (!selectedTenantId) return;
     const load = async () => {
       setLoading(true);
       await Promise.all([fetchTickets(1), fetchStats()]);
       setLoading(false);
     };
     load();
-  }, [fetchTickets, fetchStats]);
-
+  }, [fetchTickets, fetchStats, selectedTenantId]);
   if (loading && !stats) return (
     <div className="flex items-center justify-center h-64">
       <RefreshCw className="w-6 h-6 text-vemio-amber animate-spin" />

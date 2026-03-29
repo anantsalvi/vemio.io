@@ -42,6 +42,7 @@ function getHealthColor(pct) {
 function SiteDetail({ siteId }) {
   const [detail, setDetail]   = useState(null);
   const [loading, setLoading] = useState(true);
+  const { selectedTenantId } = useTenantSwitcher();
 
   useEffect(() => {
     async function fetchDetail() {
@@ -52,7 +53,7 @@ function SiteDetail({ siteId }) {
       finally { setLoading(false); }
     }
     fetchDetail();
-  }, [siteId]);
+  }, [siteId, selectedTenantId]);
 
   if (loading) return (
     <motion.div initial={{ height: 0 }} animate={{ height: 'auto' }} exit={{ height: 0 }} className="overflow-hidden">
@@ -421,6 +422,7 @@ export default function SitesPage() {
   const [selectedId, setSelectedId] = useState(null);
   const { selectedTenantId } = useTenantSwitcher();
   useEffect(() => {
+    if (!selectedTenantId) return;  // ← ADD THIS LINE
     async function fetchSites() {
       setLoading(true);
       try {

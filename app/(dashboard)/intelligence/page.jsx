@@ -329,7 +329,9 @@ export default function IntelligencePage() {
   const [showExplain, setShowExplain] = useState(false);
   const { selectedTenantId } = useTenantSwitcher();
 
+  // AFTER
   useEffect(() => {
+    if (!selectedTenantId) return;  // ← ADD THIS LINE
     async function fetchBCS() {
       setLoading(true);
       try {

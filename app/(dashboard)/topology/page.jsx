@@ -460,7 +460,7 @@ export default function TopologyPage() {
   const [cableFilter, setCableFilter] = useState('all');
   const { selectedTenantId } = useTenantSwitcher();
 
-  useEffect(() => { fetch(`/api/sites?tenantId=${selectedTenantId || ''}`).then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, []);
+  useEffect(() => { if (!selectedTenantId) return; fetch(`/api/sites?tenantId=${selectedTenantId}`).then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, [selectedTenantId]);
 
   const fetchTopology = useCallback(async () => {
     setLoading(true); setError(null);

@@ -5,7 +5,7 @@ import { useTenantFetch } from '@/hooks/useTenantFetch';
 import { OverviewSkeleton } from '@/app/components/dashboard/Skeletons';
 import BCSGauge from '@/app/components/dashboard/BCSGauge';
 import DeviceSummaryCards from '@/app/components/dashboard/DeviceSummaryCards';
-import UptimeChart from '@/app/components/dashboard/UptimeChart';
+import AvailabilitySummary from '@/app/components/dashboard/AvailabilitySummary';
 import RecentEvents from '@/app/components/dashboard/RecentEvents';
 import TopologyPreview from '@/app/components/dashboard/TopologyPreview';
 import { AlertTriangle } from 'lucide-react';
@@ -88,13 +88,10 @@ export default function OverviewPage() {
         </motion.div>
       </div>
 
-      {/* ── Row 2: Uptime Trend + Recent Events ── */}
+      {/* ── Row 2: Availability Summary + Recent Events ── */}
       <div className="overview-row-2">
         <motion.div variants={fadeUp}>
-          <UptimeChart
-            data={data?.uptimeTrend}
-            devices={data?.devices}
-          />
+          <AvailabilitySummary />
         </motion.div>
         <motion.div variants={fadeUp}>
           <RecentEvents events={data?.recentEvents} showTenant={isAllTenants} />

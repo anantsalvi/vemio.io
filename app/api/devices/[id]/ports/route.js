@@ -2,28 +2,45 @@
  * VEMIO™ — Device Ports API
  * GET /api/devices/[id]/ports
  *
- * Returns unified port manifest for a single device:
- *  - Physical ports (from device_ports)
- *  - VLAN IPs (from device_interfaces)
- *  - Connected neighbors (from device_neighbors + device_ports.connected_to_interface_id)
- *
- * Used by the Device Stencil / Port Details view.
+ * PHASE 6.1: MSP users can view ports for devices from any managed tenant.
  */
 
 import { withAuth } from '@/lib/auth';
-import { queryWithTenant } from '@/lib/db';
+import { queryWithTenant, queryRaw } from '@/lib/db';
+
+async function resolveDeviceTenant(session, deviceId) {
+  const isMSP = session.user.isMSP === true;
+  const userTenantId = session.user.tenantId;
+
+  if (!isMSP) return { tenantId: userTenantId };
+
+  const result = await queryRaw('SELECT tenant_id FROM devices WHERE id = $1', [deviceId]);
+  if (result.rows.length === 0) return { error: 'Device not found', status: 404 };
+
+  const deviceTenantId = result.rows[0].tenant_id;
+  const accessCheck = await queryWithTenant(userTenantId,
+    `SELECT 1 FROM msp_tenant_access WHERE msp_tenant_id = $1 AND managed_tenant_id = $2`,
+    [userTenantId, deviceTenantId]
+  );
+  if (accessCheck.rows.length === 0) return { error: 'Access denied', status: 403 };
+
+  return { tenantId: deviceTenantId };
+}
 
 export const GET = withAuth(async (req, session, { params }) => {
-  const tenantId = session.user.tenantId;
   const { id: deviceId } = await params;
 
+  const resolved = await resolveDeviceTenant(session, deviceId);
+  if (resolved.error) {
+    return Response.json({ error: resolved.error }, { status: resolved.status });
+  }
+  const tenantId = resolved.tenantId;
+
   try {
-    // 1. Get the device (need auvik_device_id, make, model, device_type)
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
               d.ip_address, d.current_status
-       FROM devices d
-       WHERE d.id = $1`,
+       FROM devices d WHERE d.id = $1`,
       [deviceId]
     );
 
@@ -34,7 +51,6 @@ export const GET = withAuth(async (req, session, { params }) => {
     const device = deviceResult.rows[0];
     const auvikId = device.auvik_device_id;
 
-    // 2. Get physical ports from device_ports
     const portsResult = await queryWithTenant(tenantId,
       `SELECT dp.interface_auvik_id, dp.interface_name, dp.interface_type,
               dp.negotiated_speed, dp.operational_status,
@@ -45,7 +61,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       [auvikId]
     );
 
-    // 3. Get VLAN IPs from device_interfaces
     const interfacesResult = await queryWithTenant(tenantId,
       `SELECT ip_address, interface_name, vlan_id, is_primary
        FROM device_interfaces
@@ -54,7 +69,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       [deviceId]
     );
 
-    // 4. Get neighbors from device_neighbors (this device as source or target)
     const neighborsResult = await queryWithTenant(tenantId,
       `SELECT
          dn.device_id AS source_auvik_id,
@@ -62,31 +76,12 @@ export const GET = withAuth(async (req, session, { params }) => {
          dn.interface_name AS local_interface,
          dn.neighbor_interface AS remote_interface,
          dn.relationship_type,
-         -- Resolve neighbor device details
-         CASE
-           WHEN dn.device_id = $1 THEN nd.name
-           ELSE sd.name
-         END AS neighbor_name,
-         CASE
-           WHEN dn.device_id = $1 THEN nd.device_type
-           ELSE sd.device_type
-         END AS neighbor_type,
-         CASE
-           WHEN dn.device_id = $1 THEN nd.make
-           ELSE sd.make
-         END AS neighbor_make,
-         CASE
-           WHEN dn.device_id = $1 THEN nd.current_status
-           ELSE sd.current_status
-         END AS neighbor_status,
-         CASE
-           WHEN dn.device_id = $1 THEN nd.ip_address
-           ELSE sd.ip_address
-         END AS neighbor_ip,
-         CASE
-           WHEN dn.device_id = $1 THEN nd.id
-           ELSE sd.id
-         END AS neighbor_device_uuid
+         CASE WHEN dn.device_id = $1 THEN nd.name ELSE sd.name END AS neighbor_name,
+         CASE WHEN dn.device_id = $1 THEN nd.device_type ELSE sd.device_type END AS neighbor_type,
+         CASE WHEN dn.device_id = $1 THEN nd.make ELSE sd.make END AS neighbor_make,
+         CASE WHEN dn.device_id = $1 THEN nd.current_status ELSE sd.current_status END AS neighbor_status,
+         CASE WHEN dn.device_id = $1 THEN nd.ip_address ELSE sd.ip_address END AS neighbor_ip,
+         CASE WHEN dn.device_id = $1 THEN nd.id ELSE sd.id END AS neighbor_device_uuid
        FROM device_neighbors dn
        LEFT JOIN devices sd ON sd.auvik_device_id = dn.device_id AND sd.auvik_device_id != $1
        LEFT JOIN devices nd ON nd.auvik_device_id = dn.neighbor_device_id AND dn.device_id = $1
@@ -94,16 +89,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       [auvikId]
     );
 
-    // 5. Build connected_to map: interface_auvik_id → remote interface info
-    // Also build a reverse map from remote interface_id to local port
-    const remoteInterfaceToDevice = new Map();
-    for (const port of portsResult.rows) {
-      if (port.connected_to_interface_id) {
-        remoteInterfaceToDevice.set(port.interface_auvik_id, port.connected_to_interface_id);
-      }
-    }
-
-    // 6. Map VLAN IPs by interface name for correlation
     const vlanByInterface = new Map();
     for (const iface of interfacesResult.rows) {
       const key = (iface.interface_name || '').toLowerCase();
@@ -115,7 +100,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       });
     }
 
-    // 7. Map neighbors by local interface name
     const neighborsByInterface = new Map();
     for (const n of neighborsResult.rows) {
       const isSource = n.source_auvik_id === auvikId;
@@ -137,7 +121,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       }
     }
 
-    // 8. Build unified port manifest
     const ports = portsResult.rows.map(port => {
       const ifaceLower = (port.interface_name || '').toLowerCase();
       const vlans = vlanByInterface.get(ifaceLower) || [];
@@ -157,7 +140,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       };
     });
 
-    // 9. Summary stats
     const summary = {
       totalPorts: ports.length,
       up: ports.filter(p => p.status === 'online').length,
@@ -171,21 +153,15 @@ export const GET = withAuth(async (req, session, { params }) => {
 
     return Response.json({
       device: {
-        id: device.id,
-        auvikDeviceId: device.auvik_device_id,
-        name: device.name,
-        type: device.device_type,
-        make: device.make,
-        model: device.model,
-        ipAddress: device.ip_address,
-        status: device.current_status,
+        id: device.id, auvikDeviceId: device.auvik_device_id,
+        name: device.name, type: device.device_type,
+        make: device.make, model: device.model,
+        ipAddress: device.ip_address, status: device.current_status,
       },
       ports,
       interfaces: interfacesResult.rows.map(r => ({
-        ipAddress: r.ip_address,
-        interfaceName: r.interface_name,
-        vlanId: r.vlan_id,
-        isPrimary: r.is_primary,
+        ipAddress: r.ip_address, interfaceName: r.interface_name,
+        vlanId: r.vlan_id, isPrimary: r.is_primary,
       })),
       summary,
     });

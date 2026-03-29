@@ -5,21 +5,66 @@
  * Returns status history and all IP interfaces for a single device.
  * Query params: days (7, 30, 90)
  * 
- * Chart data includes synthetic boundary points at period start and now,
- * so devices with stable status render a line instead of a single dot.
+ * PHASE 6.1: MSP users can view devices from any managed tenant.
+ * Looks up the device's tenant_id first, validates MSP access, then queries.
  */
 
 import { withAuth } from '@/lib/auth';
-import { queryWithTenant } from '@/lib/db';
+import { queryWithTenant, queryRaw } from '@/lib/db';
+
+/**
+ * Resolve which tenant owns a device.
+ * For MSP users, validates access via msp_tenant_access.
+ * For client users, just returns their own tenant ID.
+ */
+async function resolveDeviceTenant(session, deviceId) {
+  const isMSP = session.user.isMSP === true;
+  const userTenantId = session.user.tenantId;
+
+  if (!isMSP) {
+    return { tenantId: userTenantId };
+  }
+
+  // MSP user — find which tenant owns this device
+  const result = await queryRaw(
+    'SELECT tenant_id FROM devices WHERE id = $1',
+    [deviceId]
+  );
+
+  if (result.rows.length === 0) {
+    return { error: 'Device not found', status: 404 };
+  }
+
+  const deviceTenantId = result.rows[0].tenant_id;
+
+  // Validate MSP has access to this tenant
+  const accessCheck = await queryWithTenant(userTenantId,
+    `SELECT 1 FROM msp_tenant_access
+     WHERE msp_tenant_id = $1 AND managed_tenant_id = $2`,
+    [userTenantId, deviceTenantId]
+  );
+
+  if (accessCheck.rows.length === 0) {
+    return { error: 'Access denied', status: 403 };
+  }
+
+  return { tenantId: deviceTenantId };
+}
 
 export const GET = withAuth(async (req, session, { params }) => {
-  const tenantId = session.user.tenantId;
   const { id: deviceId } = await params;
   const url = new URL(req.url);
   const days = Math.min(90, Math.max(1, parseInt(url.searchParams.get('days') || '30')));
 
+  // Phase 6.1: Resolve device's tenant (MSP can view any managed device)
+  const resolved = await resolveDeviceTenant(session, deviceId);
+  if (resolved.error) {
+    return Response.json({ error: resolved.error }, { status: resolved.status });
+  }
+  const tenantId = resolved.tenantId;
+
   try {
-    // Get device info — including enrichment fields
+    // Get device info
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.name, d.device_type, d.current_status, d.make, d.model,
               d.ip_address, d.last_seen_at, d.auvik_device_id,
@@ -61,8 +106,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       [deviceId]
     );
 
-    // Get the LAST status change BEFORE the period — tells us what state
-    // the device was in when the period started
+    // Get the LAST status change BEFORE the period
     const priorStatusResult = await queryWithTenant(tenantId,
       `SELECT status, changed_at
        FROM device_status_history
@@ -77,11 +121,10 @@ export const GET = withAuth(async (req, session, { params }) => {
     const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const now = new Date();
 
-    // Determine status at period start
     const priorStatus = priorStatusResult.rows[0]?.status
       || (history.length > 0 ? history[0].status : device.current_status);
 
-    // ── Calculate uptime percentage ──
+    // Calculate uptime percentage
     let uptimePercent = null;
     {
       let uptimeMs = 0;
@@ -97,7 +140,6 @@ export const GET = withAuth(async (req, session, { params }) => {
         lastTime = entryTime;
       }
 
-      // Account for time from last entry to now
       if (lastStatus === 'up') {
         uptimeMs += now.getTime() - lastTime.getTime();
       }
@@ -106,19 +148,15 @@ export const GET = withAuth(async (req, session, { params }) => {
       uptimePercent = totalMs > 0 ? (uptimeMs / totalMs * 100) : null;
     }
 
-    // ── Build chart-ready history with synthetic boundary points ──
-    // This ensures the chart always has at least 2 points (start + end),
-    // drawing a line instead of a single dot for stable devices.
+    // Build chart-ready history with synthetic boundary points
     const chartHistory = [];
 
-    // Synthetic start point — status at the beginning of the period
     chartHistory.push({
       status: priorStatus,
       changedAt: periodStart.toISOString(),
       source: 'synthetic',
     });
 
-    // Real history entries
     for (const h of history) {
       chartHistory.push({
         status: h.status,
@@ -127,14 +165,13 @@ export const GET = withAuth(async (req, session, { params }) => {
       });
     }
 
-    // Synthetic end point — current status at now
     chartHistory.push({
       status: device.current_status,
       changedAt: now.toISOString(),
       source: 'synthetic',
     });
 
-    // ── Build daily uptime breakdown ──
+    // Build daily uptime breakdown
     const dailyUptime = [];
     for (let d = days - 1; d >= 0; d--) {
       const dayStart = new Date();

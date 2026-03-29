@@ -43,13 +43,15 @@ function buildReportHeader(data, branding) {
   const primaryColor = b.primary_color || '#F59E0B';
   const companyName = b.company_name || tenant?.name || 'VEMIO';
   const tagline = b.tagline || 'Network Intelligence';
-  const logoUrl = b.logo_url || null;
+
+  // Use branding logo if set, otherwise fall back to the default VEMIO logo
+  const logoUrl = b.logo_url || `${typeof window !== 'undefined' ? window.location.origin : ''}/vemio-logo.svg`;
 
   const monthLabel = new Date(report_month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
   const generatedLabel = new Date(generated_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
   const logoHtml = logoUrl
-    ? `<img src="${logoUrl}" alt="${companyName}" style="height:32px;width:auto;margin-right:12px;border-radius:4px;" />`
+    ? `<img src="${logoUrl}" alt="${companyName}" style="height:36px;width:auto;margin-right:12px;" crossorigin="anonymous" />`
     : '';
 
   return `
@@ -410,7 +412,8 @@ export default function ReportsPage() {
     const printWindow = window.open('', '_blank');
     printWindow.document.write(`<!DOCTYPE html><html><head><title>${filename}</title><style>@page{size:A4;margin:20mm}body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#1E293B;margin:0;padding:0}table{page-break-inside:auto}tr{page-break-inside:avoid}</style></head><body>${content}</body></html>`);
     printWindow.document.close();
-    setTimeout(() => { printWindow.print(); setDownloading(false); }, 500);
+    // 800ms gives the browser time to load the SVG logo before print dialog
+    setTimeout(() => { printWindow.print(); setDownloading(false); }, 800);
   }
 
   return (

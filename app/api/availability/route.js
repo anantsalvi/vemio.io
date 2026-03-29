@@ -24,17 +24,17 @@ export const GET = withAuth(async (req, session) => {
     }
 
     // ── 1. Per-device availability (uptime %) ──
-    // RLS on device_status_history scopes to the current tenant automatically.
-    // queryForTenant handles single vs all-tenants iteration.
-    // $1 = days
+    // Uses LEFT JOIN to sites for site_name (devices may have site_id FK).
+    // RLS scopes to tenant via queryWithTenant.
+    // $1 = days (integer)
     const deviceAvailSQL = `
       WITH history AS (
         SELECT
           dsh.device_id,
           d.name AS device_name,
           d.device_type,
-          d.site_name,
-          d.is_critical,
+          COALESCE(s.name, 'Unknown') AS site_name,
+          COALESCE(d.is_critical, false) AS is_critical,
           dsh.status,
           dsh.changed_at,
           LEAD(dsh.changed_at) OVER (
@@ -42,7 +42,8 @@ export const GET = withAuth(async (req, session) => {
           ) AS next_change
         FROM device_status_history dsh
         JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
-        WHERE dsh.changed_at >= NOW() - INTERVAL '1 day' * $1
+        LEFT JOIN sites s ON s.id = d.site_id AND s.tenant_id = d.tenant_id
+        WHERE dsh.changed_at >= NOW() - make_interval(days => $1::int)
           AND d.is_monitored = true
       ),
       durations AS (
@@ -94,7 +95,7 @@ export const GET = withAuth(async (req, session) => {
     const deviceRows = deviceResult.rows || deviceResult;
 
     // ── 2. Outage intervals for Gantt chart (down + degraded periods) ──
-    // $1 = days
+    // $1 = days (integer)
     const outageSQL = `
       WITH history AS (
         SELECT
@@ -107,7 +108,7 @@ export const GET = withAuth(async (req, session) => {
           ) AS next_change
         FROM device_status_history dsh
         JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
-        WHERE dsh.changed_at >= NOW() - INTERVAL '1 day' * $1
+        WHERE dsh.changed_at >= NOW() - make_interval(days => $1::int)
           AND d.is_monitored = true
           AND dsh.status IN ('down', 'degraded')
       )

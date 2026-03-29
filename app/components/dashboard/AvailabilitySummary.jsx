@@ -92,6 +92,12 @@ export default function AvailabilitySummary() {
         </div>
       )}
 
+      {worst.length === 0 && (
+        <div className="avs-all-good">
+          All devices at 100% uptime
+        </div>
+      )}
+
       <style>{`
         .avs-card {
           background: var(--vemio-surface);
@@ -100,8 +106,12 @@ export default function AvailabilitySummary() {
           padding: 20px;
           display: flex;
           flex-direction: column;
+          height: 100%;
+          box-sizing: border-box;
         }
-        .avs-skeleton { min-height: 200px; }
+        .avs-skeleton {
+          min-height: 200px;
+        }
         .avs-skel-bar {
           border-radius: 4px;
           background: var(--vemio-surface-raised);
@@ -172,7 +182,12 @@ export default function AvailabilitySummary() {
           color: var(--vemio-text);
         }
 
-        .avs-worst { display: flex; flex-direction: column; gap: 5px; }
+        .avs-worst {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          flex: 1;
+        }
         .avs-worst-title {
           font-size: 10px;
           font-weight: 600;
@@ -210,6 +225,17 @@ export default function AvailabilitySummary() {
           font-weight: 700;
           text-align: right;
           font-variant-numeric: tabular-nums;
+        }
+
+        .avs-all-good {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          color: var(--color-status-up, #10B981);
+          font-weight: 600;
+          opacity: 0.8;
         }
 
         @media (max-width: 767px) {

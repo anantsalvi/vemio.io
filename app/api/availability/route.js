@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/auth';
-import { resolveTargetTenant, queryForTenant, queryAggregateForTenant } from '@/lib/tenant';
+import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
 export async function GET(req) {
   return withAuth(req, async (session) => {
@@ -20,10 +20,14 @@ export async function GET(req) {
       const days = Math.min(Math.max(parseInt(searchParams.get('days') || '7', 10), 1), 90);
       const target = await resolveTargetTenant(session, req);
 
+      if (target.error) {
+        return NextResponse.json({ error: target.error }, { status: 403 });
+      }
+
       // ── 1. Per-device availability (uptime %) ──
-      // Uses device_status_history to calculate time spent in each status.
-      // The query pairs each status change with the next one (via LEAD),
-      // then sums durations by status to compute uptime percentage.
+      // RLS on device_status_history scopes to the current tenant automatically.
+      // queryForTenant handles single vs all-tenants iteration.
+      // $1 = days
       const deviceAvailSQL = `
         WITH history AS (
           SELECT
@@ -39,8 +43,7 @@ export async function GET(req) {
             ) AS next_change
           FROM device_status_history dsh
           JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
-          WHERE dsh.tenant_id = $1
-            AND dsh.changed_at >= NOW() - INTERVAL '1 day' * $2
+          WHERE dsh.changed_at >= NOW() - INTERVAL '1 day' * $1
             AND d.is_monitored = true
         ),
         durations AS (
@@ -88,10 +91,11 @@ export async function GET(req) {
         ORDER BY uptime_pct ASC, down_secs DESC
       `;
 
-      const deviceRows = await queryForTenant(target, deviceAvailSQL, ['{TENANT_ID}', days]);
+      const deviceResult = await queryForTenant(target, deviceAvailSQL, [days]);
+      const deviceRows = deviceResult.rows || deviceResult;
 
       // ── 2. Outage intervals for Gantt chart (down + degraded periods) ──
-      // Gets the worst 20 devices by downtime and their outage windows
+      // $1 = days
       const outageSQL = `
         WITH history AS (
           SELECT
@@ -104,8 +108,7 @@ export async function GET(req) {
             ) AS next_change
           FROM device_status_history dsh
           JOIN devices d ON d.id = dsh.device_id AND d.tenant_id = dsh.tenant_id
-          WHERE dsh.tenant_id = $1
-            AND dsh.changed_at >= NOW() - INTERVAL '1 day' * $2
+          WHERE dsh.changed_at >= NOW() - INTERVAL '1 day' * $1
             AND d.is_monitored = true
             AND dsh.status IN ('down', 'degraded')
         )
@@ -120,7 +123,8 @@ export async function GET(req) {
         LIMIT 500
       `;
 
-      const outageRows = await queryForTenant(target, outageSQL, ['{TENANT_ID}', days]);
+      const outageResult = await queryForTenant(target, outageSQL, [days]);
+      const outageRows = outageResult.rows || outageResult;
 
       // ── 3. Compute fleet-level stats ──
       const totalDevices = deviceRows.length;
@@ -136,7 +140,7 @@ export async function GET(req) {
 
       const worstDevice = deviceRows.length > 0 ? deviceRows[0] : null;
 
-      // Count devices below 99% uptime
+      // Count devices below thresholds
       const devicesBelow99 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 99).length;
       const devicesBelow95 = deviceRows.filter(d => parseFloat(d.uptime_pct) < 95).length;
 

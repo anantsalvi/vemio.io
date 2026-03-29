@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { Info } from 'lucide-react';
 import {
   AreaChart,
@@ -33,6 +34,7 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 export default function UptimeChart({ data, devices }) {
+  const router = useRouter();
   const [showInfo, setShowInfo] = useState(false);
   const chartData = data || [];
 
@@ -59,11 +61,17 @@ export default function UptimeChart({ data, devices }) {
     : '#14b8a6';
 
   return (
-    <div className="uc-card">
+    <div
+      className="uc-card"
+      onClick={() => router.push('/availability')}
+      role="link"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push('/availability'); } }}
+    >
       <div className="uc-header">
         <div className="uc-header-left">
           <h3 className="uc-title">Uptime Trend</h3>
-          <button className="uc-info-btn" onClick={() => setShowInfo(p => !p)} title="What is this?">
+          <button className="uc-info-btn" onClick={(e) => { e.stopPropagation(); setShowInfo(p => !p); }} title="What is this?">
             <Info size={10} />
           </button>
           <p className="uc-sub">Last 7 days · all sites</p>
@@ -79,45 +87,44 @@ export default function UptimeChart({ data, devices }) {
       </div>
 
       {showInfo && (
-        <div className="uc-info-box">
-          Daily uptime percentage over the last 7 days, calculated from device status change events. Each data point represents the ratio of "up" events to total status events for that day across all monitored devices.
+        <div className="uc-info-box" onClick={(e) => e.stopPropagation()}>
+          Daily uptime percentage over the last 7 days, calculated from device status change events. Each data point represents the ratio of "up" events to total status events for that day. Click to see full availability breakdown.
         </div>
       )}
 
       {chartData.length > 0 ? (
-  <div style={{ flex: 1, minHeight: 0 }}>
-  <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: -15 }}>
-            <defs>
-              <linearGradient id="uptimeGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={uptimeColor} stopOpacity={0.2} />
-                <stop offset="100%" stopColor={uptimeColor} stopOpacity={0} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-vemio-border)" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 11, fill: 'var(--color-vemio-text-dim)' }}
-              axisLine={false} tickLine={false}
-              tickFormatter={(v) => new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-            />
-            <YAxis
-              domain={yDomain}
-              tick={{ fontSize: 11, fill: 'var(--color-vemio-text-dim)' }}
-              axisLine={false} tickLine={false}
-              tickFormatter={(v) => `${v}%`}
-            />
-            <Tooltip content={<CustomTooltip />} />
-            <Area
-              type="monotone" dataKey="uptime" name="Uptime"
-              stroke={uptimeColor} strokeWidth={2} fill="url(#uptimeGrad)"
-              dot={{ r: 3, fill: uptimeColor, strokeWidth: 0 }}
-              activeDot={{ r: 5, fill: uptimeColor, stroke: 'var(--color-vemio-bg)', strokeWidth: 2 }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-  </div>
-        
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
+              <defs>
+                <linearGradient id="uptimeGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={uptimeColor} stopOpacity={0.2} />
+                  <stop offset="100%" stopColor={uptimeColor} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-vemio-border)" vertical={false} />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 11, fill: 'var(--color-vemio-text-dim)' }}
+                axisLine={false} tickLine={false}
+                tickFormatter={(v) => new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+              />
+              <YAxis
+                domain={yDomain}
+                tick={{ fontSize: 11, fill: 'var(--color-vemio-text-dim)' }}
+                axisLine={false} tickLine={false}
+                tickFormatter={(v) => `${v}%`}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Area
+                type="monotone" dataKey="uptime" name="Uptime"
+                stroke={uptimeColor} strokeWidth={2} fill="url(#uptimeGrad)"
+                dot={{ r: 3, fill: uptimeColor, strokeWidth: 0 }}
+                activeDot={{ r: 5, fill: uptimeColor, stroke: 'var(--color-vemio-bg)', strokeWidth: 2 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       ) : (
         <div className="uc-empty">No uptime data yet — status history builds over time</div>
       )}
@@ -131,6 +138,11 @@ export default function UptimeChart({ data, devices }) {
           height: 340px;
           display: flex;
           flex-direction: column;
+          cursor: pointer;
+          transition: border-color 0.15s;
+        }
+        .uc-card:hover {
+          border-color: var(--color-vemio-text-dim);
         }
         .uc-header {
           display: flex;

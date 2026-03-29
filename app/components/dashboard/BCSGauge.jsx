@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 import { Info } from 'lucide-react';
 
 function getScoreColor(score) {
@@ -21,26 +22,31 @@ function getScoreLabel(score) {
 }
 
 export default function BCSGauge({ bcs }) {
+  const router = useRouter();
   const [showInfo, setShowInfo] = useState(false);
   const score = bcs?.overall ?? 0;
   const color = getScoreColor(score);
   const label = getScoreLabel(score);
 
-  // SVG arc calculations
   const radius = 80;
   const circumference = 2 * Math.PI * radius;
-  const arcLength = circumference * 0.75; // 270° arc
+  const arcLength = circumference * 0.75;
   const offset = arcLength - (arcLength * score) / 100;
 
   return (
     <div
-      className="rounded-2xl p-6 h-full flex flex-col items-center justify-center relative overflow-hidden"
+      className="rounded-2xl p-6 h-full flex flex-col items-center justify-center relative overflow-hidden cursor-pointer transition-[border-color] duration-150"
       style={{
         background: 'var(--color-vemio-surface)',
         border: '1px solid var(--color-vemio-border)',
       }}
+      onClick={() => router.push('/intelligence')}
+      onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--color-vemio-text-dim)'}
+      onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--color-vemio-border)'}
+      role="link"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push('/intelligence'); } }}
     >
-      {/* Subtle glow behind gauge */}
       <div
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 rounded-full opacity-20 blur-3xl"
         style={{ background: color }}
@@ -51,7 +57,7 @@ export default function BCSGauge({ bcs }) {
           Business Continuity Score
         </p>
         <button
-          onClick={() => setShowInfo(p => !p)}
+          onClick={(e) => { e.stopPropagation(); setShowInfo(p => !p); }}
           className="flex items-center justify-center w-4 h-4 rounded-full border border-[var(--color-vemio-border)] bg-transparent text-[var(--color-vemio-text-dim)] cursor-pointer p-0 hover:text-[var(--color-vemio-text-muted)] hover:border-[var(--color-vemio-text-muted)] transition-colors"
           title="What is BCS?"
         >
@@ -60,12 +66,14 @@ export default function BCSGauge({ bcs }) {
       </div>
 
       {showInfo && (
-        <div className="relative z-20 text-[11px] leading-relaxed text-[var(--color-vemio-text-muted)] bg-[var(--color-vemio-surface-raised)] border border-[var(--color-vemio-border)] rounded-lg px-3 py-2.5 mb-3 max-w-[260px] text-center">
-          BCS measures your infrastructure resilience across device visibility, redundancy, firmware health, alerting maturity, and response discipline. Scored daily from 0-100.
+        <div
+          className="relative z-20 text-[11px] leading-relaxed text-[var(--color-vemio-text-muted)] bg-[var(--color-vemio-surface-raised)] border border-[var(--color-vemio-border)] rounded-lg px-3 py-2.5 mb-3 max-w-[260px] text-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          BCS measures your infrastructure resilience across device visibility, redundancy, firmware health, alerting maturity, and response discipline. Scored daily from 0-100. Click to see full breakdown.
         </div>
       )}
 
-      {/* Gauge SVG */}
       <div className="relative w-48 h-48 z-10">
         <svg viewBox="0 0 200 200" className="w-full h-full -rotate-[135deg]">
           <circle

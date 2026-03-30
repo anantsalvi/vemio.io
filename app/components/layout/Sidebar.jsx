@@ -28,6 +28,8 @@ import {
   User,
   Webhook,
   Signal,
+  KeyRound,
+  ScrollText,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -62,6 +64,8 @@ const NAV_STRUCTURE = [
       { href: "/settings/account",       label: "Account",       icon: User },
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/settings/branding",      label: "Branding",      icon: Palette, adminOnly: true },
+      { href: "/settings/sso",           label: "Single Sign-On", icon: KeyRound, adminOnly: true },
+      { href: "/settings/audit-log",     label: "Audit Log",     icon: ScrollText, adminOnly: true },
       { href: '/settings/webhooks',      label: 'Webhook Log',   icon: Webhook, adminOnly: true },
     ],
   },
@@ -73,6 +77,8 @@ export default function Sidebar({ isRail = false, onNavigate }) {
   const session = sessionData?.data;
   const branding = useBranding();
   const [showSignout, setShowSignout] = useState(false);
+
+  const userRole = session?.user?.role;
 
   // Track which groups are expanded
   const [expanded, setExpanded] = useState(() => {
@@ -112,6 +118,12 @@ export default function Sidebar({ isRail = false, onNavigate }) {
     });
   }
 
+  // Filter out adminOnly items for non-admin users
+  function filterChildren(children) {
+    if (userRole === 'admin') return children;
+    return children.filter(c => !c.adminOnly);
+  }
+
   const hasLogo = branding.loaded && branding.logo_url;
   const companyName = branding.loaded
     ? branding.company_name || "VEMIO"
@@ -149,13 +161,16 @@ export default function Sidebar({ isRail = false, onNavigate }) {
         {NAV_STRUCTURE.map((item) => {
           // ── Collapsible group ──
           if (item.group) {
+            const visibleChildren = filterChildren(item.children);
+            if (visibleChildren.length === 0) return null;
+
             const isOpen = expanded.has(item.group);
             const GroupIcon = item.icon;
-            const hasActiveChild = item.children.some(c => isActive(c.href));
+            const hasActiveChild = visibleChildren.some(c => isActive(c.href));
 
             // Rail mode: show children as flat items
             if (isRail) {
-              return item.children.map(({ href, label, icon: Icon }) => (
+              return visibleChildren.map(({ href, label, icon: Icon }) => (
                 <li key={href}>
                   <Link
                     href={href}
@@ -184,7 +199,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
                   />
                 </button>
                 <ul className={`nav-group-children ${isOpen ? "nav-group-children--open" : ""}`}>
-                  {item.children.map(({ href, label, icon: Icon }) => (
+                  {visibleChildren.map(({ href, label, icon: Icon }) => (
                     <li key={href}>
                       <Link
                         href={href}
@@ -485,7 +500,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
         }
 
         .nav-group-children--open {
-          max-height: 200px;
+          max-height: 300px;
         }
 
         /* ── Footer ── */

@@ -39,21 +39,21 @@ export const metadata = {
     description:
       'Real-time infrastructure monitoring, Business Continuity Scoring, and automated alerting for enterprise networks. Powered by Vinay Enterprises.',
     images: [
-      {
-        url: `${SITE_URL}/api/og`,
-        width: 1200,
-        height: 630,
-        alt: 'VEMIO™ | Managed Network Intelligence Platform',
-        type: 'image/png',
-      },
-    ],
+  {
+    url: `${SITE_URL}/og-image.png`,
+    width: 1200,
+    height: 630,
+    alt: 'VEMIO™ | Managed Network Intelligence Platform',
+    type: 'image/png',
+  },
+],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'VEMIO™ | Managed Network Intelligence Platform',
     description:
       'Real-time infrastructure monitoring and Business Continuity Scoring for enterprise networks.',
-    images: [`${SITE_URL}/api/og`],
+    images: [`${SITE_URL}/og-image.png`],
   },
   robots: {
     index: false,

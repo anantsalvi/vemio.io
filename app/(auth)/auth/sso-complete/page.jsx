@@ -10,26 +10,34 @@
 
 'use client';
 
-import { useEffect } from 'react';
-import { useSession } from 'next-auth/react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
 export default function SSOCompletePage() {
-  const { data: session, status } = useSession();
   const router = useRouter();
+  const [attempts, setAttempts] = useState(0);
 
   useEffect(() => {
-    if (status === 'authenticated') {
-      router.replace('/overview');
-    } else if (status === 'unauthenticated') {
-      // Session cookie didn't work -- retry once then give up
-      const timer = setTimeout(() => {
+    // Poll the session endpoint until it returns authenticated
+    const check = async () => {
+      try {
+        const res = await fetch('/api/auth/session');
+        const data = await res.json();
+        if (data?.user?.tenantId) {
+          router.replace('/overview');
+          return;
+        }
+      } catch {}
+
+      if (attempts < 10) {
+        setTimeout(() => setAttempts(a => a + 1), 500);
+      } else {
         router.replace('/login?error=sso_session_failed');
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [status, router]);
+      }
+    };
+    check();
+  }, [attempts, router]);
 
   return (
     <div style={{

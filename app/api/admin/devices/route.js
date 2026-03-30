@@ -6,7 +6,7 @@
  */
 
 import { withMSPAuth } from '@/lib/admin-auth';
-import { queryRaw } from '@/lib/db';
+import { queryAsAdmin as queryRaw } from '@/lib/admin-db';
 
 // Network device types (matches dashboard toggle)
 const NETWORK_TYPES = ['firewall', 'core_switch', 'access_switch', 'access_point', 'router', 'p2p_link'];

@@ -6,7 +6,7 @@
  */
 
 import { withMSPAuth } from '@/lib/admin-auth';
-import { queryRaw } from '@/lib/db';
+import { queryAsAdmin as queryRaw } from '@/lib/admin-db';
 
 export const PATCH = withMSPAuth(async (req, session, { params }) => {
   const { id } = await params;

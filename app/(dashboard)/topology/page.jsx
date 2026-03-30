@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 import { Network, X, RefreshCw, Search, Minus, Plus, Maximize2, Crosshair, ChevronRight } from 'lucide-react';
 import * as d3 from 'd3';
 import { useDeviceCategory } from '@/contexts/DeviceCategoryContext';
@@ -18,7 +19,7 @@ import { useTenantSwitcher } from '@/contexts/TenantSwitcherContext';
 const TYPE_COLORS = {
   firewall:'#EF4444', router:'#F97316', core_switch:'#3B82F6', access_switch:'#10B981',
   access_point:'#A855F7', server:'#6366F1', p2p_link:'#06B6D4', nas:'#8B5CF6',
-  ups:'#F87171', printer:'#84CC16', cctv:'#14B8A6', access_control:'#C084FC', other:'#9CA3AF',
+  ups:'#F87171', printer:'#84CC16', cctv:'#14B8A6', access_control:'#C084FC', other:'#9CA3AF',internet:'#22c55e',
 };
 const VENDOR_COLORS = {
   'firewall:Fortinet':'#DC2626','firewall:Sophos':'#EA580C',
@@ -46,9 +47,11 @@ const EDGE_STYLES = {
   fiber:   { color:'#F97316', width:2,   dash:'none', opacity:0.7 },
   copper:  { color:'rgba(148,163,184,0.30)', width:0.8, dash:'none', opacity:1 },
   tunnel:  { color:'#06B6D4', width:2,   dash:'8,4',  opacity:0.7 },
+  wan:     { color:'#22c55e', width:2.5, dash:'none', opacity:0.8 },
   unknown: { color:'rgba(148,163,184,0.12)', width:0.8, dash:'none', opacity:1 },
 };
 function getEdgeStyle(edge) {
+  if (edge.isWanLink) return EDGE_STYLES.wan;
   if (edge.isTunnel) return EDGE_STYLES.tunnel;
   if (edge.mediaType === 'fiber') return EDGE_STYLES.fiber;
   if (edge.mediaType === 'copper') return EDGE_STYLES.copper;
@@ -65,13 +68,13 @@ function classifyEdgeMedia(edge, nodeMap) {
   if (edge.mediaType === 'copper') return 'copper';
   return 'unknown';
 }
-
+const INTERNET_NODE_ID = '__internet__';
 /* ═══════════ TIER CONSTANTS ═══════════ */
 const TIER_ORDER = {
-  firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
+  internet:-1, firewall:0, router:0, core_switch:1, p2p_link:1, access_switch:2,
   access_point:3, server:3, nas:3, ups:4, printer:4, cctv:4, access_control:4, other:4,
 };
-const TIER_LABELS = ['Firewalls & Routers','Core / Distribution','Secondary Core','Access Switches','Daisy-Chained Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
+const TIER_LABELS = ['Internet','Firewalls & Routers','Core / Distribution','Secondary Core','Access Switches','Daisy-Chained Switches','APs \u00b7 Servers \u00b7 Endpoints','Peripherals'];
 
 const TYPE_NAMES = {
   firewall:'Firewall', core_switch:'Core Switch', access_switch:'Access Switch',
@@ -82,7 +85,7 @@ const TYPE_NAMES = {
 
 const TYPE_ABBR = {
   firewall:'FW', core_switch:'CS', access_switch:'AS', access_point:'AP', router:'RT',
-  server:'SV', nas:'NA', ups:'UP', cctv:'CC', printer:'PR', access_control:'AC', p2p_link:'P2', other:'\u00b7\u00b7',
+  server:'SV', nas:'NA', ups:'UP', cctv:'CC', printer:'PR', access_control:'AC', p2p_link:'P2', internet:'WAN', other:'\u00b7\u00b7',
 };
 const fadeUp = { hidden:{opacity:0,y:16}, visible:{opacity:1,y:0,transition:{duration:0.4,ease:[0.22,1,0.36,1]}} };
 
@@ -91,6 +94,7 @@ const CABLE_FILTER_OPTIONS = [
   { value:'fiber',   label:'Fiber' },
   { value:'copper',  label:'Copper' },
   { value:'tunnel',  label:'Tunnel' },
+  { value:'wan',     label:'WAN' },
 ];
 
 /* ═══════════ HIERARCHY BUILDER (BFS with same-tier chaining) ═══════════ */
@@ -108,13 +112,21 @@ function buildHierarchy(nodes, edges, expandedClusters) {
     }
   }
 
-  const tiers = [[], [], [], [], []];
-  for (const n of nm.values()) tiers[Math.min(n.tier, 4)].push(n);
+const tiers = [[], [], [], [], []];
+  const internetNodes = [];
+  for (const n of nm.values()) {
+    if (n.tier < 0) { internetNodes.push(n); continue; }
+    tiers[Math.min(n.tier, 4)].push(n);
+  }
 
   const parented = new Set();   // has a parent (is someone's child)
   const attached = new Set();   // is in the tree (root or parented)
   const roots = [];
-
+// ── Phase 0: Internet nodes are roots ──
+  for (const n of internetNodes) {
+    attached.add(n.id);
+    roots.push(n);
+  }
   // ── Phase 1: Tier 0 nodes are always roots ──
   for (const n of tiers[0]) {
     attached.add(n.id);
@@ -379,9 +391,9 @@ function orderRootsByAffinity(roots, edges, nodeMap, gwFn) {
 
 /* ═══════════ LAYOUT ENGINE ═══════════ */
 /** Map tier values to Y positions. Supports fractional tier 1.5 for sub-core */
-const TIER_Y = { 0: 80, 1: 180, 1.5: 248, 2: 340, 2.5: 408, 3: 500, 4: 610 };
-const TIER_RADIUS_MAP = { 0: 26, 1: 22, 1.5: 20, 2: 14, 2.5: 12, 3: 10, 4: 8 };
-const TIER_MIN_SPACE = { 0: 100, 1: 90, 1.5: 80, 2: 60, 2.5: 50, 3: 36, 4: 30 };
+const TIER_Y = { '-1': 10, 0: 100, 1: 200, 1.5: 268, 2: 360, 2.5: 428, 3: 520, 4: 630 };
+const TIER_RADIUS_MAP = { '-1': 20, 0: 26, 1: 22, 1.5: 20, 2: 14, 2.5: 12, 3: 10, 4: 8 };
+const TIER_MIN_SPACE = { '-1': 120, 0: 100, 1: 90, 1.5: 80, 2: 60, 2.5: 50, 3: 36, 4: 30 };
 
 function layoutHierarchy(roots, orphans, edges, nodeMap) {
   const pos = new Map();
@@ -459,7 +471,7 @@ export default function TopologyPage() {
   const [expandedClusters, setExpandedClusters] = useState(new Set());
   const [cableFilter, setCableFilter] = useState('all');
   const { selectedTenantId } = useTenantSwitcher();
-
+  const router = useRouter();
   useEffect(() => { if (!selectedTenantId) return; fetch(`/api/sites?tenantId=${selectedTenantId}`).then(r => r.ok ? r.json() : Promise.reject()).then(d => setSites(d.sites || d || [])).catch(() => {}); }, [selectedTenantId]);
 
   const fetchTopology = useCallback(async () => {
@@ -503,18 +515,49 @@ export default function TopologyPage() {
   // Cable filter: compute visible nodes & edges
   const filteredView = useMemo(() => {
     if (!data?.nodes || !data?.edges) return null;
-    if (cableFilter === 'all') return { nodes: data.nodes, edges: data.edges, isFiltered: false };
+
+    let nodes = data.nodes;
+    let edges = data.edges;
+
+    // Inject Internet cloud node + WAN edges if we have WAN links
+    const wanLinks = data.wanLinks || [];
+    if (wanLinks.length > 0) {
+      const internetNode = {
+        id: INTERNET_NODE_ID,
+        name: 'Internet',
+        type: 'internet',
+        status: 'up',
+        isInternet: true,
+        tier: -1,
+      };
+      nodes = [internetNode, ...nodes];
+
+      const wanEdges = wanLinks.map(wl => ({
+        source: wl.deviceId,
+        target: INTERNET_NODE_ID,
+        sourceInterface: wl.interfaceName,
+        targetInterface: null,
+        mediaType: 'wan',
+        wanIp: wl.wanIp,
+        wanSpeed: wl.speed,
+        isWanLink: true,
+      }));
+      edges = [...edges, ...wanEdges];
+    }
+
+    if (cableFilter === 'all') return { nodes, edges, isFiltered: false };
+
     const matchingEdges = [];
     const visibleNodeIds = new Set();
-    for (const e of data.edges) {
-      const mc = classifyEdgeMedia(e, rawNodeMap);
+    for (const e of edges) {
+      const mc = e.isWanLink ? 'wan' : classifyEdgeMedia(e, rawNodeMap);
       if (mc === cableFilter) {
         matchingEdges.push(e);
         visibleNodeIds.add(e.source);
         visibleNodeIds.add(e.target);
       }
     }
-    const visibleNodes = data.nodes.filter(n => visibleNodeIds.has(n.id));
+    const visibleNodes = nodes.filter(n => visibleNodeIds.has(n.id));
     return { nodes: visibleNodes, edges: matchingEdges, isFiltered: true };
   }, [data, cableFilter, rawNodeMap]);
 
@@ -587,8 +630,11 @@ export default function TopologyPage() {
     for (const e of filteredView.edges) {
       const s = positions.get(e.source), t = positions.get(e.target);
       if (!s || !t) continue;
-      const isTunnel = TUNNEL_TYPES.has(s.type) && TUNNEL_TYPES.has(t.type);
-      eps.push({ source: s, target: t, isTunnel, mediaType: e.mediaType || null, isClusterEdge: false });
+      const isTunnel = !e.isWanLink && TUNNEL_TYPES.has(s.type) && TUNNEL_TYPES.has(t.type);
+      eps.push({
+        source: s, target: t, isTunnel, mediaType: e.mediaType || null, isClusterEdge: false,
+        isWanLink: e.isWanLink || false, wanIp: e.wanIp || null, sourceInterface: e.sourceInterface || null,
+      });
     }
     // Synthetic cluster edges
     for (const p of positions.values()) {
@@ -628,9 +674,24 @@ export default function TopologyPage() {
     const nd = Array.from(positions.values());
     const node = nodeG.selectAll('g').data(nd, d => d.id).join('g')
       .attr('transform', d => `translate(${d.x},${d.y})`).attr('cursor', 'pointer');
+const internetG = node.filter(d => d.isInternet);
+    const clusterG = node.filter(d => d.isCluster && !d.isInternet);
+    const regularG = node.filter(d => !d.isCluster && !d.isInternet);
 
-    const clusterG = node.filter(d => d.isCluster);
-    const regularG = node.filter(d => !d.isCluster);
+    // Internet cloud rendering
+   internetG.each(function(d) {
+      const el = d3.select(this);
+      // Compact cloud shape
+      el.append('ellipse').attr('cx', 0).attr('cy', 0).attr('rx', 32).attr('ry', 18)
+        .attr('fill', '#22c55e12').attr('stroke', '#22c55e').attr('stroke-width', 1.5).attr('stroke-opacity', 0.5);
+      el.append('ellipse').attr('cx', -12).attr('cy', -5).attr('rx', 14).attr('ry', 10)
+        .attr('fill', '#22c55e12').attr('stroke', '#22c55e').attr('stroke-width', 1).attr('stroke-opacity', 0.3);
+      el.append('ellipse').attr('cx', 12).attr('cy', -5).attr('rx', 14).attr('ry', 10)
+        .attr('fill', '#22c55e12').attr('stroke', '#22c55e').attr('stroke-width', 1).attr('stroke-opacity', 0.3);
+      el.append('text').attr('y', 2).attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+        .attr('font-size', 8).attr('font-weight', 700).attr('fill', '#22c55e').attr('pointer-events', 'none')
+        .text('INTERNET');
+    });
 
     // Cluster rendering
     clusterG.append('rect').attr('x', -18).attr('y', -14).attr('width', 36).attr('height', 28)
@@ -675,7 +736,7 @@ export default function TopologyPage() {
       .attr('font-weight', 500).attr('pointer-events', 'none').text(d => d.make);
 
     regularG.on('click', (ev, d) => { ev.stopPropagation(); setSelected(prev => prev?.id === d.id ? null : d); });
-    regularG.on('dblclick', (ev, d) => { ev.stopPropagation(); if (expandedClusters.has(d.id)) toggleCluster(d.id); });
+    regularG.on('dblclick', (ev, d) => { ev.stopPropagation(); if (d.id !== INTERNET_NODE_ID) router.push(`/devices/${d.id}`); });
 
     // Hover
     node.on('mouseenter', (ev, d) => {
@@ -737,8 +798,9 @@ export default function TopologyPage() {
 
   const edgeMediaCounts = useMemo(() => {
     if (!data?.edges) return {};
-    const c = { fiber: 0, copper: 0, tunnel: 0, unknown: 0 };
+    const c = { fiber: 0, copper: 0, tunnel: 0, wan: 0, unknown: 0 };
     for (const e of data.edges) { c[classifyEdgeMedia(e, rawNodeMap)]++; }
+    if (data.wanLinks) c.wan = data.wanLinks.length;
     return c;
   }, [data, rawNodeMap]);
 
@@ -786,28 +848,11 @@ export default function TopologyPage() {
             <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: 'var(--color-vemio-text-muted)' }} /></button>
           </div>
         </motion.div>
-
+<div className="tp-graph-row">
         <motion.div variants={fadeUp} className="tp-graph-panel">
-          {data && data.nodes.length > 0 && (
-            <div className="tp-search-bar">
-              <Search size={14} className="tp-search-icon" />
-              <input type="text" placeholder="Locate device by name, IP, serial, model\u2026" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="tp-search-input"
-                onKeyDown={e => { if (e.key === 'Enter' && searchResults.length > 0) locateDevice(searchResults[0].id); if (e.key === 'Escape') { setSearchQuery(''); setSearchResults([]); setHighlightedId(null); } }} />
-              {searchQuery && <button className="tp-search-clear" onClick={() => { setSearchQuery(''); setSearchResults([]); setHighlightedId(null); }}><X size={12} /></button>}
-              {searchResults.length > 0 && (
-                <div className="tp-search-dropdown">
-                  {searchResults.map(r => (
-                    <button key={r.id} className="tp-search-result" onClick={() => locateDevice(r.id)}>
-                      <span className="tp-sr-dot" style={{ background: getDeviceColor(r.type, r.make) }} />
-                      <span className="tp-sr-name">{r.name}</span>
-                      <span className="tp-sr-meta">{r.ipAddress || `${TYPE_ABBR[r.type]}${r.make ? ' \u00b7 ' + r.make : ''}`}</span>
-                      <Crosshair size={12} className="tp-sr-locate" />
-                    </button>))}
-                </div>)}
-            </div>)}
 
           <div ref={wrapRef} className="tp-graph-wrap">
-            {loading && !data && <div className="tp-loading"><div className="tp-loading-spinner" /><span>Building topology graph\u2026</span></div>}
+            {loading && !data && <div className="tp-loading"><div className="tp-loading-spinner" /><span>Building topology, hold on a sec</span></div>}
             {error && <div className="tp-empty"><Network className="w-10 h-10" style={{ color: 'var(--color-vemio-text-dim)', marginBottom: 8 }} /><p>{error}</p><button onClick={fetchTopology} className="tp-retry-btn">Retry</button></div>}
             {!loading && filteredView && !filteredView.nodes.length && <div className="tp-empty"><Network className="w-10 h-10" style={{ color: 'var(--color-vemio-text-dim)', marginBottom: 8 }} /><p>{cableFilter !== 'all' ? `No ${cableFilter} connections found` : 'No topology data available yet'}</p>{cableFilter !== 'all' && <button onClick={() => setCableFilter('all')} className="tp-retry-btn">Show all links</button>}</div>}
             <svg ref={svgRef} width={viewDims.w} height={viewDims.h} style={{ display: filteredView && filteredView.nodes.length ? 'block' : 'none' }} />
@@ -825,6 +870,7 @@ export default function TopologyPage() {
                 {edgeMediaCounts.fiber > 0 && <span className={`tp-legend-item${cableFilter === 'fiber' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line" style={{ background: EDGE_STYLES.fiber.color }} />Fiber ({edgeMediaCounts.fiber})</span>}
                 {edgeMediaCounts.copper > 0 && <span className={`tp-legend-item${cableFilter === 'copper' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line" style={{ background: 'rgba(148,163,184,0.5)' }} />Copper ({edgeMediaCounts.copper})</span>}
                 {edgeMediaCounts.tunnel > 0 && <span className={`tp-legend-item${cableFilter === 'tunnel' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line tp-legend-line--tunnel" />Tunnel ({edgeMediaCounts.tunnel})</span>}
+                {edgeMediaCounts.wan > 0 && <span className={`tp-legend-item${cableFilter === 'wan' ? ' tp-legend-item--active' : ''}`}><span className="tp-legend-line" style={{ background: '#22c55e' }} />WAN ({edgeMediaCounts.wan})</span>}
                 {edgeMediaCounts.unknown > 0 && <span className="tp-legend-item"><span className="tp-legend-line" style={{ background: 'rgba(148,163,184,0.2)' }} />Unclassified ({edgeMediaCounts.unknown})</span>}
               </div>
               <div className="tp-legend-section">
@@ -839,10 +885,125 @@ export default function TopologyPage() {
               )}
             </div>)}
         </motion.div>
-
+{data && data.nodes.length > 0 && (
+          <motion.div variants={fadeUp} className="tp-legend-panel">
+            <div className="tp-legend-group">
+              <span className="tp-legend-group-title">Devices</span>
+              {legendGroups.map(g => (
+                <button
+                  key={g.label}
+                  className="tp-legend-btn"
+                  onClick={() => {
+                    if (!gRef.current || !layout) return;
+                    const nodeG = d3.select(gRef.current).select('.tp-nodes');
+                    const linkG = d3.select(gRef.current).select('.tp-links');
+                    const matchIds = new Set();
+                    for (const [id, p] of layout.positions) {
+                      const color = getDeviceColor(p.type, p.make);
+                      if (color === g.color) matchIds.add(id);
+                    }
+                    nodeG.selectAll('g').attr('opacity', n => matchIds.has(n.id) ? 1 : 0.08);
+                    linkG.selectAll('path').attr('stroke-opacity', 0.05);
+                    setTimeout(() => {
+                      nodeG.selectAll('g').attr('opacity', 1);
+                      linkG.selectAll('path').each(function(e) {
+                        d3.select(this).attr('stroke-opacity', e.isClusterEdge ? 0.6 : getEdgeStyle(e).opacity);
+                      });
+                    }, 3000);
+                  }}
+                >
+                  
+                  <span className="tp-legend-btn-dot" style={{ background: g.color }} />
+                  <span className="tp-legend-btn-label">{g.label}</span>
+                  <span className="tp-legend-btn-count">{g.count}</span>
+                </button>
+              ))}
+            </div>
+            <div className="tp-legend-group">
+              <span className="tp-legend-group-title">Links</span>
+              {edgeMediaCounts.fiber > 0 && (
+                <button className="tp-legend-btn" onClick={() => setCableFilter(f => f === 'fiber' ? 'all' : 'fiber')}>
+                  <span className="tp-legend-btn-line" style={{ background: EDGE_STYLES.fiber.color }} />
+                  <span className="tp-legend-btn-label">Fiber</span>
+                  <span className="tp-legend-btn-count">{edgeMediaCounts.fiber}</span>
+                </button>
+              )}
+              {edgeMediaCounts.copper > 0 && (
+                <button className="tp-legend-btn" onClick={() => setCableFilter(f => f === 'copper' ? 'all' : 'copper')}>
+                  <span className="tp-legend-btn-line" style={{ background: 'rgba(148,163,184,0.5)' }} />
+                  <span className="tp-legend-btn-label">Copper</span>
+                  <span className="tp-legend-btn-count">{edgeMediaCounts.copper}</span>
+                </button>
+              )}
+              {edgeMediaCounts.tunnel > 0 && (
+                <button className="tp-legend-btn" onClick={() => setCableFilter(f => f === 'tunnel' ? 'all' : 'tunnel')}>
+                  <span className="tp-legend-btn-line tp-legend-btn-line--dashed" style={{ borderColor: '#06B6D4' }} />
+                  <span className="tp-legend-btn-label">Tunnel</span>
+                  <span className="tp-legend-btn-count">{edgeMediaCounts.tunnel}</span>
+                </button>
+              )}
+              {edgeMediaCounts.wan > 0 && (
+                <button className="tp-legend-btn" onClick={() => setCableFilter(f => f === 'wan' ? 'all' : 'wan')}>
+                  <span className="tp-legend-btn-line" style={{ background: '#22c55e' }} />
+                  <span className="tp-legend-btn-label">WAN</span>
+                  <span className="tp-legend-btn-count">{edgeMediaCounts.wan}</span>
+                </button>
+              )}
+              {edgeMediaCounts.unknown > 0 && (
+                <button className="tp-legend-btn" onClick={() => setCableFilter(f => f === 'unknown' ? 'all' : 'unknown')}>
+                  <span className="tp-legend-btn-line" style={{ background: 'rgba(148,163,184,0.2)' }} />
+                  <span className="tp-legend-btn-label">Unclassified</span>
+                  <span className="tp-legend-btn-count">{edgeMediaCounts.unknown}</span>
+                </button>
+              )}
+            </div>
+            <div className="tp-legend-group">
+              <span className="tp-legend-group-title">Status</span>
+              {Object.entries(STATUS_CFG).map(([k, c]) => (
+                <button
+                  key={k}
+                  className="tp-legend-btn"
+                  onClick={() => {
+                    if (!gRef.current || !layout) return;
+                    const nodeG = d3.select(gRef.current).select('.tp-nodes');
+                    const linkG = d3.select(gRef.current).select('.tp-links');
+                    const matchIds = new Set();
+                    for (const [id, p] of layout.positions) {
+                      if (p.status === k) matchIds.add(id);
+                    }
+                    nodeG.selectAll('g').attr('opacity', n => matchIds.has(n.id) ? 1 : 0.08);
+                    linkG.selectAll('path').attr('stroke-opacity', 0.05);
+                    setTimeout(() => {
+                      nodeG.selectAll('g').attr('opacity', 1);
+                      linkG.selectAll('path').each(function(e) {
+                        d3.select(this).attr('stroke-opacity', e.isClusterEdge ? 0.6 : getEdgeStyle(e).opacity);
+                      });
+                    }, 3000);
+                  }}
+                >
+                  <span className="tp-legend-btn-ring" style={{ borderColor: c.color, borderStyle: c.dash === 'none' ? 'solid' : c.dash === '4,3' ? 'dashed' : 'dotted' }} />
+                  <span className="tp-legend-btn-label">{c.label}</span>
+                </button>
+              ))}
+            </div
+            >
+            
+            {clusterSummary && cableFilter === 'all' && (
+              <div className="tp-legend-group">
+                <span className="tp-legend-group-title">Clusters</span>
+                <span className="tp-legend-btn">
+                  <span className="tp-legend-btn-cluster" />
+                  <span className="tp-legend-btn-label">Subnet Groups</span>
+                  <span className="tp-legend-btn-count">{clusterSummary.clusters}</span>
+                </span>
+              </div>
+            )}
+          </motion.div>
+        )}
+                  </div>
         {/* ═══════════ INSPECTOR ═══════════ */}
         <AnimatePresence>
-          {selected && !selected.isCluster && (
+            {selected && !selected.isCluster && !selected.isInternet && (
             <motion.div key="inspector" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 24 }} transition={{ duration: 0.25 }} className="tp-inspector">
               <div className="tp-insp-header"><h3 className="tp-insp-title">{selected.name}</h3><button onClick={() => setSelected(null)} className="tp-insp-close"><X className="w-4 h-4" /></button></div>
               <div className="tp-insp-badges">
@@ -854,8 +1015,25 @@ export default function TopologyPage() {
                 <Field label="Make" value={selected.make} /><Field label="Model" value={selected.model} />
                 <Field label="Serial" value={selected.serialNumber} mono /><Field label="Site" value={selected.siteName} />
                 {selected.subnetGatewayIp && <Field label="Subnet Gateway" value={selected.subnetGatewayIp} mono />}
-              </div>
-              {neighborsWithPorts.length > 0 && (
+</div>
+{data?.wanLinks?.filter(wl => wl.deviceId === selected.id).length > 0 && (
+  <div className="tp-insp-wan">
+    <span className="tp-insp-wan-title">WAN Connections</span>
+    {data.wanLinks.filter(wl => wl.deviceId === selected.id).map((wl, i) => (
+      <div key={i} className="tp-insp-wan-item">
+        <span className="tp-insp-wan-dot" />
+        <div className="tp-insp-wan-info">
+          <span className="tp-insp-wan-ip">{wl.wanIp || 'No IP'}</span>
+          <span className="tp-insp-wan-port">{wl.interfaceName}{wl.speed ? ` · ${wl.speed >= 1000000000 ? (wl.speed/1000000000)+'G' : wl.speed >= 1000000 ? (wl.speed/1000000)+'M' : wl.speed}` : ''}</span>
+        </div>
+      </div>
+    ))}
+  </div>
+)}
+<button className="tp-insp-view-btn" onClick={() => router.push(`/devices/${selected.id}`)}>
+  <ChevronRight size={14} /> View device details
+</button>
+{neighborsWithPorts.length > 0 && (
                 <div className="tp-insp-neighbors"><span className="tp-insp-nbr-title">Connected ({neighborsWithPorts.length})</span>
                   <div className="tp-insp-nbr-list">
                     {neighborsWithPorts.slice(0, 30).map(n => (
@@ -914,7 +1092,22 @@ export default function TopologyPage() {
       </motion.div>
 
       <style>{`
-        .tp-root{display:flex;flex-direction:column;gap:12px;max-width:1400px;position:relative}
+        .tp-root{display:flex;flex-direction:column;gap:12px;max-width:1600px;position:relative}
+.tp-graph-row{display:flex;gap:12px;align-items:flex-start}
+.tp-graph-row .tp-graph-panel{flex:1;min-width:0}
+@media(max-width:1023px){.tp-graph-row{flex-direction:column}.tp-legend-panel{max-height:200px}}
+.tp-legend-panel{width:200px;flex-shrink:0;border-radius:16px;background:var(--color-vemio-surface);border:1px solid var(--color-vemio-border);padding:12px;display:flex;flex-direction:column;gap:12px;max-height:clamp(500px,70vh,900px);overflow-y:auto}
+.tp-legend-group{display:flex;flex-direction:column;gap:2px}
+.tp-legend-group-title{font-size:9px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;color:var(--color-vemio-text-dim);padding:0 6px 4px;border-bottom:1px solid var(--color-vemio-border);margin-bottom:2px}
+.tp-legend-btn{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;border:none;background:transparent;cursor:pointer;text-align:left;color:inherit;font-family:inherit;font-size:11px;transition:background .12s;width:100%}
+.tp-legend-btn:hover{background:rgba(255,255,255,0.04)}
+.tp-legend-btn-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.tp-legend-btn-line{width:14px;height:2px;border-radius:1px;flex-shrink:0}
+.tp-legend-btn-line--dashed{width:14px;height:0;border-top:2px dashed;background:none}
+.tp-legend-btn-ring{width:8px;height:8px;border-radius:50%;flex-shrink:0;border:2px solid;background:transparent}
+.tp-legend-btn-cluster{width:12px;height:8px;border-radius:3px;flex-shrink:0;border:1.5px dashed rgba(156,163,175,0.4);background:rgba(156,163,175,0.06)}
+.tp-legend-btn-label{flex:1;color:var(--color-vemio-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-legend-btn-count{font-size:10px;color:var(--color-vemio-text-dim);font-variant-numeric:tabular-nums;flex-shrink:0}
         .tp-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
         .tp-subtitle{font-size:13px;color:var(--vemio-text-muted);margin:0}
         .tp-header-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap}
@@ -983,6 +1176,15 @@ export default function TopologyPage() {
         .tp-insp-nbr-more{font-size:11px;color:var(--color-vemio-text-dim);padding:4px 8px}
         .tp-cluster-expand-btn{display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;border:1px solid var(--color-vemio-border);background:rgba(245,158,11,.06);color:var(--color-vemio-amber);font-size:12px;font-weight:500;cursor:pointer;transition:background .15s}
         .tp-cluster-expand-btn:hover{background:rgba(245,158,11,.12)}
+        .tp-insp-view-btn{display:flex;align-items:center;gap:6px;padding:8px 12px;border-radius:8px;border:1px solid var(--color-vemio-border);background:rgba(245,158,11,.06);color:var(--color-vemio-amber);font-size:12px;font-weight:500;cursor:pointer;transition:background .15s;width:100%}
+        .tp-insp-view-btn:hover{background:rgba(245,158,11,.12)}
+        .tp-insp-wan{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.04);border:1px solid rgba(34,197,94,0.12)}
+.tp-insp-wan-title{font-size:9px;text-transform:uppercase;letter-spacing:.07em;font-weight:600;color:#22c55e;margin-bottom:2px}
+.tp-insp-wan-item{display:flex;align-items:center;gap:6px}
+.tp-insp-wan-dot{width:6px;height:6px;border-radius:50%;background:#22c55e;flex-shrink:0}
+.tp-insp-wan-info{display:flex;flex-direction:column;gap:1px}
+.tp-insp-wan-ip{font-size:12px;font-family:monospace;color:#22c55e;font-weight:600}
+.tp-insp-wan-port{font-size:9px;color:var(--color-vemio-text-dim)}
       `}</style>
     </>
   );

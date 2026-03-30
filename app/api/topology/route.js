@@ -169,7 +169,58 @@ export const GET = withAuth(async (req, session) => {
     } catch (err) {
       console.warn('[VEMIO API] device_interfaces subnet query failed:', err.message);
     }
+// ── WAN links (firewall interfaces with public IPs) ──
+    let wanLinks = [];
+    try {
+      const wanResult = await queryForTenant(target,
+        `SELECT
+           d.id AS device_uuid,
+           d.auvik_device_id,
+           d.name AS device_name,
+           dp.interface_name,
+           dp.operational_status,
+           dp.negotiated_speed,
+           di.ip_address AS wan_ip
+         FROM device_ports dp
+         JOIN devices d ON d.auvik_device_id = dp.device_auvik_id AND d.tenant_id = dp.tenant_id
+         JOIN device_interfaces di ON di.device_id = d.id
+           AND LOWER(di.interface_name) = LOWER(dp.interface_name)
+         WHERE d.device_type = 'firewall'
+           AND d.is_monitored = true AND d.is_retired = false
+           AND dp.operational_status = 'online'
+           AND di.ip_address IS NOT NULL
+           AND (
+             LOWER(dp.interface_name) LIKE 'wan%'
+             OR (
+               di.ip_address::text NOT LIKE '10.%'
+               AND di.ip_address::text NOT LIKE '172.16.%'
+               AND di.ip_address::text NOT LIKE '172.17.%'
+               AND di.ip_address::text NOT LIKE '172.18.%'
+               AND di.ip_address::text NOT LIKE '172.19.%'
+               AND di.ip_address::text NOT LIKE '172.2_.%'
+               AND di.ip_address::text NOT LIKE '172.30.%'
+               AND di.ip_address::text NOT LIKE '172.31.%'
+               AND di.ip_address::text NOT LIKE '192.168.%'
+               AND di.ip_address::text NOT LIKE '127.%'
+               AND di.ip_address::text NOT LIKE '169.254.%'
+             )
+           )`
+      );
 
+      for (const row of wanResult.rows) {
+        const deviceNode = auvikToNode.get(row.auvik_device_id);
+        if (!deviceNode) continue;
+        wanLinks.push({
+          deviceId: deviceNode.id,
+          deviceName: row.device_name,
+          interfaceName: row.interface_name,
+          wanIp: row.wan_ip || null,
+          speed: row.negotiated_speed || null,
+        });
+      }
+    } catch (err) {
+      console.warn('[VEMIO API] WAN links query failed:', err.message);
+    }
     // ── Format nodes ──
     const nodeIdSet = new Set(nodesResult.rows.map(r => r.id));
     const edgeConnectedIds = new Set();
@@ -219,7 +270,7 @@ export const GET = withAuth(async (req, session) => {
     }
 
     return Response.json({
-      nodes, edges, category,
+      nodes, edges, category, wanLinks,
       subnetClusters: Object.values(subnetClusters),
       isAllTenants: target.mode === 'all',
     });

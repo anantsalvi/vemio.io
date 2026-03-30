@@ -41,17 +41,13 @@ export default function DeviceStencil({ device, ports = [], onPortSelect, select
     [stencil, stencilPorts]
   );
 
-  const handlePortHover = useCallback((e, portDef) => {
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (rect) {
-      setTooltipPos({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top - 10,
-      });
-    }
-    setHoveredPort(portDef);
-  }, []);
-
+const handlePortHover = useCallback((e, portDef) => {
+  setTooltipPos({
+    x: e.clientX,
+    y: e.clientY - 10,
+  });
+  setHoveredPort(portDef);
+}, []);
   if (!device) return null;
 
   const matchedCount = portMap.size;
@@ -245,18 +241,20 @@ export default function DeviceStencil({ device, ports = [], onPortSelect, select
                       />
                     )}
 
-                    {/* Port label — below the port */}
-                    <text
-                      x={portDef.x + portDef.w / 2}
-                      y={portDef.y + portDef.h + 8}
-                      textAnchor="middle"
-                      fontSize={portDef.w < 15 ? 4.5 : 5.5}
-                      fill="rgba(148,163,184,0.4)"
-                      fontFamily="system-ui, sans-serif"
-                      fontWeight="500"
-                    >
-                      {portDef.name}
-                    </text>
+                    {/* Port label — above for top-row, below for bottom-row */}
+<text
+  x={portDef.x + portDef.w / 2}
+  y={group.ports.some(p => p.x === portDef.x && p.y > portDef.y)
+    ? portDef.y - 4
+    : portDef.y + portDef.h + 8}
+  textAnchor="middle"
+  fontSize={portDef.w < 15 ? 4.5 : 5.5}
+  fill="rgba(148,163,184,0.4)"
+  fontFamily="system-ui, sans-serif"
+  fontWeight="500"
+>
+  {portDef.name}
+</text>
                   </g>
                 );
               })}
@@ -409,9 +407,9 @@ export default function DeviceStencil({ device, ports = [], onPortSelect, select
           display: block;
         }
 
-        .ds-tooltip {
-          position: absolute;
-          z-index: 50;
+       .ds-tooltip {
+  position: fixed;
+  z-index: 9999;
           pointer-events: none;
           background: var(--color-vemio-bg);
           border: 1px solid var(--color-vemio-border);

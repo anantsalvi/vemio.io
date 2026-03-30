@@ -4,8 +4,9 @@ import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Search, ChevronDown, ChevronUp, ExternalLink,
-  ArrowUpDown, Filter,
+  ArrowUpDown,
 } from 'lucide-react';
+import { isPhysicalPort } from './stencilRegistry';
 
 const STATUS_COLORS = {
   online:   { color: '#22c55e', bg: 'rgba(34,197,94,0.1)',  label: 'Online' },
@@ -42,42 +43,39 @@ export default function PortDetailsPanel({
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [mediaFilter, setMediaFilter] = useState('');
+  const [showVirtual, setShowVirtual] = useState(false);
   const [sortField, setSortField] = useState('name');
   const [sortDir, setSortDir] = useState('asc');
   const [expandedRow, setExpandedRow] = useState(null);
 
   const filteredPorts = useMemo(() => {
-    let result = [...ports];
+    let result = showVirtual ? [...ports] : ports.filter(isPhysicalPort);
 
-    // Search
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter(p =>
         (p.name || '').toLowerCase().includes(q) ||
         (p.neighbors?.[0]?.name || '').toLowerCase().includes(q) ||
+        (p.neighbors?.[0]?.ipAddress || '').toLowerCase().includes(q) ||
         (p.vlans?.some(v => v.ipAddress?.includes(q))) ||
         (p.mediaType || '').toLowerCase().includes(q)
       );
     }
 
-    // Status filter
     if (statusFilter) {
       result = result.filter(p => p.status === statusFilter);
     }
 
-    // Media filter
     if (mediaFilter) {
       result = result.filter(p => p.mediaType === mediaFilter);
     }
 
-    // Sort
     result.sort((a, b) => {
       let va, vb;
       switch (sortField) {
         case 'name':
           va = a.name || '';
           vb = b.name || '';
-          // Natural sort: extract numbers
           const na = parseInt((va.match(/\d+/) || ['0'])[0]);
           const nb = parseInt((vb.match(/\d+/) || ['0'])[0]);
           if (na !== nb) return sortDir === 'asc' ? na - nb : nb - na;
@@ -100,7 +98,7 @@ export default function PortDetailsPanel({
     });
 
     return result;
-  }, [ports, search, statusFilter, mediaFilter, sortField, sortDir]);
+  }, [ports, search, statusFilter, mediaFilter, sortField, sortDir, showVirtual]);
 
   function toggleSort(field) {
     if (sortField === field) {
@@ -120,7 +118,6 @@ export default function PortDetailsPanel({
 
   return (
     <div className="pdp-root">
-      {/* Summary pills */}
       {summary && (
         <div className="pdp-summary">
           <span className="pdp-sum-pill">
@@ -157,7 +154,6 @@ export default function PortDetailsPanel({
         </div>
       )}
 
-      {/* Filters */}
       <div className="pdp-filters">
         <div className="pdp-search-wrap">
           <Search className="pdp-search-icon" />
@@ -189,9 +185,14 @@ export default function PortDetailsPanel({
           <option value="copper">Copper</option>
           <option value="wireless">Wireless</option>
         </select>
+        <button
+          onClick={() => setShowVirtual(v => !v)}
+          className={`pdp-filter-toggle ${showVirtual ? 'pdp-filter-toggle--active' : ''}`}
+        >
+          {showVirtual ? 'Hide' : 'Show'} virtual
+        </button>
       </div>
 
-      {/* Table */}
       <div className="pdp-table-scroll">
         <table className="pdp-table">
           <thead>
@@ -202,14 +203,14 @@ export default function PortDetailsPanel({
               <th className="pdp-th pdp-th--sortable" onClick={() => toggleSort('status')}>
                 Status <SortIcon field="status" />
               </th>
-              <th className="pdp-th pdp-th--md">Media</th>
-              <th className="pdp-th pdp-th--sortable pdp-th--md" onClick={() => toggleSort('speed')}>
+              <th className="pdp-th pdp-th--hide-sm">Media</th>
+              <th className="pdp-th pdp-th--sortable pdp-th--hide-sm" onClick={() => toggleSort('speed')}>
                 Speed <SortIcon field="speed" />
               </th>
               <th className="pdp-th pdp-th--sortable" onClick={() => toggleSort('connected')}>
                 Connected To <SortIcon field="connected" />
               </th>
-              <th className="pdp-th pdp-th--lg">VLANs / IPs</th>
+              <th className="pdp-th pdp-th--hide-lg">VLANs / IPs</th>
             </tr>
           </thead>
           <tbody>
@@ -229,13 +230,11 @@ export default function PortDetailsPanel({
                     setExpandedRow(isExpanded ? null : port.interfaceId);
                   }}
                 >
-                  {/* Interface name */}
                   <td className="pdp-td">
                     <span className="pdp-iface-name">{port.name || '—'}</span>
                     <span className="pdp-iface-type">{port.type}</span>
                   </td>
 
-                  {/* Status */}
                   <td className="pdp-td">
                     <span
                       className="pdp-status-badge"
@@ -246,8 +245,7 @@ export default function PortDetailsPanel({
                     </span>
                   </td>
 
-                  {/* Media */}
-                  <td className="pdp-td pdp-td--md">
+                  <td className="pdp-td pdp-td--hide-sm">
                     {port.mediaType && port.mediaType !== 'unknown' ? (
                       <span
                         className="pdp-media-badge"
@@ -260,12 +258,10 @@ export default function PortDetailsPanel({
                     )}
                   </td>
 
-                  {/* Speed */}
-                  <td className="pdp-td pdp-td--md pdp-td--mono">
+                  <td className="pdp-td pdp-td--hide-sm pdp-td--mono">
                     {formatSpeed(port.speed)}
                   </td>
 
-                  {/* Connected to */}
                   <td className="pdp-td">
                     {neighbor ? (
                       <button
@@ -277,10 +273,17 @@ export default function PortDetailsPanel({
                           }
                         }}
                       >
-                        <span className="pdp-neighbor-name">{neighbor.name}</span>
-                        {neighbor.remoteInterface && (
-                          <span className="pdp-neighbor-port">{neighbor.remoteInterface}</span>
-                        )}
+                        <div className="pdp-neighbor-info">
+                          <span className="pdp-neighbor-name">{neighbor.name}</span>
+                          <span className="pdp-neighbor-details">
+                            {neighbor.ipAddress && (
+                              <span className="pdp-neighbor-ip">{neighbor.ipAddress}</span>
+                            )}
+                            {neighbor.remoteInterface && (
+                              <span className="pdp-neighbor-port">{neighbor.remoteInterface}</span>
+                            )}
+                          </span>
+                        </div>
                         {neighbor.deviceId && (
                           <ExternalLink className="w-3 h-3" style={{ flexShrink: 0, opacity: 0.4 }} />
                         )}
@@ -292,8 +295,7 @@ export default function PortDetailsPanel({
                     )}
                   </td>
 
-                  {/* VLANs */}
-                  <td className="pdp-td pdp-td--lg">
+                  <td className="pdp-td pdp-td--hide-lg">
                     {port.vlans?.length > 0 ? (
                       <div className="pdp-vlans">
                         {port.vlans.slice(0, 3).map((v, vi) => (
@@ -323,7 +325,6 @@ export default function PortDetailsPanel({
         </table>
       </div>
 
-      {/* Result count */}
       <div className="pdp-footer">
         <span className="pdp-count">
           Showing {filteredPorts.length} of {ports.length} interfaces
@@ -336,8 +337,6 @@ export default function PortDetailsPanel({
           flex-direction: column;
           gap: 12px;
         }
-
-        /* Summary */
         .pdp-summary {
           display: flex;
           gap: 8px;
@@ -356,8 +355,6 @@ export default function PortDetailsPanel({
         .pdp-sum-pill--up { color: #22c55e; }
         .pdp-sum-val { font-weight: 600; color: var(--color-vemio-text-muted); }
         .pdp-sum-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-
-        /* Filters */
         .pdp-filters {
           display: flex;
           gap: 8px;
@@ -403,12 +400,31 @@ export default function PortDetailsPanel({
           flex-shrink: 0;
           min-width: 100px;
         }
+        .pdp-filter-toggle {
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-size: 12px;
+          background: var(--color-vemio-bg);
+          border: 1px solid var(--color-vemio-border);
+          color: var(--color-vemio-text-dim);
+          cursor: pointer;
+          flex-shrink: 0;
+          white-space: nowrap;
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .pdp-filter-toggle:hover {
+          background: var(--color-vemio-surface-raised);
+          color: var(--color-vemio-text-muted);
+        }
+        .pdp-filter-toggle--active {
+          background: rgba(245,158,11,0.06);
+          border-color: rgba(245,158,11,0.2);
+          color: var(--color-vemio-amber);
+        }
         @media (max-width: 639px) {
           .pdp-filters { flex-wrap: wrap; }
           .pdp-filter-select { min-width: 0; flex: 1; }
         }
-
-        /* Table */
         .pdp-table-scroll {
           overflow-x: auto;
           -webkit-overflow-scrolling: touch;
@@ -436,14 +452,23 @@ export default function PortDetailsPanel({
         }
         .pdp-th--sortable {
           cursor: pointer;
-          display: table-cell;
         }
         .pdp-th--sortable:hover { color: var(--color-vemio-text-muted); }
         .pdp-th--sortable > svg { display: inline; vertical-align: middle; margin-left: 3px; }
-        .pdp-th--md { display: none; }
-        @media (min-width: 640px) { .pdp-th--md, .pdp-td--md { display: table-cell; } }
-        .pdp-th--lg { display: none; }
-        @media (min-width: 1024px) { .pdp-th--lg, .pdp-td--lg { display: table-cell; } }
+
+        /* Responsive column hiding — clean approach with no conflicts */
+        .pdp-th--hide-sm,
+        .pdp-td--hide-sm { display: none; }
+        .pdp-th--hide-lg,
+        .pdp-td--hide-lg { display: none; }
+        @media (min-width: 640px) {
+          .pdp-th--hide-sm,
+          .pdp-td--hide-sm { display: table-cell; }
+        }
+        @media (min-width: 1024px) {
+          .pdp-th--hide-lg,
+          .pdp-td--hide-lg { display: table-cell; }
+        }
 
         .pdp-tr {
           border-bottom: 1px solid rgba(255,255,255,0.02);
@@ -455,15 +480,12 @@ export default function PortDetailsPanel({
           background: rgba(245,158,11,0.04);
           border-left: 2px solid var(--color-vemio-amber);
         }
-
         .pdp-td {
           padding: 8px 12px;
           font-size: 12px;
           vertical-align: middle;
         }
         .pdp-td--mono { font-family: monospace; font-size: 11px; color: var(--color-vemio-text-muted); }
-        .pdp-td--md { display: none; }
-
         .pdp-iface-name {
           font-size: 12px;
           font-weight: 500;
@@ -477,7 +499,6 @@ export default function PortDetailsPanel({
           text-transform: capitalize;
           margin-top: 1px;
         }
-
         .pdp-status-badge {
           display: inline-flex;
           align-items: center;
@@ -495,7 +516,6 @@ export default function PortDetailsPanel({
           border-radius: 50%;
           flex-shrink: 0;
         }
-
         .pdp-media-badge {
           display: inline-flex;
           padding: 2px 7px;
@@ -504,10 +524,9 @@ export default function PortDetailsPanel({
           font-weight: 600;
           letter-spacing: 0.03em;
         }
-
         .pdp-neighbor-link {
           display: inline-flex;
-          align-items: center;
+          align-items: flex-start;
           gap: 5px;
           border: none;
           background: transparent;
@@ -521,13 +540,29 @@ export default function PortDetailsPanel({
         .pdp-neighbor-link:hover .pdp-neighbor-name {
           color: var(--color-vemio-amber);
         }
+        .pdp-neighbor-info {
+          display: flex;
+          flex-direction: column;
+          gap: 1px;
+          min-width: 0;
+        }
         .pdp-neighbor-name {
           font-weight: 500;
           transition: color 0.12s;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
-          max-width: 160px;
+          max-width: 200px;
+        }
+        .pdp-neighbor-details {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .pdp-neighbor-ip {
+          font-size: 10px;
+          font-family: monospace;
+          color: var(--color-vemio-text-dim);
         }
         .pdp-neighbor-port {
           font-size: 9px;
@@ -538,7 +573,6 @@ export default function PortDetailsPanel({
           border-radius: 3px;
           flex-shrink: 0;
         }
-
         .pdp-vlans {
           display: flex;
           flex-direction: column;
@@ -549,20 +583,17 @@ export default function PortDetailsPanel({
           font-family: monospace;
           color: var(--color-vemio-text-dim);
         }
-
         .pdp-dim {
           font-size: 11px;
           color: var(--color-vemio-text-dim);
           opacity: 0.6;
         }
-
         .pdp-empty {
           padding: 32px 14px;
           text-align: center;
           font-size: 12px;
           color: var(--color-vemio-text-dim);
         }
-
         .pdp-footer {
           display: flex;
           justify-content: flex-end;

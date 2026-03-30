@@ -50,10 +50,13 @@ export default function DevicePortsSection({ deviceId, device }) {
   return (
     <div className="dps-root">
       {/* Header — always visible */}
-      <button
-        className="dps-header"
-        onClick={() => setExpanded(prev => !prev)}
-      >
+      <div
+  className="dps-header"
+  onClick={() => setExpanded(prev => !prev)}
+  role="button"
+  tabIndex={0}
+  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setExpanded(prev => !prev); }}
+>
         <div className="dps-header-left">
           <Cable className="w-4 h-4" style={{ color: 'var(--color-vemio-amber)', flexShrink: 0 }} />
           <div>
@@ -83,7 +86,7 @@ export default function DevicePortsSection({ deviceId, device }) {
             <ChevronDown className="w-4 h-4" style={{ color: 'var(--color-vemio-text-dim)' }} />
           )}
         </div>
-      </button>
+</div>
 
       {/* Body */}
       <AnimatePresence initial={false}>

@@ -55,11 +55,21 @@ export const VIRTUAL_INTERFACE_PATTERNS = [
   /^radio\d/i, /^vlan\d/i, /^lo\d?$/i, /^tunnel\d/i, /^null\d?$/i,
   /^virbr/i, /^docker/i, /^veth/i, /^tap\d/i, /^tun\d/i,
   /^pimreg/i, /^sit\d/i, /^nve\d/i, /^mgmt\d/i,
+  /^dummy\d/i, /^erspan\d/i, /^gretap\d/i, /^ifb\d/i,
+  /^ipsec\d/i, /^mv-/i, /^mvmgmt/i, /^pport_/i, /^spq$/i,
+  /_ppp$/i, /^wqt\./i, /^wqtn\./i, /^guestap$/i, /^modem$/i,
 ];
 
 export function isPhysicalPort(port) {
   const name = (port.name || '').trim();
   if (!name) return false;
+  // Filter by interface type — only ethernet and fiber-channel are physical
+  const ifType = (port.type || '').toLowerCase();
+  if (ifType && ifType !== 'ethernet' && ifType !== 'fiber' && ifType !== 'other' && ifType !== 'unknown') return false;
+  // Filter named zones/policies (FortiGate zone interfaces have type 'other' and mixed-case multi-word names)
+  if (ifType === 'other' && /[A-Z]/.test(name) && /[\s_-]/.test(name)) return false;
+  // Filter single-word 'other' type with all-lowercase that look like zone names (e.g., 'guest', 'test')
+  if (ifType === 'other' && !(/^(port|eth|wan|lan|dmz|ha|mgmt|internal|sfp|console|x\d)/i.test(name))) return false;
   for (const p of VIRTUAL_INTERFACE_PATTERNS) { if (p.test(name)) return false; }
   return true;
 }
@@ -204,7 +214,7 @@ const SOPHOS_XGS_107 = {
   chassis: { x: 0, y: 0, w: 300, h: 80, rx: 6 }, brandLabel: { text: 'SOPHOS XGS 107', x: 12, y: 16, size: 8 },
   groups: [
     { label: 'GE RJ45 (1–8)', ports: pairedRJ45(8, 20, 1, 22) },
-    { label: 'SFP', ports: [{ name: 'SFP', x: 118, y: 34, w: 18, h: 14, type: 'sfp', patterns: ['sfp','sfp1','port9'] }]},
+    { label: 'SFP', ports: [{ name: 'SFP', x: 118, y: 34, w: 18, h: 14, type: 'sfp', patterns: ['sfp','sfp1','port9','portf1'] }]},
   ],
 };
 
@@ -452,11 +462,18 @@ export function matchPortsToStencil(stencil, ports) {
       for (const port of ports) {
         if (usedPorts.has(port.interfaceId)) continue;
         const pn = (port.name || '').toLowerCase().trim();
+        let isMatch = false;
         for (const pat of sp.patterns) {
           const p = pat.toLowerCase();
-          if (pn === p || pn.endsWith(p) || pn.includes(p)) { matched.set(sp.name, port); usedPorts.add(port.interfaceId); break; }
+          // Exact match first
+          if (pn === p) { isMatch = true; break; }
+          // For short patterns (1-2 chars), only allow exact match to prevent greedy matching
+          // e.g., pattern '1' should NOT match 'port13'
+          if (p.length <= 2) continue;
+          // For longer patterns, allow endsWith and includes
+          if (pn.endsWith(p) || pn.includes(p)) { isMatch = true; break; }
         }
-        if (matched.has(sp.name)) break;
+        if (isMatch) { matched.set(sp.name, port); usedPorts.add(port.interfaceId); break; }
       }
     }
   }

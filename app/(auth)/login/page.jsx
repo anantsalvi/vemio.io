@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { motion } from 'framer-motion';
-import { Eye, EyeOff, AlertTriangle, Loader2, Sun, Moon, Monitor } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Eye, EyeOff, AlertTriangle, Loader2, Sun, Moon, Monitor, ArrowLeft } from 'lucide-react';
 import VemioRibbonLogo from '@/app/components/VemioRibbonLogo';
 
 // ── Theme management for login page (standalone, no ThemeProvider needed) ────
@@ -84,7 +84,13 @@ const SSO_ERROR_MESSAGES = {
   sso_tenant_not_found: 'No organization found for your SSO account. Contact your administrator.',
 };
 
-// ── Login Form ──────────────────────────────────────────────────────────────
+const PROVIDER_LABELS = {
+  'azure-ad': 'Microsoft',
+  'google': 'Google',
+  'okta': 'Okta',
+};
+
+// ── Login Form (Two-Step Flow) ──────────────────────────────────────────────
 
 function LoginForm() {
   const router = useRouter();
@@ -94,31 +100,38 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Two-step flow: 'email' → 'authenticate'
+  const [step, setStep] = useState('email');
+
   // SSO state
   const [ssoInfo, setSsoInfo] = useState(null);
   const [ssoChecking, setSsoChecking] = useState(false);
-  const ssoDebounceRef = useRef(null);
 
-  // Error handling — check for SSO errors in URL
+  // Error handling
   const urlError = searchParams.get('error');
   const [error, setError] = useState(() => {
     if (!urlError) return '';
     return SSO_ERROR_MESSAGES[urlError] || (urlError === 'CredentialsSignin' ? 'Invalid email or password' : decodeURIComponent(urlError));
   });
 
-  // ── SSO Discovery ──
-  const checkSSO = useCallback(async (emailValue) => {
-    if (!emailValue || !emailValue.includes('@') || emailValue.split('@')[1].length < 3) {
-      setSsoInfo(null);
+  const passwordRef = useRef(null);
+
+  // ── Step 1: Handle "Next" — discover SSO ──
+  const handleNext = async (e) => {
+    e.preventDefault();
+    if (!email || !email.includes('@')) {
+      setError('Please enter a valid email address');
       return;
     }
 
+    setError('');
     setSsoChecking(true);
+
     try {
       const res = await fetch('/api/auth/sso/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailValue }),
+        body: JSON.stringify({ email: email.toLowerCase().trim() }),
       });
       const data = await res.json();
       setSsoInfo(data.sso_available ? data : null);
@@ -126,17 +139,18 @@ function LoginForm() {
       setSsoInfo(null);
     } finally {
       setSsoChecking(false);
+      setStep('authenticate');
+      // Focus password field after transition if no SSO
+      setTimeout(() => passwordRef.current?.focus(), 100);
     }
-  }, []);
+  };
 
-  const handleEmailChange = (e) => {
-    const val = e.target.value;
-    setEmail(val);
+  // ── Go back to email step ──
+  const handleBack = () => {
+    setStep('email');
+    setSsoInfo(null);
+    setPassword('');
     setError('');
-
-    // Debounce SSO check
-    if (ssoDebounceRef.current) clearTimeout(ssoDebounceRef.current);
-    ssoDebounceRef.current = setTimeout(() => checkSSO(val), 600);
   };
 
   // ── SSO Login ──
@@ -156,7 +170,8 @@ function LoginForm() {
     }
   };
 
-  const handleSubmit = async (e) => {
+  // ── Password Login ──
+  const handlePasswordLogin = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -183,138 +198,161 @@ function LoginForm() {
     }
   };
 
-  const providerLabels = {
-    'azure-ad': 'Microsoft',
-    'google': 'Google',
-    'okta': 'Okta',
-  };
-
-  const showPasswordField = !ssoInfo?.enforce_sso;
   const showSSOButton = ssoInfo?.sso_available;
+  const showPasswordField = !ssoInfo?.enforce_sso;
 
   return (
-    <form onSubmit={handleSubmit} className="login-form">
-      {error && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          className="login-error"
-        >
-          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </motion.div>
-      )}
+    <div className="login-form">
+      {/* Error */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="login-error"
+          >
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      <div className="login-field">
-        <label className="login-label">Email</label>
-        <div className="login-input-wrap">
-          <input
-            type="email"
-            value={email}
-            onChange={handleEmailChange}
-            required
-            autoFocus
-            autoComplete="email"
-            placeholder="Email address"
-            className="login-input"
-            style={ssoInfo?.sso_available ? { paddingRight: '54px' } : undefined}
-          />
-          {/* SSO indicator */}
-          {ssoChecking && (
-            <span className="login-sso-indicator">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: 'var(--color-vemio-text-dim)' }} />
-            </span>
-          )}
-          {ssoInfo?.sso_available && !ssoChecking && (
-            <span className="login-sso-indicator">
-              <span className="login-sso-badge">SSO</span>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* SSO Button */}
-      {showSSOButton && (
-        <button
-          type="button"
-          onClick={handleSSOLogin}
-          disabled={loading}
-          className="login-sso-btn"
-        >
-          {ssoInfo.provider === 'azure-ad' && (
-            <svg width="18" height="18" viewBox="0 0 21 21">
-              <rect x="1" y="1" width="9" height="9" fill="#f25022" />
-              <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
-              <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
-              <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
-            </svg>
-          )}
-          {loading ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            `Sign in with ${providerLabels[ssoInfo.provider] || 'SSO'}`
-          )}
-        </button>
-      )}
-
-      {/* Divider when both SSO and password available */}
-      {showSSOButton && showPasswordField && (
-        <div className="login-divider">
-          <span className="login-divider-line" />
-          <span className="login-divider-text">or use password</span>
-          <span className="login-divider-line" />
-        </div>
-      )}
-
-      {/* SSO-enforced message */}
-      {ssoInfo?.enforce_sso && (
-        <p className="login-enforce-note">
-          Your organization requires SSO authentication. Password login is disabled.
-        </p>
-      )}
-
-      {/* Password field — hidden when SSO is enforced */}
-      {showPasswordField && (
-        <>
+      {/* ════ STEP 1: Email ════ */}
+      {step === 'email' && (
+        <form onSubmit={handleNext} className="login-step">
           <div className="login-field">
-            <label className="login-label">Password</label>
-            <div className="login-input-wrap">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required={!showSSOButton}
-                autoComplete="current-password"
-                placeholder="Password"
-                className="login-input login-input--pw"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="login-pw-toggle"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
+            <label className="login-label">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(''); }}
+              required
+              autoFocus
+              autoComplete="email"
+              placeholder="you@company.com"
+              className="login-input"
+            />
           </div>
 
           <button
             type="submit"
-            disabled={loading || !email || (!password && !showSSOButton)}
+            disabled={ssoChecking || !email}
             className="login-submit"
           >
-            {loading ? (
+            {ssoChecking ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Authenticating...
+                Checking...
               </>
             ) : (
-              'Sign In'
+              'Next'
             )}
           </button>
-        </>
+        </form>
       )}
-    </form>
+
+      {/* ════ STEP 2: Authenticate ════ */}
+      {step === 'authenticate' && (
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.25 }}
+          className="login-step"
+        >
+          {/* Back + email display */}
+          <div className="login-email-bar">
+            <button type="button" onClick={handleBack} className="login-back-btn">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <span className="login-email-display">{email}</span>
+          </div>
+
+          {/* SSO Button */}
+          {showSSOButton && (
+            <button
+              type="button"
+              onClick={handleSSOLogin}
+              disabled={loading}
+              className="login-sso-btn"
+            >
+              {ssoInfo.provider === 'azure-ad' && (
+                <svg width="18" height="18" viewBox="0 0 21 21">
+                  <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+                  <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+                  <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+                  <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+                </svg>
+              )}
+              {loading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                `Sign in with ${PROVIDER_LABELS[ssoInfo.provider] || 'SSO'}`
+              )}
+            </button>
+          )}
+
+          {/* Divider when both SSO and password available */}
+          {showSSOButton && showPasswordField && (
+            <div className="login-divider">
+              <span className="login-divider-line" />
+              <span className="login-divider-text">or use password</span>
+              <span className="login-divider-line" />
+            </div>
+          )}
+
+          {/* SSO-enforced message */}
+          {ssoInfo?.enforce_sso && (
+            <p className="login-enforce-note">
+              Your organization requires SSO authentication. Password login is disabled.
+            </p>
+          )}
+
+          {/* Password field */}
+          {showPasswordField && (
+            <form onSubmit={handlePasswordLogin} className="login-step">
+              <div className="login-field">
+                <label className="login-label">Password</label>
+                <div className="login-input-wrap">
+                  <input
+                    ref={passwordRef}
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                    placeholder="Enter your password"
+                    className="login-input login-input--pw"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="login-pw-toggle"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !password}
+                className="login-submit"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Authenticating...
+                  </>
+                ) : (
+                  'Sign In'
+                )}
+              </button>
+            </form>
+          )}
+        </motion.div>
+      )}
+    </div>
   );
 }
 
@@ -532,6 +570,12 @@ export default function LoginPage() {
           gap: 20px;
         }
 
+        .login-step {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
         .login-error {
           display: flex;
           align-items: flex-start;
@@ -606,26 +650,47 @@ export default function LoginPage() {
           color: var(--color-vemio-text);
         }
 
-        /* ── SSO additions ── */
-        .login-sso-indicator {
-          position: absolute;
-          right: 12px;
-          top: 50%;
-          transform: translateY(-50%);
+        /* ── Two-step: email bar ── */
+        .login-email-bar {
           display: flex;
           align-items: center;
+          gap: 10px;
+          padding: 10px 14px;
+          border-radius: 10px;
+          background: var(--color-vemio-surface-raised);
+          border: 1px solid var(--color-vemio-border);
         }
 
-        .login-sso-badge {
-          font-size: 10px;
-          font-weight: 600;
-          letter-spacing: 0.5px;
-          padding: 2px 7px;
-          border-radius: 5px;
-          background: rgba(29, 158, 117, 0.15);
-          color: #1D9E75;
+        .login-back-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          border-radius: 7px;
+          border: 1px solid var(--color-vemio-border);
+          background: transparent;
+          color: var(--color-vemio-text-muted);
+          cursor: pointer;
+          flex-shrink: 0;
+          transition: background 0.15s, color 0.15s;
         }
 
+        .login-back-btn:hover {
+          background: var(--color-vemio-surface);
+          color: var(--color-vemio-text);
+        }
+
+        .login-email-display {
+          font-size: 14px;
+          color: var(--color-vemio-text);
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        /* ── SSO additions ── */
         .login-sso-btn {
           width: 100%;
           padding: 12px;

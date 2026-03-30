@@ -1,5 +1,5 @@
 import './globals.css';
-
+import { Analytics } from "@vercel/analytics/next"
 const SITE_URL = 'https://vemio.vinayenterprises.co.in';
 
 export const metadata = {

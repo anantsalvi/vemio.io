@@ -30,6 +30,10 @@ import {
   Signal,
   KeyRound,
   ScrollText,
+  ShieldCheck,
+  Users,
+  Building2,
+  HeartPulse,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -69,6 +73,17 @@ const NAV_STRUCTURE = [
       { href: '/settings/webhooks',      label: 'Webhook Log',   icon: Webhook, adminOnly: true },
     ],
   },
+  {
+    group: "MSP Admin",
+    icon: ShieldCheck,
+    mspOnly: true,
+    children: [
+      { href: "/admin/users",   label: "Users",         icon: Users },
+      { href: "/admin/tenants", label: "Tenants",       icon: Building2 },
+      { href: "/admin/devices", label: "Devices",       icon: Monitor },
+      { href: "/admin/system",  label: "System Health", icon: HeartPulse },
+    ],
+  },
 ];
 
 export default function Sidebar({ isRail = false, onNavigate }) {
@@ -79,6 +94,7 @@ export default function Sidebar({ isRail = false, onNavigate }) {
   const [showSignout, setShowSignout] = useState(false);
 
   const userRole = session?.user?.role;
+  const isMSP = session?.user?.isMSP === true;
 
   // Track which groups are expanded
   const [expanded, setExpanded] = useState(() => {
@@ -161,6 +177,9 @@ export default function Sidebar({ isRail = false, onNavigate }) {
         {NAV_STRUCTURE.map((item) => {
           // ── Collapsible group ──
           if (item.group) {
+            // Hide MSP-only groups from non-MSP users
+            if (item.mspOnly && !isMSP) return null;
+
             const visibleChildren = filterChildren(item.children);
             if (visibleChildren.length === 0) return null;
 

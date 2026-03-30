@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { Bell, BellOff, BellRing } from 'lucide-react';
 import { useAlertNotifications } from '@/hooks/useAlertNotifications';
 
@@ -13,8 +14,12 @@ import { useAlertNotifications } from '@/hooks/useAlertNotifications';
  */
 export default function AlertNotificationToggle() {
   const { permission, requestPermission, enabled, setEnabled, supported } = useAlertNotifications();
+  const [mounted, setMounted] = useState(false);
 
-  if (!supported) return null;
+  useEffect(() => { setMounted(true); }, []);
+
+  // Don't render during SSR — Notification API is browser-only
+  if (!mounted || !supported) return null;
 
   const handleClick = async () => {
     if (permission === 'default') {

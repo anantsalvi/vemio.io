@@ -154,20 +154,12 @@ function LoginForm() {
   };
 
   // ── SSO Login ──
-  const handleSSOLogin = async () => {
+  const handleSSOLogin = () => {
     setLoading(true);
     setError('');
-    try {
-      if (ssoInfo?.provider === 'azure-ad') {
-        await signIn('azure-ad', {
-          callbackUrl: '/overview',
-          login_hint: email,
-        });
-      }
-    } catch {
-      setError('SSO sign-in failed. Please try again.');
-      setLoading(false);
-    }
+    // Redirect to our custom SSO initiate endpoint
+    // This dynamically reads tenant credentials from DB
+    window.location.href = `/api/auth/sso/initiate?email=${encodeURIComponent(email.toLowerCase().trim())}`;
   };
 
   // ── Password Login ──

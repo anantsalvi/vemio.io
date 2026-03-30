@@ -11,7 +11,7 @@
 
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, Suspense } from 'react';
 import { signIn } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 
@@ -22,6 +22,18 @@ const ERROR_MESSAGES = {
 };
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--vemio-bg, #0C0C0E)' }}>
+        <div style={{ color: 'var(--vemio-text-muted, rgba(232,230,225,0.55))', fontSize: '13px' }}>Loading...</div>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const searchParams = useSearchParams();
   const urlError = searchParams.get('error');
 

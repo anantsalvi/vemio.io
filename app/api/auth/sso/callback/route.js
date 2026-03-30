@@ -177,7 +177,7 @@ export async function GET(req) {
     });
 
     // Set the session cookie and redirect to dashboard
-    const response = NextResponse.redirect(new URL('/overview', req.url));
+    const response = NextResponse.redirect(new URL('/auth/sso-complete', req.url));
 
     // Set NextAuth session cookie
     const cookieName = process.env.NODE_ENV === 'production'

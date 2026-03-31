@@ -1,23 +1,21 @@
 /**
- * VEMIO™ — Device Statistics API
- * GET /api/devices/[id]/stats
+ * VEMIO™ — Interface Bandwidth Statistics API
+ * app/api/devices/[id]/interfaces/stats/route.js
  *
- * Query params:
- *   ?period=24h|7d|30d|90d  (default: 24h)
- *   ?type=cpu,memory         (default: all)
+ * GET /api/devices/:id/interfaces/stats?period=24h|7d&interfaces=wan|all
  *
- * Returns time-series data for Recharts:
- *   { stats: { cpu: [...], memory: [...] }, current: { cpu: N, memory: N } }
+ * Returns bandwidth time-series for a device's interfaces.
+ * Default: WAN-flagged interfaces only. Use ?interfaces=all for everything.
+ *
+ * Uses MSP-aware resolveTargetTenant/queryForTenant pattern.
  */
 
 import { withAuth } from '@/lib/auth';
 import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
 const PERIOD_MAP = {
-  '24h': { interval: '24 hours', resolution: null },         // full resolution (~288 points at 5min)
-  '7d':  { interval: '7 days',   resolution: null },         // full resolution (~2016 points)
-  '30d': { interval: '30 days',  resolution: 'hourly' },     // hourly averages
-  '90d': { interval: '90 days',  resolution: 'hourly' },     // hourly averages
+  '24h': '24 hours',
+  '7d':  '7 days',
 };
 
 export const GET = withAuth(async (req, session) => {
@@ -30,11 +28,11 @@ export const GET = withAuth(async (req, session) => {
   }
 
   const period = url.searchParams.get('period') || '24h';
-  const typeFilter = url.searchParams.get('type')?.split(',').filter(Boolean) || ['cpu', 'memory'];
+  const interfaceFilter = url.searchParams.get('interfaces') || 'wan'; // 'wan' or 'all'
 
-  const periodConfig = PERIOD_MAP[period];
-  if (!periodConfig) {
-    return Response.json({ error: 'Invalid period. Use: 24h, 7d, 30d, 90d' }, { status: 400 });
+  const interval = PERIOD_MAP[period];
+  if (!interval) {
+    return Response.json({ error: 'Invalid period. Use: 24h, 7d' }, { status: 400 });
   }
 
   const target = await resolveTargetTenant(session, req);
@@ -43,63 +41,111 @@ export const GET = withAuth(async (req, session) => {
   }
 
   try {
-    // Build stat_type filter
-    const statTypes = [];
-    for (const t of typeFilter) {
-      if (periodConfig.resolution === 'hourly') {
-        statTypes.push(`${t}_hourly`);
-      } else {
-        statTypes.push(t);
-      }
+    // Verify device belongs to tenant
+    const deviceCheck = await queryForTenant(target,
+      'SELECT id, name FROM devices WHERE id = $1',
+      [deviceId]
+    );
+    if (!deviceCheck.rows.length) {
+      return Response.json({ error: 'Device not found' }, { status: 404 });
+    }
+
+    // Build WAN filter clause
+    let wanFilter = '';
+    if (interfaceFilter === 'wan') {
+      wanFilter = `
+        AND ist.interface_auvik_id IN (
+          SELECT dp.interface_auvik_id FROM device_ports dp
+          WHERE dp.device_id = $1 AND dp.is_wan = true
+        )
+      `;
     }
 
     // Fetch time-series
-    const result = await queryForTenant(target, `
-      SELECT stat_type, value, recorded_at
-      FROM device_statistics
-      WHERE device_id = $1
-        AND stat_type = ANY($2)
-        AND recorded_at >= NOW() - INTERVAL '${periodConfig.interval}'
-      ORDER BY recorded_at ASC
-    `, [deviceId, statTypes]);
+    const statsResult = await queryForTenant(target,
+      `SELECT
+         ist.interface_auvik_id,
+         ist.interface_name,
+         ist.tx_bps,
+         ist.rx_bps,
+         ist.total_bandwidth_bps,
+         ist.utilization_pct,
+         ist.recorded_at
+       FROM interface_statistics ist
+       WHERE ist.device_id = $1
+         AND ist.recorded_at >= NOW() - INTERVAL '${interval}'
+         ${wanFilter}
+       ORDER BY ist.interface_auvik_id, ist.recorded_at ASC`,
+      [deviceId]
+    );
 
-    // Group by stat type
-    const stats = {};
-    for (const t of typeFilter) {
-      stats[t] = [];
-    }
-
-    for (const row of result.rows) {
-      // Strip _hourly suffix for consistent key names
-      const baseType = row.stat_type.replace('_hourly', '');
-      if (stats[baseType]) {
-        stats[baseType].push({
-          time: row.recorded_at,
-          value: parseFloat(row.value),
-        });
+    // Group by interface
+    const interfaces = {};
+    for (const row of statsResult.rows) {
+      const key = row.interface_auvik_id;
+      if (!interfaces[key]) {
+        interfaces[key] = {
+          interfaceAuvikId: row.interface_auvik_id,
+          interfaceName: row.interface_name,
+          data: [],
+        };
       }
+      interfaces[key].data.push({
+        txBps: parseInt(row.tx_bps),
+        rxBps: parseInt(row.rx_bps),
+        totalBandwidthBps: parseInt(row.total_bandwidth_bps),
+        utilizationPct: row.utilization_pct ? parseFloat(row.utilization_pct) : null,
+        recordedAt: row.recorded_at,
+      });
     }
 
-    // Fetch current (most recent) values
-    const currentResult = await queryForTenant(target, `
-      SELECT DISTINCT ON (stat_type) stat_type, value, recorded_at
-      FROM device_statistics
-      WHERE device_id = $1
-        AND stat_type IN ('cpu', 'memory')
-      ORDER BY stat_type, recorded_at DESC
-    `, [deviceId]);
+    // Get current values (latest per interface)
+    const currentResult = await queryForTenant(target,
+      `SELECT DISTINCT ON (interface_auvik_id)
+         interface_auvik_id,
+         interface_name,
+         tx_bps,
+         rx_bps,
+         utilization_pct,
+         recorded_at
+       FROM interface_statistics
+       WHERE device_id = $1
+         AND recorded_at >= NOW() - INTERVAL '10 minutes'
+         ${wanFilter}
+       ORDER BY interface_auvik_id, recorded_at DESC`,
+      [deviceId]
+    );
 
-    const current = {};
-    for (const row of currentResult.rows) {
-      current[row.stat_type] = {
-        value: parseFloat(row.value),
-        at: row.recorded_at,
-      };
-    }
+    const current = currentResult.rows.map(row => ({
+      interfaceAuvikId: row.interface_auvik_id,
+      interfaceName: row.interface_name,
+      txBps: parseInt(row.tx_bps),
+      rxBps: parseInt(row.rx_bps),
+      utilizationPct: row.utilization_pct ? parseFloat(row.utilization_pct) : null,
+      at: row.recorded_at,
+    }));
 
-    return Response.json({ stats, current, period, deviceId });
+    // Get WAN port metadata
+    const wanPorts = await queryForTenant(target,
+      `SELECT dp.interface_auvik_id, dp.interface_name, dp.negotiated_speed, dp.is_wan
+       FROM device_ports dp
+       WHERE dp.device_id = $1 AND dp.is_wan = true`,
+      [deviceId]
+    );
+
+    return Response.json({
+      interfaces: Object.values(interfaces),
+      current,
+      wanPorts: wanPorts.rows.map(p => ({
+        interfaceAuvikId: p.interface_auvik_id,
+        interfaceName: p.interface_name,
+        negotiatedSpeed: parseInt(p.negotiated_speed),
+      })),
+      period,
+      deviceId,
+    });
   } catch (err) {
-    console.error(`[VEMIO API] Device stats error:`, err.message);
-    return Response.json({ error: 'Failed to fetch device statistics' }, { status: 500 });
+    console.error('[VEMIO API] Interface stats error:', err.message);
+    return Response.json({ error: 'Failed to fetch interface statistics' }, { status: 500 });
   }
 });

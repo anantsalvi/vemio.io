@@ -41,8 +41,9 @@ export default function SessionGuard() {
           setExpired(true);
 
           // Redirect to login after showing the message briefly
-          setTimeout(() => {
-            signOut({ callbackUrl: '/auth/login?reason=session_expired' });
+          setTimeout(async () => {
+            await signOut({ redirect: false });
+            window.location.href = '/auth/login?reason=session_expired';
           }, 2500);
         }
       }

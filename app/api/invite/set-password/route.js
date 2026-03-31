@@ -76,13 +76,14 @@ export async function POST(req) {
     const user = result.rows[0];
 
     // Hash password with bcrypt
-    const bcrypt = await import('bcryptjs');
-    const hashedPassword = await bcrypt.hash(password, 12);
+   const bcryptModule = await import('bcryptjs');
+const bcrypt = bcryptModule.default || bcryptModule;
+const hashedPassword = await bcrypt.hash(password, 12);
 
     // Update user: set password, clear token, mark password_set_at
     await queryAsAdmin(
       `UPDATE users
-       SET password = $1,
+       SET password_hash = $1,
            invite_token = NULL,
            invite_expires = NULL,
            password_set_at = NOW(),

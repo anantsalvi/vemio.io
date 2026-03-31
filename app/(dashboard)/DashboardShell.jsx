@@ -8,12 +8,14 @@ import TopBar from '@/components/TopBar';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { DeviceCategoryProvider } from '@/contexts/DeviceCategoryContext';
 import { TenantSwitcherProvider } from '@/contexts/TenantSwitcherContext';
+import SessionGuard from '@/hooks/useSessionGuard';
 
 export default function DashboardShell({ children }) {
   const sidebar = useSidebar();
 
   return (
     <SessionProvider>
+      <SessionGuard />
       <DeviceCategoryProvider>
         <ThemeProvider>
           <BrandingProvider>

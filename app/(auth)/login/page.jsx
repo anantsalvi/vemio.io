@@ -95,6 +95,7 @@ const PROVIDER_LABELS = {
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get('reason') === 'session_expired';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -140,7 +141,6 @@ function LoginForm() {
     } finally {
       setSsoChecking(false);
       setStep('authenticate');
-      // Focus password field after transition if no SSO
       setTimeout(() => passwordRef.current?.focus(), 100);
     }
   };
@@ -157,8 +157,6 @@ function LoginForm() {
   const handleSSOLogin = () => {
     setLoading(true);
     setError('');
-    // Redirect to our custom SSO initiate endpoint
-    // This dynamically reads tenant credentials from DB
     window.location.href = `/api/auth/sso/initiate?email=${encodeURIComponent(email.toLowerCase().trim())}`;
   };
 
@@ -195,6 +193,17 @@ function LoginForm() {
 
   return (
     <div className="login-form">
+      {/* Session expired notice */}
+      {sessionExpired && (
+        <div className="login-session-expired">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <span>Your session expired. Please sign in again to continue.</span>
+        </div>
+      )}
+
       {/* Error */}
       <AnimatePresence>
         {error && (
@@ -210,7 +219,7 @@ function LoginForm() {
         )}
       </AnimatePresence>
 
-      {/* ════ STEP 1: Email ════ */}
+      {/* STEP 1: Email */}
       {step === 'email' && (
         <form onSubmit={handleNext} className="login-step">
           <div className="login-field">
@@ -244,7 +253,7 @@ function LoginForm() {
         </form>
       )}
 
-      {/* ════ STEP 2: Authenticate ════ */}
+      {/* STEP 2: Authenticate */}
       {step === 'authenticate' && (
         <motion.div
           initial={{ opacity: 0, x: 20 }}
@@ -362,7 +371,7 @@ export default function LoginPage() {
         {/* Ambient glow */}
         <div className="login-glow" />
 
-        {/* Theme toggle — top right */}
+        {/* Theme toggle */}
         <div className="login-theme-corner">
           <LoginThemeToggle preference={preference} onSetTheme={setTheme} />
         </div>
@@ -390,7 +399,7 @@ export default function LoginPage() {
               transition={{ delay: 0.3, duration: 0.4 }}
             >
               <h1 className="login-brand-name">
-                VEMIO<span className="login-tm">™</span>
+                VEMIO<span className="login-tm">{'\u2122'}</span>
               </h1>
               <p className="login-brand-sub">Network Intelligence Platform</p>
             </motion.div>
@@ -418,7 +427,7 @@ export default function LoginPage() {
             >
               Vinay Enterprises
             </a>
-            {' '}· Est. 1993
+            {' '}{'\u00b7'} Est. 1993
           </p>
         </motion.div>
       </div>
@@ -436,16 +445,16 @@ export default function LoginPage() {
         }
 
         .login-grid {
-  position: absolute;
-  inset: 0;
-  opacity: 0.2;
-  background-image:
-    radial-gradient(circle at center, var(--color-vemio-amber) 1px, transparent 1px),
-    linear-gradient(to right, rgba(245, 158, 11, 0.15) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(245, 158, 11, 0.15) 1px, transparent 1px);
-  background-size: 40px 40px, 80px 80px, 80px 80px;
-  background-position: 20px 20px, 0 0, 0 0;
-}
+          position: absolute;
+          inset: 0;
+          opacity: 0.2;
+          background-image:
+            radial-gradient(circle at center, var(--color-vemio-amber) 1px, transparent 1px),
+            linear-gradient(to right, rgba(245, 158, 11, 0.15) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(245, 158, 11, 0.15) 1px, transparent 1px);
+          background-size: 40px 40px, 80px 80px, 80px 80px;
+          background-position: 20px 20px, 0 0, 0 0;
+        }
 
         .login-glow {
           position: absolute;
@@ -507,7 +516,6 @@ export default function LoginPage() {
           margin: 0 16px;
         }
 
-        /* ── Branding ── */
         .login-branding {
           text-align: center;
           margin-bottom: 32px;
@@ -542,7 +550,6 @@ export default function LoginPage() {
           letter-spacing: 0.02em;
         }
 
-        /* ── Card ── */
         .login-card {
           border-radius: 16px;
           padding: 32px;
@@ -555,7 +562,6 @@ export default function LoginPage() {
           .login-card { padding: 24px; }
         }
 
-        /* ── Form ── */
         .login-form {
           display: flex;
           flex-direction: column;
@@ -566,6 +572,19 @@ export default function LoginPage() {
           display: flex;
           flex-direction: column;
           gap: 20px;
+        }
+
+        /* Session expired notice */
+        .login-session-expired {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          border-radius: 8px;
+          background: rgba(245, 158, 11, 0.08);
+          border: 1px solid rgba(245, 158, 11, 0.2);
+          color: #F59E0B;
+          font-size: 13px;
         }
 
         .login-error {
@@ -642,7 +661,6 @@ export default function LoginPage() {
           color: var(--color-vemio-text);
         }
 
-        /* ── Two-step: email bar ── */
         .login-email-bar {
           display: flex;
           align-items: center;
@@ -682,7 +700,6 @@ export default function LoginPage() {
           white-space: nowrap;
         }
 
-        /* ── SSO additions ── */
         .login-sso-btn {
           width: 100%;
           padding: 12px;
@@ -739,7 +756,6 @@ export default function LoginPage() {
           margin: 0;
         }
 
-        /* ── Submit ── */
         .login-submit {
           width: 100%;
           padding: 12px;
@@ -774,7 +790,6 @@ export default function LoginPage() {
           box-shadow: none;
         }
 
-        /* ── Footer ── */
         .login-footer {
           text-align: center;
           font-size: 11px;
@@ -791,9 +806,10 @@ export default function LoginPage() {
         .login-footer-link:hover {
           color: var(--color-vemio-amber);
         }
-          [data-theme="light"] .login-grid {
-  opacity: 0.55;
-}
+
+        [data-theme="light"] .login-grid {
+          opacity: 0.55;
+        }
       `}</style>
     </>
   );

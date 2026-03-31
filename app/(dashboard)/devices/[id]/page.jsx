@@ -39,6 +39,7 @@ import {
 import DevicePortsSection from '@/app/components/device-stencils/DevicePortsSection';
 import ConnectedDevicesSection from '@/app/components/ConnectedDevicesSection';
 import DeviceStatsChart from '@/app/components/DeviceStatsChart';
+import InterfaceBandwidthChart from '@/app/components/InterfaceBandwidthChart';
 const STATUS_CONFIG = {
   up:       { label: 'Online',   color: 'var(--color-status-up)',       bg: 'rgba(34,197,94,0.1)'  },
   down:     { label: 'Offline',  color: 'var(--color-status-down)',     bg: 'rgba(239,68,68,0.1)'  },
@@ -356,7 +357,8 @@ export default function DeviceDetailPage() {
             status: device.status,
           }}
         />
-        <DeviceStatsChart deviceId={device.id} />
+<DeviceStatsChart deviceId={device.id} />
+        <InterfaceBandwidthChart deviceId={device.id || id} />
 {/* ── Connected Devices (Neighbors with IPs) ── */}
 <ConnectedDevicesSection deviceId={device.id || id} />
         {/* ── Lifecycle panel ── */}

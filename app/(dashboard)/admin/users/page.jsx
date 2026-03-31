@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
-import { UserPlus, Search, Shield, Eye, Key, UserX, UserCheck, X } from 'lucide-react';
+import { UserPlus, Search, Shield, Eye, Key, UserX, UserCheck, X, Mail, Copy, CheckCircle } from 'lucide-react';
 
 const V = (n) => `var(--color-vemio-${n}, var(--vemio-${n}))`;
 
@@ -27,6 +27,8 @@ export default function AdminUsersPage() {
   const [newPassword, setNewPassword] = useState('');
   const [createForm, setCreateForm] = useState({ tenant_id: '', email: '', name: '', role: 'viewer', password: '' });
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [inviting, setInviting] = useState(null); // userId being invited
+  const [inviteResult, setInviteResult] = useState(null); // { userId, url } after successful invite
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -55,6 +57,35 @@ export default function AdminUsersPage() {
 
   const showMsg = (type, text) => { setMessage({ type, text }); setTimeout(() => setMessage({ type: '', text: '' }), 4000); };
 
+  // ── Send invite to existing user ──
+  const handleInvite = async (userId) => {
+    setInviting(userId);
+    try {
+      const res = await fetch('/api/admin/users/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setInviteResult({ userId, url: data.inviteUrl });
+      showMsg('success', `Invite email sent to ${users.find(u => u.id === userId)?.email}`);
+      fetchUsers();
+    } catch (err) {
+      showMsg('error', err.message);
+    } finally {
+      setInviting(null);
+    }
+  };
+
+  // ── Copy invite link to clipboard ──
+  const handleCopyInviteLink = (url) => {
+    navigator.clipboard.writeText(url).then(() => {
+      showMsg('success', 'Invite link copied to clipboard');
+    });
+  };
+
+  // ── Create user with password (existing flow) ──
   const handleCreate = async () => {
     if (!createForm.tenant_id || !createForm.email || !createForm.name || !createForm.password) {
       showMsg('error', 'All fields are required'); return;
@@ -64,6 +95,32 @@ export default function AdminUsersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       showMsg('success', `User ${data.user.email} created in ${data.tenant}`);
+      setShowCreate(false);
+      setCreateForm({ tenant_id: '', email: '', name: '', role: 'viewer', password: '' });
+      fetchUsers();
+    } catch (err) { showMsg('error', err.message); }
+  };
+
+  // ── Create user + send invite (no password needed) ──
+  const handleCreateAndInvite = async () => {
+    if (!createForm.tenant_id || !createForm.email || !createForm.name) {
+      showMsg('error', 'Tenant, name, and email are required'); return;
+    }
+    try {
+      const res = await fetch('/api/admin/users/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: createForm.email,
+          name: createForm.name,
+          role: createForm.role,
+          tenantId: createForm.tenant_id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      showMsg('success', `User created and invite sent to ${createForm.email}`);
+      setInviteResult({ userId: data.userId, url: data.inviteUrl });
       setShowCreate(false);
       setCreateForm({ tenant_id: '', email: '', name: '', role: 'viewer', password: '' });
       fetchUsers();
@@ -116,6 +173,17 @@ export default function AdminUsersPage() {
       </div>
 
       {message.text && <div className={`adm-msg adm-msg-${message.type}`}>{message.text}</div>}
+
+      {/* Invite link result banner */}
+      {inviteResult && (
+        <div className="adm-invite-banner">
+          <CheckCircle size={14} />
+          <span>Invite sent. Link (expires 48h):</span>
+          <code className="adm-invite-url">{inviteResult.url}</code>
+          <button onClick={() => handleCopyInviteLink(inviteResult.url)} className="adm-invite-copy" title="Copy link"><Copy size={14} /></button>
+          <button onClick={() => setInviteResult(null)} className="adm-invite-dismiss"><X size={14} /></button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="adm-filters">
@@ -180,6 +248,9 @@ export default function AdminUsersPage() {
                   </td>
                   <td>
                     <div className="adm-actions">
+                      <button onClick={() => handleInvite(u.id)} title="Send invite email" className={`adm-action-btn ${inviting === u.id ? 'adm-action-btn--loading' : ''}`} disabled={inviting === u.id}>
+                        <Mail size={14} />
+                      </button>
                       <button onClick={() => setEditingId(u.id)} title="Change role" className="adm-action-btn"><Shield size={14} /></button>
                       <button onClick={() => { setResetId(u.id); setNewPassword(''); }} title="Reset password" className="adm-action-btn"><Key size={14} /></button>
                       <button onClick={() => handleToggleActive(u.id, u.is_active)} title={u.is_active ? 'Deactivate' : 'Reactivate'} className="adm-action-btn">
@@ -209,7 +280,7 @@ export default function AdminUsersPage() {
         </div>
       )}
 
-      {/* Create User Modal */}
+      {/* Create User Modal — now with "Create & Send Invite" option */}
       {showCreate && (
         <div className="adm-modal-bg" onClick={() => setShowCreate(false)}>
           <div className="adm-modal" onClick={e => e.stopPropagation()}>
@@ -236,14 +307,27 @@ export default function AdminUsersPage() {
                   {Object.entries(ROLE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </select>
               </div>
+
+              {/* Divider */}
+              <div className="adm-create-divider">
+                <span className="adm-create-divider-line" />
+                <span className="adm-create-divider-text">choose one</span>
+                <span className="adm-create-divider-line" />
+              </div>
+
               <div className="adm-form-field">
-                <label>Password</label>
-                <input type="text" value={createForm.password} onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))} placeholder="Temporary password" className="adm-modal-input" />
+                <label>Password <span className="adm-optional">(optional if sending invite)</span></label>
+                <input type="text" value={createForm.password} onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))} placeholder="Set a temporary password" className="adm-modal-input" />
               </div>
             </div>
             <div className="adm-modal-actions">
               <button onClick={() => setShowCreate(false)} className="adm-btn-secondary">Cancel</button>
-              <button onClick={handleCreate} className="adm-btn-primary">Create User</button>
+              <button onClick={handleCreateAndInvite} className="adm-btn-invite" disabled={!createForm.tenant_id || !createForm.email || !createForm.name}>
+                <Mail size={14} /> Create & Send Invite
+              </button>
+              <button onClick={handleCreate} className="adm-btn-primary" disabled={!createForm.password}>
+                Create with Password
+              </button>
             </div>
           </div>
         </div>
@@ -261,11 +345,32 @@ const css = `
   .adm-subtitle { font-size:13px; color:${V('text-muted')}; margin:0; }
 
   .adm-btn-primary { display:flex; align-items:center; gap:6px; padding:8px 16px; border-radius:8px; border:none; background:#C89700; color:#0C0C0E; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .adm-btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
   .adm-btn-secondary { padding:8px 16px; border-radius:8px; border:1px solid ${V('border')}; background:transparent; color:${V('text')}; font-size:13px; cursor:pointer; font-family:inherit; }
+  .adm-btn-invite { display:flex; align-items:center; gap:6px; padding:8px 16px; border-radius:8px; border:1px solid rgba(34,197,94,0.3); background:rgba(34,197,94,0.08); color:#22c55e; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; }
+  .adm-btn-invite:disabled { opacity:0.4; cursor:not-allowed; }
+  .adm-btn-invite:hover:not(:disabled) { background:rgba(34,197,94,0.15); }
 
   .adm-msg { padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:16px; }
   .adm-msg-success { background:rgba(29,158,117,0.08); border:1px solid rgba(29,158,117,0.2); color:#1D9E75; }
   .adm-msg-error { background:rgba(226,75,74,0.08); border:1px solid rgba(226,75,74,0.2); color:#E24B4A; }
+
+  /* Invite result banner */
+  .adm-invite-banner {
+    display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:8px;
+    background:rgba(34,197,94,0.06); border:1px solid rgba(34,197,94,0.15); color:#22c55e;
+    font-size:12px; margin-bottom:16px; flex-wrap:wrap;
+  }
+  .adm-invite-url {
+    font-family:monospace; font-size:11px; color:${V('text-muted')}; background:${V('surface-raised')};
+    padding:3px 8px; border-radius:4px; word-break:break-all; flex:1; min-width:200px;
+  }
+  .adm-invite-copy {
+    background:none; border:1px solid rgba(34,197,94,0.2); border-radius:5px;
+    color:#22c55e; cursor:pointer; padding:4px 8px; display:flex; align-items:center;
+  }
+  .adm-invite-copy:hover { background:rgba(34,197,94,0.1); }
+  .adm-invite-dismiss { background:none; border:none; color:${V('text-dim')}; cursor:pointer; padding:4px; }
 
   .adm-filters { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
   .adm-search-wrap { position:relative; flex:1; min-width:200px; }
@@ -296,11 +401,20 @@ const css = `
   .adm-actions { display:flex; gap:4px; }
   .adm-action-btn { width:28px; height:28px; border-radius:6px; border:1px solid ${V('border')}; background:transparent; color:${V('text-muted')}; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
   .adm-action-btn:hover { background:${V('surface-raised')}; color:${V('text')}; }
+  .adm-action-btn:disabled { opacity:0.4; cursor:not-allowed; }
+  .adm-action-btn--loading { animation: adm-pulse 1s ease-in-out infinite; }
+  @keyframes adm-pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 
   .adm-loading { padding:60px 0; text-align:center; font-size:13px; color:${V('text-muted')}; }
   .adm-denied { text-align:center; padding:80px 24px; }
   .adm-denied h2 { font-size:18px; font-weight:600; color:${V('text')}; margin:0 0 8px; }
   .adm-denied p { font-size:13px; color:${V('text-muted')}; margin:0; }
+
+  /* Create divider */
+  .adm-create-divider { display:flex; align-items:center; gap:10px; margin:4px 0; }
+  .adm-create-divider-line { flex:1; height:1px; background:${V('border')}; }
+  .adm-create-divider-text { font-size:10px; color:${V('text-dim')}; text-transform:uppercase; letter-spacing:0.06em; }
+  .adm-optional { font-size:10px; color:${V('text-dim')}; font-weight:400; text-transform:none; letter-spacing:0; }
 
   /* Modal */
   .adm-modal-bg { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
@@ -311,7 +425,7 @@ const css = `
   .adm-modal-desc { font-size:13px; color:${V('text-muted')}; margin:0 0 16px; }
   .adm-modal-input { width:100%; padding:9px 12px; border-radius:7px; border:1px solid ${V('border')}; background:${V('surface-raised')}; color:${V('text')}; font-size:13px; outline:none; font-family:inherit; box-sizing:border-box; }
   .adm-modal-input:focus { border-color:var(--color-vemio-amber, #C89700); }
-  .adm-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+  .adm-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; flex-wrap:wrap; }
   .adm-modal-form { display:flex; flex-direction:column; gap:14px; }
   .adm-form-field { display:flex; flex-direction:column; gap:5px; }
   .adm-form-field label { font-size:12px; font-weight:500; color:${V('text-muted')}; text-transform:uppercase; letter-spacing:0.04em; }

@@ -1,6 +1,6 @@
 /**
  * VEMIO™ — Set Password API
- * POST /api/auth/set-password
+ * POST /api/invite/set-password
  *
  * Validates an invite token and sets the user's password.
  * Token is one-time use and expires after 48 hours.

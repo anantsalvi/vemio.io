@@ -46,7 +46,7 @@ function SetPasswordForm() {
 
   useEffect(() => {
     if (!token) { setState('error'); setError('No invite token provided.'); return; }
-    fetch(`/api/auth/set-password?token=${token}`)
+    fetch(`/api/invite/set-password?token=${token}`)
       .then(r => r.json())
       .then(data => { if (data.valid) { setTokenInfo(data); setState('form'); } else { setState('error'); setError(data.error || 'Invalid or expired invite link.'); } })
       .catch(() => { setState('error'); setError('Unable to verify invite. Please try again.'); });
@@ -60,7 +60,7 @@ function SetPasswordForm() {
     e.preventDefault(); if (!canSubmit) return;
     setSubmitting(true); setError('');
     try {
-      const res = await fetch('/api/auth/set-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password }) });
+      const res = await fetch('/api/invite/set-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password }) });
       const data = await res.json();
       if (data.success) { setState('success'); setTimeout(() => router.push('/auth/login'), 3000); }
       else { setError(data.error || 'Failed to set password.'); setSubmitting(false); }

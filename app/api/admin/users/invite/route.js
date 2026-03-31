@@ -89,21 +89,30 @@ export const POST = withAuth(async (req, session) => {
     const baseUrl = process.env.NEXTAUTH_URL || 'https://vemio.vinayenterprises.co.in';
     const inviteUrl = `${baseUrl}/auth/set-password?token=${token}`;
 
-    // Send email via ACS REST API (no SDK needed)
+// Send email via ACS
     let emailSent = false;
     try {
-      const acsEndpoint = process.env.ACS_ENDPOINT || 'https://vemio-comms.india.communication.azure.com';
-      const acsAccessKey = process.env.ACS_ACCESS_KEY;
+      const connStr = process.env.ACS_CONNECTION_STRING;
       const acsSender = process.env.ACS_SENDER_ADDRESS || 'DoNotReply@vinayenterprises.co.in';
 
-      if (acsAccessKey) {
-        emailSent = await sendInviteEmail({
-          acsEndpoint, acsAccessKey, acsSender,
-          toEmail: userEmail, toName: userName,
-          inviteUrl, tenantName, brandColor,
-        });
+      if (connStr) {
+        const { EmailClient } = await import('@azure/communication-email');
+        const emailClient = new EmailClient(connStr);
+        const message = {
+          senderAddress: acsSender,
+          recipients: { to: [{ address: userEmail, displayName: userName }] },
+          content: {
+            subject: `You're invited to ${tenantName} on VEMIO`,
+            html: buildInviteEmail({ userName, inviteUrl, tenantName, brandColor }),
+            plainText: `Hi ${userName},\n\nYou've been invited to ${tenantName} on VEMIO.\nSet your password here: ${inviteUrl}\n\nThis link expires in 48 hours.`,
+          },
+        };
+        const poller = await emailClient.beginSend(message);
+        const result = await poller.pollUntilDone();
+        console.log(`[VEMIO Invite] Email sent to ${userEmail}: ${result.status}`);
+        emailSent = true;
       } else {
-        console.warn('[VEMIO Invite] ACS_ACCESS_KEY not set, skipping email');
+        console.warn('[VEMIO Invite] ACS_CONNECTION_STRING not set, skipping email');
       }
     } catch (emailErr) {
       console.error('[VEMIO Invite] Email error:', emailErr.message);

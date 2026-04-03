@@ -42,6 +42,13 @@ function timeAgo(date) {
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 }
 
+function formatUptime(seconds) {
+  if (!seconds || seconds <= 0) return null;
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m";
+  return Math.floor(seconds / 86400) + "d " + Math.floor((seconds % 86400) / 3600) + "h";
+}
+
 export default function DevicesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -284,8 +291,8 @@ export default function DevicesPage() {
                       <td className="dv-td dv-td--lg-only dv-td--muted">{device.siteName || '—'}</td>
 
                       <td className="dv-td dv-td--sm-only dv-td--dim">
-                        {device.lastSeenAt
-                          ? `${device.status === 'up' ? 'Up' : device.status === 'down' ? 'Down' : 'Idle'} ${timeAgo(new Date(device.lastSeenAt))}`
+                        {device.uptimeSeconds
+                          ? `${device.status === 'up' ? 'Up' : device.status === 'down' ? 'Down' : 'Idle'} ${formatUptime(device.uptimeSeconds)}`
                           : '—'}
                       </td>
                     </tr>

@@ -92,7 +92,7 @@ export const GET = withAuth(async (req, session) => {
     const devicesResult = await queryForTenant(target,
       `SELECT 
          d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
-         d.ip_address, d.current_status, d.last_seen_at, d.uptime_percent_30d,
+         d.ip_address, d.current_status, d.last_seen_at, d.uptime_percent_30d, d.uptime_seconds,
          d.created_at, d.is_retired,
          s.name AS site_name, s.id AS site_id
        FROM devices d
@@ -163,6 +163,7 @@ export const GET = withAuth(async (req, session) => {
         status: row.current_status,
         lastSeenAt: row.last_seen_at,
         uptime30d: row.uptime_percent_30d ? parseFloat(row.uptime_percent_30d) : null,
+        uptimeSeconds: row.uptime_seconds ? parseInt(row.uptime_seconds) : null,
         siteName: row.site_name,
         siteId: row.site_id,
         isRetired: row.is_retired,

@@ -1,54 +1,66 @@
 /**
- * VEMIO™ | Endpoints API v2
+ * VEMIO™ | Endpoints API v3
  * GET /api/endpoints
  *
- * Returns network endpoints with manufacturer data, filtering out
- * infrastructure device MACs (switches, APs, firewalls).
+ * Auvik-level endpoint accuracy:
+ * - Only counts devices with an IP address OR a real (non-random) MAC on a known port
+ * - Filters infrastructure device MACs (switches, APs, firewalls)
+ * - Filters locally-administered/randomized MACs without IPs
+ * - Classifies devices by manufacturer into types
  */
 
 import { withAuth } from '@/lib/auth';
 import { resolveTargetTenant, queryForTenant } from '@/lib/tenant';
 
+/* ── Infrastructure manufacturer filter ── */
+const INFRA_MANUFACTURERS = new Set([
+  'cisco', 'aruba', 'hpe', 'ubiquiti', 'juniper', 'fortinet', 'meraki',
+  'sophos', 'palo alto', 'sonicwall', 'watchguard', 'netgear',
+]);
+
+/* ── Check if MAC is locally administered (randomized) ── */
+function isRandomizedMac(mac) {
+  if (!mac) return false;
+  const firstByte = parseInt(mac.split(':')[0] || mac.split('-')[0], 16);
+  return !!(firstByte & 0x02);
+}
+
 /* ── Device-type classification from manufacturer ── */
-function classifyDevice(manufacturer, mac, hostname) {
+function classifyDevice(manufacturer, mac) {
   if (!manufacturer || manufacturer === 'Unknown') {
-    // Check locally administered bit
-    if (mac) {
-      const firstByte = parseInt(mac.split(':')[0] || mac.split('-')[0], 16);
-      if (firstByte & 0x02) return { type: 'virtual', icon: 'cloud', label: 'Virtual/Random' };
-    }
+    if (isRandomizedMac(mac)) return { type: 'mobile', icon: 'smartphone', label: 'Mobile (Random MAC)' };
     return { type: 'unknown', icon: 'help-circle', label: 'Unknown' };
   }
 
   const mfr = manufacturer.toLowerCase();
 
-  // Virtual / Hypervisor
   if (['microsoft', 'hyper-v', 'vmware', 'virtualbox'].some(v => mfr.includes(v)))
     return { type: 'virtual', icon: 'cloud', label: 'Virtual Machine' };
 
-  // Mobile
-  if (['samsung', 'apple', 'huawei', 'xiaomi', 'oppo', 'vivo', 'oneplus', 'motorola', 'google'].some(v => mfr.includes(v)))
+  if (['samsung', 'apple', 'huawei', 'xiaomi', 'oppo', 'vivo', 'oneplus', 'realme',
+       'motorola', 'google', 'tcl', 'beats'].some(v => mfr.includes(v)))
     return { type: 'mobile', icon: 'smartphone', label: 'Mobile/Tablet' };
 
-  // PC / Workstation
-  if (['dell', 'lenovo', 'hp', 'acer', 'asus', 'asrock', 'msi', 'gigabyte', 'intel', 'amd', 'realtek', 'qualcomm'].some(v => mfr.includes(v)))
+  if (['dell', 'lenovo', 'hp', 'acer', 'asus', 'asrock', 'msi', 'gigabyte'].some(v => mfr.includes(v)))
     return { type: 'workstation', icon: 'monitor', label: 'Workstation' };
 
-  // Printer
+  if (['intel', 'realtek', 'qualcomm', 'broadcom', 'amd'].some(v => mfr.includes(v)))
+    return { type: 'workstation', icon: 'monitor', label: 'PC/Workstation' };
+
   if (['brother', 'canon', 'epson', 'xerox', 'ricoh', 'lexmark', 'konica'].some(v => mfr.includes(v)))
     return { type: 'printer', icon: 'printer', label: 'Printer' };
 
-  // IoT
-  if (['espressif', 'raspberry', 'arduino', 'texas instruments', 'tuya', 'shelly'].some(v => mfr.includes(v)))
+  if (['hikvision', 'tvt', 'dahua', 'prama', 'axis', 'vivotek', 'aditya'].some(v => mfr.includes(v)))
+    return { type: 'camera', icon: 'camera', label: 'IP Camera' };
+
+  if (['espressif', 'raspberry', 'arduino', 'tuya', 'shelly', 'tenda', 'shenzhen'].some(v => mfr.includes(v)))
     return { type: 'iot', icon: 'cpu', label: 'IoT Device' };
 
-  // Networking (should be filtered but just in case)
-  if (['cisco', 'aruba', 'hpe', 'ubiquiti', 'netgear', 'tp-link', 'juniper', 'fortinet', 'meraki', 'sophos', 'palo alto', 'sonicwall', 'watchguard'].some(v => mfr.includes(v)))
-    return { type: 'network', icon: 'router', label: 'Network Device' };
-
-  // Media
-  if (['sonos', 'roku', 'amazon', 'ring', 'nest'].some(v => mfr.includes(v)))
+  if (['sonos', 'roku', 'amazon', 'ring', 'nest', 'chromecast'].some(v => mfr.includes(v)))
     return { type: 'media', icon: 'tv', label: 'Media Device' };
+
+  if (['arris', 'd-link', 'tp-link'].some(v => mfr.includes(v)))
+    return { type: 'network', icon: 'router', label: 'Network Device' };
 
   return { type: 'other', icon: 'box', label: manufacturer };
 }
@@ -60,11 +72,16 @@ export const GET = withAuth(async (req, session) => {
   }
 
   try {
-    // Get infrastructure device IPs + MACs to exclude
+    // Get infrastructure device IPs to exclude
     const infraResult = await queryForTenant(target,
       `SELECT ip_address, name, device_type FROM devices WHERE current_status IS NOT NULL`
     );
-    const infraIPs = new Set(infraResult.rows.map(r => r.ip_address?.replace('/32', '')).filter(Boolean));
+    const infraIPs = new Set(
+      infraResult.rows.map(r => {
+        const ip = r.ip_address ? String(r.ip_address).replace('/32', '') : null;
+        return ip;
+      }).filter(Boolean)
+    );
 
     // Get endpoints
     const result = await queryForTenant(target,
@@ -90,13 +107,23 @@ export const GET = withAuth(async (req, session) => {
     const endpoints = [];
     for (const row of result.rows) {
       const ip = row.ip_address ? String(row.ip_address).replace('/32', '') : null;
-
-      // Skip infrastructure device MACs
-      if (ip && infraIPs.has(ip)) continue;
-
       const mac = String(row.mac_address || '');
       const manufacturer = row.manufacturer || 'Unknown';
-      const classification = classifyDevice(manufacturer, mac, row.hostname);
+      const switchName = row.connected_switch_name || null;
+
+      // ── FILTER 1: Skip infrastructure device MACs (by IP match) ──
+      if (ip && infraIPs.has(ip)) continue;
+
+      // ── FILTER 2: Skip infrastructure manufacturer MACs ──
+      if (manufacturer && INFRA_MANUFACTURERS.has(manufacturer.toLowerCase())) continue;
+
+      // ── FILTER 3: Skip orphan MACs (no IP, no switch, no AP) ──
+      if (!ip && !switchName && !row.connected_ap_name) continue;
+
+      // ── FILTER 4: Skip randomized MACs without IP (transient WiFi probes) ──
+      if (isRandomizedMac(mac) && !ip) continue;
+
+      const classification = classifyDevice(manufacturer, mac);
 
       endpoints.push({
         mac,
@@ -106,12 +133,12 @@ export const GET = withAuth(async (req, session) => {
         port: row.port_index,
         portName: row.port_name,
         vlanId: row.vlan_id,
-        manufacturer: manufacturer === 'Virtual/Randomized' ? 'Randomized MAC' : manufacturer,
+        manufacturer,
         deviceType: classification.type,
         deviceIcon: classification.icon,
         deviceLabel: classification.label,
         apName: row.connected_ap_name || null,
-        switchName: row.connected_switch_name || null,
+        switchName,
         status: row.status,
         firstSeen: row.first_seen,
         lastSeen: row.last_seen,
@@ -130,8 +157,7 @@ export const GET = withAuth(async (req, session) => {
 
     for (const ep of endpoints) {
       summary.byType[ep.deviceType] = (summary.byType[ep.deviceType] || 0) + 1;
-      const mfr = ep.manufacturer === 'Unknown' ? 'Unknown' : ep.manufacturer;
-      summary.byManufacturer[mfr] = (summary.byManufacturer[mfr] || 0) + 1;
+      summary.byManufacturer[ep.manufacturer] = (summary.byManufacturer[ep.manufacturer] || 0) + 1;
     }
 
     return Response.json({ endpoints, summary });

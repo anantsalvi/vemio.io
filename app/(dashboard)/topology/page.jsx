@@ -983,21 +983,81 @@ export default function TopologyPage() {
       .attr('fill', d => getDeviceColor(d.type, d.make) + '80')
       .attr('font-weight', 500).attr('pointer-events', 'none')
       .text(d => d.make);
-    // ── Endpoint count badges ──
+    // ── Endpoint nodes + connection lines ──
     if (showEndpoints && endpointData?.byDevice) {
-      regularG.each(function(d) {
-        const info = endpointData.byDevice[d.id];
-        if (!info) return;
-        const total = (info.wired || 0) + (info.wireless || 0);
-        if (total === 0) return;
-        const g = d3.select(this);
-        const bx = d.radius + 6;
-        const by = -(d.radius * 0.3);
-        g.append("rect").attr("class","endpoint-badge").attr("x",bx-2).attr("y",by-9).attr("width",Math.max(28,total.toString().length*8+16)).attr("height",18).attr("rx",9).attr("fill","rgba(168,85,247,0.85)");
-        g.append("text").attr("class","endpoint-badge").attr("x",bx+12).attr("y",by+2).attr("text-anchor","middle").attr("font-size","9px").attr("fill","#fff").attr("font-weight","600").attr("pointer-events","none").text(total+" ep");
-        const title = total+" endpoints ("+( info.wired||0)+" wired, "+(info.wireless||0)+" wireless)";
-        g.append("title").attr("class","endpoint-badge").text(title);
-      });
+      const epLinkG = g.append('g').attr('class', 'tp-endpoint-links');
+      const epNodeG = g.append('g').attr('class', 'tp-endpoint-nodes');
+      const EP_R = 4;
+      const EP_Y_OFFSET = 65;
+      const EP_SPACING = 14;
+
+      // For each parent device, lay out its endpoints below it
+      for (const [deviceId, info] of Object.entries(endpointData.byDevice)) {
+        const parentPos = positions.get(deviceId);
+        if (!parentPos) continue;
+        const eps = info.endpoints || [];
+        if (eps.length === 0) continue;
+
+        // Sort: wired first, then wireless
+        eps.sort(function(a, b) {
+          if (a.connectionType === b.connectionType) return 0;
+          return a.connectionType === 'wired' ? -1 : 1;
+        });
+
+        // Position endpoints in a row below the parent
+        const totalWidth = (eps.length - 1) * EP_SPACING;
+        const startX = parentPos.x - totalWidth / 2;
+        const epY = parentPos.y + EP_Y_OFFSET;
+
+        for (var ei = 0; ei < eps.length; ei++) {
+          var ep = eps[ei];
+          var epX = startX + ei * EP_SPACING;
+          var isWireless = ep.connectionType === 'wireless';
+          var epColor = isWireless ? '#A855F7' : '#3B82F6';
+
+          // Connection line
+          var lineStartX = parentPos.x;
+          var lineStartY = parentPos.y + parentPos.radius;
+          epLinkG.append('path')
+            .attr('d', 'M' + lineStartX + ',' + lineStartY + ' C' + lineStartX + ',' + (lineStartY + epY) / 2 + ' ' + epX + ',' + (lineStartY + epY) / 2 + ' ' + epX + ',' + epY)
+            .attr('fill', 'none')
+            .attr('stroke', epColor)
+            .attr('stroke-width', isWireless ? 0.8 : 0.6)
+            .attr('stroke-dasharray', isWireless ? '3,3' : 'none')
+            .attr('stroke-opacity', 0.4);
+
+          // Endpoint dot
+          var epG = epNodeG.append('g')
+            .attr('transform', 'translate(' + epX + ',' + epY + ')')
+            .attr('cursor', 'pointer');
+
+          epG.append('circle')
+            .attr('r', EP_R)
+            .attr('fill', epColor + '30')
+            .attr('stroke', epColor)
+            .attr('stroke-width', 1);
+
+          // Tooltip
+          var tip = (ep.manufacturer || 'Unknown') + '\n' + (ep.mac || '') + '\n' + (ep.ip || 'No IP') + '\n' + (isWireless ? 'Wireless' + (ep.apName ? ' via ' + ep.apName : '') : 'Wired Port ' + (ep.port || '?'));
+          epG.append('title').text(tip);
+        }
+
+        // Count badge on parent
+        var wiredCount = eps.filter(function(e) { return e.connectionType === 'wired'; }).length;
+        var wirelessCount = eps.filter(function(e) { return e.connectionType === 'wireless'; }).length;
+        var badgeText = eps.length + ' ep';
+        var badgeX = parentPos.x + parentPos.radius + 8;
+        var badgeY = parentPos.y - 4;
+        epNodeG.append('rect')
+          .attr('x', badgeX - 2).attr('y', badgeY - 9)
+          .attr('width', Math.max(30, badgeText.length * 7 + 10)).attr('height', 16)
+          .attr('rx', 8).attr('fill', 'rgba(168,85,247,0.8)');
+        epNodeG.append('text')
+          .attr('x', badgeX + Math.max(30, badgeText.length * 7 + 10) / 2 - 2).attr('y', badgeY + 1)
+          .attr('text-anchor', 'middle').attr('font-size', '8px')
+          .attr('fill', '#fff').attr('font-weight', '600')
+          .attr('pointer-events', 'none').text(badgeText);
+      }
     }
 
     // ── Click handlers ──

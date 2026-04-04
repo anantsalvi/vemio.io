@@ -34,6 +34,7 @@ import {
   Users,
   Building2,
   HeartPulse,
+  Laptop,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -50,6 +51,7 @@ const NAV_STRUCTURE = [
     ],
   },
   { href: "/topology",    label: "Topology",      icon: Network },
+  { href: "/endpoints",   label: "Endpoints",     icon: Laptop },
   { href: "/tickets",     label: "Tickets & SLA", icon: Ticket },
   { href: "/sites",       label: "Sites",         icon: MapPin },
   {

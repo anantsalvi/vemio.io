@@ -539,6 +539,13 @@ export default function TopologyPage() {
   const [highlightedId, setHighlightedId]     = useState(null);
   const [expandedClusters, setExpandedClusters] = useState(new Set());
   const [cableFilter, setCableFilter]         = useState('all');
+  const [showEndpoints, setShowEndpoints]    = useState(false);
+  const [endpointData, setEndpointData]      = useState(null);
+  useEffect(() => {
+    if (showEndpoints && !endpointData) {
+      fetch("/api/topology/endpoints").then(r => r.json()).then(d => setEndpointData(d)).catch(e => console.error("Endpoint fetch:", e));
+    }
+  }, [showEndpoints]);
 
   const { category } = useDeviceCategory();
   const { selectedTenantId } = useTenantSwitcher();
@@ -976,6 +983,22 @@ export default function TopologyPage() {
       .attr('fill', d => getDeviceColor(d.type, d.make) + '80')
       .attr('font-weight', 500).attr('pointer-events', 'none')
       .text(d => d.make);
+    // ── Endpoint count badges ──
+    if (showEndpoints && endpointData?.byDevice) {
+      regularG.each(function(d) {
+        const info = endpointData.byDevice[d.id];
+        if (!info) return;
+        const total = (info.wired || 0) + (info.wireless || 0);
+        if (total === 0) return;
+        const g = d3.select(this);
+        const bx = d.radius + 6;
+        const by = -(d.radius * 0.3);
+        g.append("rect").attr("class","endpoint-badge").attr("x",bx-2).attr("y",by-9).attr("width",Math.max(28,total.toString().length*8+16)).attr("height",18).attr("rx",9).attr("fill","rgba(168,85,247,0.85)");
+        g.append("text").attr("class","endpoint-badge").attr("x",bx+12).attr("y",by+2).attr("text-anchor","middle").attr("font-size","9px").attr("fill","#fff").attr("font-weight","600").attr("pointer-events","none").text(total+" ep");
+        const title = total+" endpoints ("+( info.wired||0)+" wired, "+(info.wireless||0)+" wireless)";
+        g.append("title").attr("class","endpoint-badge").text(title);
+      });
+    }
 
     // ── Click handlers ──
     regularG.on('click', (ev, d) => {
@@ -1209,6 +1232,10 @@ export default function TopologyPage() {
             )}
             <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: 'var(--color-vemio-text-muted)' }} />
+            </button>
+            <button onClick={() => { setShowEndpoints(v => !v); if (!endpointData) fetch("/api/topology/endpoints").then(r=>r.json()).then(d=>setEndpointData(d)).catch(()=>{}); }} className="tp-refresh-btn" style={showEndpoints ? {background:"rgba(168,85,247,0.2)",borderColor:"#A855F7",color:"#A855F7"} : {}} title={showEndpoints ? "Hide Endpoints" : "Show Endpoints"}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              <span style={{fontSize:11,marginLeft:4}}>{showEndpoints ? "Hide" : "Show"} EP{endpointData?.summary?.total ? ` (${endpointData.summary.total})` : ""}</span>
             </button>
           </div>
         </motion.div>

@@ -988,10 +988,10 @@ export default function TopologyPage() {
       const epLinkG = g.append('g').attr('class', 'tp-endpoint-links');
       const epNodeG = g.append('g').attr('class', 'tp-endpoint-nodes');
       const EP_R = 4;
-      const EP_Y_OFFSET = 65;
-      const EP_SPACING = 14;
+      const EP_Y_OFFSET = 55;
+      const EP_SPACING = 12;
+      const MAX_VISIBLE = 30; // Max endpoints to draw per device
 
-      // For each parent device, lay out its endpoints below it
       for (const [deviceId, info] of Object.entries(endpointData.byDevice)) {
         const parentPos = positions.get(deviceId);
         if (!parentPos) continue;
@@ -999,67 +999,85 @@ export default function TopologyPage() {
         if (eps.length === 0) continue;
 
         // Sort: wired first, then wireless
-        eps.sort(function(a, b) {
+        eps.sort((a, b) => {
           if (a.connectionType === b.connectionType) return 0;
           return a.connectionType === 'wired' ? -1 : 1;
         });
 
-        // Position endpoints in a row below the parent
-        const totalWidth = (eps.length - 1) * EP_SPACING;
+        const visible = eps.slice(0, MAX_VISIBLE);
+        const totalWidth = (visible.length - 1) * EP_SPACING;
         const startX = parentPos.x - totalWidth / 2;
         const epY = parentPos.y + EP_Y_OFFSET;
 
-        for (var ei = 0; ei < eps.length; ei++) {
-          var ep = eps[ei];
-          var epX = startX + ei * EP_SPACING;
-          var isWireless = ep.connectionType === 'wireless';
-          var epColor = isWireless ? '#A855F7' : '#3B82F6';
+        for (let ei = 0; ei < visible.length; ei++) {
+          const ep = visible[ei];
+          const epX = startX + ei * EP_SPACING;
+          const isWireless = ep.connectionType === 'wireless';
+          const epColor = isWireless ? '#A855F7' : '#3B82F6';
 
-          // Connection line
-          var lineStartX = parentPos.x;
-          var lineStartY = parentPos.y + parentPos.radius;
+          // S-curve connection line from parent to endpoint
+          const ly = parentPos.y + parentPos.radius + 2;
+          const my = (ly + epY) / 2;
           epLinkG.append('path')
-            .attr('d', 'M' + lineStartX + ',' + lineStartY + ' C' + lineStartX + ',' + (lineStartY + epY) / 2 + ' ' + epX + ',' + (lineStartY + epY) / 2 + ' ' + epX + ',' + epY)
+            .attr('d', `M${parentPos.x},${ly} C${parentPos.x},${my} ${epX},${my} ${epX},${epY}`)
             .attr('fill', 'none')
             .attr('stroke', epColor)
             .attr('stroke-width', isWireless ? 0.8 : 0.6)
-            .attr('stroke-dasharray', isWireless ? '3,3' : 'none')
-            .attr('stroke-opacity', 0.4);
+            .attr('stroke-dasharray', isWireless ? '3,2' : 'none')
+            .attr('stroke-opacity', 0.35);
 
           // Endpoint dot
-          var epG = epNodeG.append('g')
-            .attr('transform', 'translate(' + epX + ',' + epY + ')')
+          const epGrp = epNodeG.append('g')
+            .attr('transform', `translate(${epX},${epY})`)
             .attr('cursor', 'pointer');
 
-          epG.append('circle')
+          epGrp.append('circle')
             .attr('r', EP_R)
-            .attr('fill', epColor + '30')
+            .attr('fill', epColor + '25')
             .attr('stroke', epColor)
-            .attr('stroke-width', 1);
+            .attr('stroke-width', 1)
+            .attr('stroke-opacity', 0.7);
 
-          // Tooltip
-          var tip = (ep.manufacturer || 'Unknown') + '\n' + (ep.mac || '') + '\n' + (ep.ip || 'No IP') + '\n' + (isWireless ? 'Wireless' + (ep.apName ? ' via ' + ep.apName : '') : 'Wired Port ' + (ep.port || '?'));
-          epG.append('title').text(tip);
+          // Hover tooltip
+          const tip = [
+            ep.manufacturer || 'Unknown',
+            ep.mac || '',
+            ep.ip || 'No IP',
+            isWireless ? 'Wireless' + (ep.apName ? ' via ' + ep.apName.replace(/ \(.*\)/, '') : '') : 'Wired Port ' + (ep.port || '?'),
+          ].join('\n');
+          epGrp.append('title').text(tip);
         }
 
-        // Count badge on parent
-        var wiredCount = eps.filter(function(e) { return e.connectionType === 'wired'; }).length;
-        var wirelessCount = eps.filter(function(e) { return e.connectionType === 'wireless'; }).length;
-        var badgeText = eps.length + ' ep';
-        var badgeX = parentPos.x + parentPos.radius + 8;
-        var badgeY = parentPos.y - 4;
+        // Count badge next to parent device
+        const total = eps.length;
+        const wCount = eps.filter(e => e.connectionType === 'wired').length;
+        const wlCount = eps.filter(e => e.connectionType === 'wireless').length;
+        const badgeX = parentPos.x + parentPos.radius + 6;
+        const badgeY = parentPos.y - 6;
+        const label = total + ' ep';
+        const bw = Math.max(28, label.length * 7 + 8);
+
         epNodeG.append('rect')
-          .attr('x', badgeX - 2).attr('y', badgeY - 9)
-          .attr('width', Math.max(30, badgeText.length * 7 + 10)).attr('height', 16)
-          .attr('rx', 8).attr('fill', 'rgba(168,85,247,0.8)');
+          .attr('x', badgeX).attr('y', badgeY - 7)
+          .attr('width', bw).attr('height', 14)
+          .attr('rx', 7)
+          .attr('fill', wlCount > 0 ? 'rgba(168,85,247,0.8)' : 'rgba(59,130,246,0.8)');
         epNodeG.append('text')
-          .attr('x', badgeX + Math.max(30, badgeText.length * 7 + 10) / 2 - 2).attr('y', badgeY + 1)
+          .attr('x', badgeX + bw / 2).attr('y', badgeY + 3)
           .attr('text-anchor', 'middle').attr('font-size', '8px')
           .attr('fill', '#fff').attr('font-weight', '600')
-          .attr('pointer-events', 'none').text(badgeText);
+          .attr('pointer-events', 'none').text(label);
+
+        // Overflow indicator
+        if (eps.length > MAX_VISIBLE) {
+          const overX = startX + MAX_VISIBLE * EP_SPACING;
+          epNodeG.append('text')
+            .attr('x', overX + 8).attr('y', epY + 3)
+            .attr('font-size', '8px').attr('fill', 'rgba(148,163,184,0.5)')
+            .text('+' + (eps.length - MAX_VISIBLE));
+        }
       }
     }
-
     // ── Click handlers ──
     regularG.on('click', (ev, d) => {
       ev.stopPropagation();

@@ -100,7 +100,8 @@ export const GET = withAuth(async (req, session) => {
          cpc.first_seen,
          cpc.last_seen
        FROM collector_port_clients cpc
-       WHERE cpc.last_seen > NOW() - INTERVAL '24 hours'
+       WHERE cpc.ip_address IS NOT NULL
+         AND cpc.last_seen > NOW() - INTERVAL '24 hours'
        ORDER BY cpc.last_seen DESC`
     );
 

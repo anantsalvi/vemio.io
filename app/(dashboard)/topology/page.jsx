@@ -541,16 +541,12 @@ export default function TopologyPage() {
   const [cableFilter, setCableFilter]         = useState('all');
   // Endpoints shown when category === "all" (via Network/All toggle)
   const [endpointData, setEndpointData]      = useState(null);
+  const { category } = useDeviceCategory();
   useEffect(() => {
     if (category === "all" && !endpointData) {
       fetch("/api/topology/endpoints").then(r => r.json()).then(d => setEndpointData(d)).catch(e => console.error("Endpoint fetch:", e));
     }
   }, [category]);
-
-  const { category } = useDeviceCategory();
-  const { selectedTenantId } = useTenantSwitcher();
-
-  // ── Fetch sites ──
   useEffect(() => {
     if (!selectedTenantId) return;
     fetch(`/api/sites?tenantId=${selectedTenantId}`)

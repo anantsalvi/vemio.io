@@ -1045,6 +1045,21 @@ export default function TopologyPage() {
             isWireless ? 'Wireless' + (ep.apName ? ' via ' + ep.apName.replace(/ \(.*\)/, '') : '') : 'Wired Port ' + (ep.port || '?'),
           ].join('\n');
           epGrp.append('title').text(tip);
+          epGrp.on('click', (ev) => {
+            ev.stopPropagation();
+            setSelected({
+              isEndpoint: true,
+              name: ep.hostname || ep.manufacturer || 'Endpoint',
+              mac: ep.mac,
+              ipAddress: ep.ip || null,
+              manufacturer: ep.manufacturer || 'Unknown',
+              connectionType: ep.connectionType,
+              port: ep.port,
+              apName: ep.apName,
+              switchName: ep.switchName || info.deviceName,
+              parentDeviceId: deviceId,
+            });
+          });
         }
 
         // Count badge next to parent device
@@ -1563,6 +1578,39 @@ export default function TopologyPage() {
                   </div>
                 </div>
               )}
+            </motion.div>
+          )}
+
+
+          {/* Endpoint inspector */}
+          {selected && selected.isEndpoint && (
+            <motion.div
+              key="endpoint-inspector"
+              initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 24 }} transition={{ duration: 0.25 }}
+              className="tp-inspector"
+            >
+              <div className="tp-insp-header">
+                <h3 className="tp-insp-title">{selected.name}</h3>
+                <button onClick={() => setSelected(null)} className="tp-insp-close">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="tp-insp-badges">
+                <span className="tp-insp-badge" style={{ background: selected.connectionType === "wireless" ? "rgba(168,85,247,0.15)" : "rgba(59,130,246,0.15)", color: selected.connectionType === "wireless" ? "#A855F7" : "#3B82F6" }}>
+                  {selected.connectionType === "wireless" ? "Wireless" : "Wired"}
+                </span>
+                <span className="tp-insp-badge" style={{ background: "rgba(148,163,184,0.1)", color: "rgba(148,163,184,0.8)" }}>
+                  Endpoint
+                </span>
+              </div>
+              <div className="tp-insp-fields">
+                <Field label="MAC Address" value={selected.mac} mono />
+                <Field label="IP Address" value={selected.ipAddress || "No IP"} mono />
+                <Field label="Manufacturer" value={selected.manufacturer} />
+                <Field label="Connection" value={selected.connectionType === "wireless" ? "Wireless" + (selected.apName ? " via " + selected.apName.replace(/ \(.*\)/, "") : "") : "Wired Port " + (selected.port || "?")} />
+                <Field label="Connected To" value={selected.switchName || selected.apName || "Unknown"} />
+              </div>
             </motion.div>
           )}
 

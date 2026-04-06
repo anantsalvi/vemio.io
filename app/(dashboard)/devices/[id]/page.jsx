@@ -1,3 +1,4 @@
+import React from 'react';
 // ══════════════════════════════════════════════════════════════
 // Device Detail Page — app/(dashboard)/devices/[id]/page.jsx
 //
@@ -68,6 +69,31 @@ function formatDate(dateStr) {
 }
 
 export default function DeviceDetailPage() {
+  return (
+    <DeviceDetailErrorBoundary>
+      <DeviceDetailPageInner />
+    </DeviceDetailErrorBoundary>
+  );
+}
+
+class DeviceDetailErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { this.setState({ info }); }
+  render() {
+    if (this.state.error) {
+      return React.createElement('div', {style:{padding:40,color:'#ef4444',background:'#1a1a2e',borderRadius:12,margin:20,fontFamily:'monospace',fontSize:13}},
+        React.createElement('h2', {style:{color:'#f59e0b',marginBottom:12}}, 'Device Detail Crash'),
+        React.createElement('p', null, 'Error: ' + this.state.error.message),
+        React.createElement('pre', {style:{whiteSpace:'pre-wrap',marginTop:12,color:'#94a3b8',fontSize:11}}, this.state.error.stack),
+        this.state.info ? React.createElement('pre', {style:{whiteSpace:'pre-wrap',marginTop:12,color:'#6b7280',fontSize:10}}, this.state.info.componentStack) : null
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function DeviceDetailPageInner() {
   const { id } = useParams();
   const router  = useRouter();
   const [data, setData]             = useState(null);

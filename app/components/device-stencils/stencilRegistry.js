@@ -61,6 +61,7 @@ export const VIRTUAL_INTERFACE_PATTERNS = [
 ];
 
 export function isPhysicalPort(port) {
+  if (!port) return false;
   const name = (port.name || '').trim();
   if (!name) return false;
   // Filter by interface type — only ethernet and fiber-channel are physical

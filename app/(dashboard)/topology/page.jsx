@@ -777,7 +777,9 @@ export default function TopologyPage() {
         .attr('x', 8).attr('y', y - 6)
         .attr('font-size', 9).attr('fill', 'rgba(148,163,184,0.3)')
         .attr('font-weight', 600).attr('letter-spacing', '0.06em')
-        .text(TIER_LABELS[tierIdx] || '');
+        
+        .text(({"-1":"Internet","0":"Firewalls & Routers","1":"Core / Distribution","1.5":"Secondary Core","2":"Access Switches","2.5":"Daisy-Chained Switches","3":"APs · Servers · Endpoints","4":"Peripherals"})[tk] || '')
+;
     }
 
     // ── Edges ──

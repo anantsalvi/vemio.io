@@ -542,6 +542,7 @@ export default function TopologyPage() {
   // Endpoints shown when category === "all" (via Network/All toggle)
   const [endpointData, setEndpointData]      = useState(null);
   const { category } = useDeviceCategory();
+  const { selectedTenantId } = useTenantSwitcher();
   useEffect(() => {
     if (category === "all" && !endpointData) {
       fetch("/api/topology/endpoints").then(r => r.json()).then(d => setEndpointData(d)).catch(e => console.error("Endpoint fetch:", e));

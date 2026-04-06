@@ -1,370 +1,404 @@
-"use client";
+// ════════════════════════════════════════════════════════════════════
+//  VEMIO™ | Network Endpoints
+//  app/(dashboard)/endpoints/page.jsx
+//
+//  Shows all network endpoints (PCs, phones, cameras, IoT) with
+//  connection details, manufacturer, wired/wireless status.
+// ════════════════════════════════════════════════════════════════════
+'use client';
 
-import { useState, useEffect, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
-  ArrowLeft, RefreshCw, Shield, Wifi, Server, MonitorSpeaker, Radio,
-  Network, Globe, Clock, Activity, Cpu, HardDrive, Cable, Users,
-  ChevronDown, ChevronUp, ExternalLink, Archive, RotateCcw, AlertTriangle,
-} from "lucide-react";
+  Monitor, Wifi, WifiOff, Cable, Search, RefreshCw,
+  ArrowUpDown, ChevronDown, Laptop, Smartphone,
+} from 'lucide-react';
 
-const STATUS = {
-  up:       { label: "Online",   color: "#22c55e", bg: "rgba(34,197,94,0.10)" },
-  down:     { label: "Offline",  color: "#ef4444", bg: "rgba(239,68,68,0.10)" },
-  degraded: { label: "Degraded", color: "#f59e0b", bg: "rgba(245,158,11,0.10)" },
-  unknown:  { label: "Unknown",  color: "#6b7280", bg: "rgba(107,114,128,0.10)" },
+const CONNECTION_COLORS = {
+  wired: '#3B82F6',
+  wireless: '#A855F7',
 };
 
-const TYPE_ICONS = {
-  firewall: Shield, core_switch: MonitorSpeaker, access_switch: MonitorSpeaker,
-  access_point: Wifi, router: Radio, server: Cpu, printer: HardDrive, other: Server,
-};
-
-const TYPE_COLORS = {
-  firewall: "#ef4444", core_switch: "#3b82f6", access_switch: "#06b6d4",
-  access_point: "#a855f7", router: "#f97316", server: "#6366f1",
-  printer: "#f59e0b", other: "#6b7280",
+const STATUS_COLORS = {
+  active: '#22c55e',
+  inactive: '#6b7280',
 };
 
 function timeAgo(date) {
-  if (!date) return "\u2014";
-  var s = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + "m ago";
-  if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m ago";
-  return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h ago";
+  if (!date) return 'Unknown';
+  const now = new Date();
+  const d = new Date(date);
+  const seconds = Math.floor((now - d) / 1000);
+  if (seconds < 60) return 'Just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return minutes + 'm ago';
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.floor(hours / 24);
+  return days + 'd ago';
 }
 
-function formatDate(d) {
-  if (!d) return "\u2014";
-  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-}
+export default function EndpointsPage() {
+  const [endpoints, setEndpoints] = useState([]);
+  const [summary, setSummary] = useState({ total: 0, wired: 0, wireless: 0, withIp: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filterType, setFilterType] = useState('all'); // all | wired | wireless
+  const [sortField, setSortField] = useState('lastSeen');
+  const [sortDir, setSortDir] = useState('desc');
 
-function Section({ title, subtitle, icon: Icon, iconColor, children, collapsible, defaultOpen, count }) {
-  var _a = useState(defaultOpen !== false), open = _a[0], setOpen = _a[1];
-  return (
-    <div className="dd-section">
-      <div className={"dd-section-header" + (collapsible ? " dd-section-header--click" : "")}
-        onClick={collapsible ? function() { setOpen(function(o) { return !o; }); } : undefined}>
-        <div className="dd-section-header-left">
-          {Icon && <Icon size={16} style={{ color: iconColor || "var(--color-vemio-amber)", flexShrink: 0 }} />}
-          <div>
-            <h3 className="dd-section-title">{title}{count != null ? <span className="dd-section-count">{count}</span> : null}</h3>
-            {subtitle && <p className="dd-section-sub">{subtitle}</p>}
-          </div>
-        </div>
-        {collapsible && (open
-          ? <ChevronUp size={16} style={{ color: "var(--color-vemio-text-dim)" }} />
-          : <ChevronDown size={16} style={{ color: "var(--color-vemio-text-dim)" }} />
-        )}
-      </div>
-      {(!collapsible || open) && <div className="dd-section-body">{children}</div>}
-    </div>
-  );
-}
-
-function InfoCard({ label, value, mono }) {
-  return (
-    <div className="dd-info-card">
-      <p className="dd-info-label">{label}</p>
-      <p className={"dd-info-value" + (mono ? " mono" : "")}>{value}</p>
-    </div>
-  );
-}
-
-export default function DeviceDetailPage() {
-  var _a = useParams(), id = _a.id;
-  var router = useRouter();
-  var _b = useState(null), data = _b[0], setData = _b[1];
-  var _c = useState(30), days = _c[0], setDays = _c[1];
-  var _d = useState(true), loading = _d[0], setLoading = _d[1];
-  var _e = useState(null), error = _e[0], setError = _e[1];
-  var _f = useState(""), epSearch = _f[0], setEpSearch = _f[1];
-
-  useEffect(function() {
-    var cancelled = false;
+  async function fetchEndpoints() {
     setLoading(true);
     setError(null);
-    fetch("/api/devices/" + id + "/detail?days=" + days)
-      .then(function(res) {
-        if (res.status === 404) { router.push("/devices"); return null; }
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.json();
-      })
-      .then(function(json) { if (!cancelled && json) setData(json); })
-      .catch(function(err) { if (!cancelled) setError(err.message); })
-      .finally(function() { if (!cancelled) setLoading(false); });
-    return function() { cancelled = true; };
-  }, [id, days, router]);
+    try {
+      const res = await fetch('/api/endpoints');
+      if (!res.ok) throw new Error('Failed to fetch');
+      const data = await res.json();
+      setEndpoints(data.endpoints || []);
+      setSummary(data.summary || { total: 0, wired: 0, wireless: 0, withIp: 0 });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  var device = data ? data.device : null;
-  var neighbors = data ? (data.neighbors || []) : [];
-  var interfaces = data ? (data.interfaces || []) : [];
-  var endpoints = data ? (data.endpoints || []) : [];
-  var uptime = data ? data.uptime : null;
-  var history = data ? (data.history || []) : [];
-  var st = device ? (STATUS[device.status] || STATUS.unknown) : null;
-  var TypeIcon = device ? (TYPE_ICONS[device.type] || Server) : Server;
-  var typeColor = device ? (TYPE_COLORS[device.type] || "#6b7280") : "#6b7280";
+  useEffect(() => { fetchEndpoints(); }, []);
 
-  var filteredEps = useMemo(function() {
-    if (!epSearch.trim()) return endpoints;
-    var q = epSearch.toLowerCase();
-    return endpoints.filter(function(e) {
-      return (e.mac && e.mac.toLowerCase().indexOf(q) >= 0) ||
-             (e.ip && e.ip.indexOf(q) >= 0) ||
-             (e.manufacturer && e.manufacturer.toLowerCase().indexOf(q) >= 0);
+  const filtered = useMemo(() => {
+    let list = endpoints;
+
+    if (filterType !== 'all') {
+      list = list.filter(e => e.connectionType === filterType);
+    }
+
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(e =>
+        (e.mac && e.mac.toLowerCase().includes(q)) ||
+        (e.ip && e.ip.includes(q)) ||
+        (e.manufacturer && e.manufacturer.toLowerCase().includes(q)) ||
+        (e.hostname && e.hostname.toLowerCase().includes(q)) ||
+        (e.switchName && e.switchName.toLowerCase().includes(q)) ||
+        (e.apName && e.apName.toLowerCase().includes(q))
+      );
+    }
+
+    list = [...list].sort((a, b) => {
+      let va = a[sortField] || '';
+      let vb = b[sortField] || '';
+      if (sortField === 'lastSeen' || sortField === 'firstSeen') {
+        va = new Date(va || 0).getTime();
+        vb = new Date(vb || 0).getTime();
+      }
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
     });
-  }, [endpoints, epSearch]);
 
-  if (loading && !data) {
-    return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300 }}>
-      <RefreshCw size={24} style={{ color: "var(--color-vemio-amber)", animation: "spin 1s linear infinite" }} />
-    </div>;
+    return list;
+  }, [endpoints, filterType, search, sortField, sortDir]);
+
+  function toggleSort(field) {
+    if (sortField === field) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
   }
 
-  if (error && !data) {
-    return <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: "var(--color-vemio-text-dim)", fontSize: 13 }}>
-      <AlertTriangle size={28} style={{ color: "#ef4444" }} />
-      <p>Failed to load device: {error}</p>
-    </div>;
+  function SortHeader({ field, label }) {
+    const active = sortField === field;
+    return (
+      <th
+        onClick={() => toggleSort(field)}
+        className="cursor-pointer select-none group"
+        style={{
+          padding: '10px 12px', textAlign: 'left', fontSize: '11px',
+          fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+          color: active ? 'var(--color-vemio-text)' : 'var(--color-vemio-text-muted)',
+          borderBottom: '1px solid var(--color-vemio-border)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {label}
+          <ArrowUpDown size={12} style={{
+            opacity: active ? 1 : 0.3,
+            transform: active && sortDir === 'desc' ? 'scaleY(-1)' : 'none',
+          }} />
+        </span>
+      </th>
+    );
   }
-
-  if (!device) return null;
 
   return (
-    <>
-      <div className="dd-root">
-        <div className="dd-header">
-          <button onClick={function() { router.push("/devices"); }} className="dd-back" aria-label="Back">
-            <ArrowLeft size={16} />
-          </button>
-          <div className="dd-header-body">
-            <div className="dd-name-row">
-              <div className="dd-type-icon" style={{ background: typeColor + "18", color: typeColor }}>
-                <TypeIcon size={18} />
+    <div style={{ padding: '24px', maxWidth: 1400, margin: '0 auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-vemio-text)', margin: 0 }}>
+            Network Endpoints
+          </h1>
+          <p style={{ fontSize: 13, color: 'var(--color-vemio-text-muted)', marginTop: 4 }}>
+            All devices connected to your network — PCs, phones, IoT, cameras
+          </p>
+        </div>
+        <button
+          onClick={fetchEndpoints}
+          disabled={loading}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '8px 16px', borderRadius: 8,
+            background: 'var(--color-vemio-surface)',
+            border: '1px solid var(--color-vemio-border)',
+            color: 'var(--color-vemio-text)', cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+        {[
+          { label: 'Total Endpoints', value: summary.total, icon: Monitor, color: '#3B82F6' },
+          { label: 'Wired', value: summary.wired, icon: Cable, color: '#22c55e' },
+          { label: 'Wireless', value: summary.wireless, icon: Wifi, color: '#A855F7' },
+          { label: 'With IP', value: summary.withIp, icon: Laptop, color: '#F59E0B' },
+        ].map((card, i) => (
+          <motion.div
+            key={card.label}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+            style={{
+              padding: 20, borderRadius: 12,
+              background: 'var(--color-vemio-surface)',
+              border: '1px solid var(--color-vemio-border)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--color-vemio-text-muted)', marginBottom: 4 }}>
+                  {card.label}
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-vemio-text)' }}>
+                  {loading ? '—' : card.value}
+                </div>
               </div>
-              <h1 className="dd-name">{device.name}</h1>
-              {device.isRetired && <span className="dd-retired-tag">Retired</span>}
+              <card.icon size={24} style={{ color: card.color, opacity: 0.7 }} />
             </div>
-            <div className="dd-badges">
-              <span className="dd-badge" style={{ background: st.bg, color: st.color }}>
-                <span className="dd-dot" style={{ background: st.color }} />
-                {st.label}
-              </span>
-              <span className="dd-badge dd-badge--type">{(device.type || "").replace(/_/g, " ")}</span>
-              {device.make && <span className="dd-badge dd-badge--muted">{device.make}</span>}
-              {device.model && <span className="dd-badge dd-badge--muted">{device.model}</span>}
-              {device.siteName && <span className="dd-badge dd-badge--muted">{device.siteName}</span>}
-            </div>
-          </div>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+        flexWrap: 'wrap',
+      }}>
+        {/* Search */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', borderRadius: 8, flex: '1 1 300px',
+          background: 'var(--color-vemio-surface)',
+          border: '1px solid var(--color-vemio-border)',
+        }}>
+          <Search size={14} style={{ color: 'var(--color-vemio-text-muted)' }} />
+          <input
+            type="text"
+            placeholder="Search MAC, IP, manufacturer, hostname..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{
+              border: 'none', outline: 'none', background: 'transparent',
+              color: 'var(--color-vemio-text)', fontSize: 13, width: '100%',
+            }}
+          />
         </div>
 
-        {device.description && (
-          <div className="dd-desc">
-            <span className="dd-desc-label">System Description</span>
-            <span className="dd-desc-text">{device.description}</span>
+        {/* Type filter */}
+        {['all', 'wired', 'wireless'].map(type => (
+          <button
+            key={type}
+            onClick={() => setFilterType(type)}
+            style={{
+              padding: '8px 16px', borderRadius: 8, fontSize: 13,
+              border: '1px solid',
+              borderColor: filterType === type ? (type === 'wireless' ? '#A855F7' : type === 'wired' ? '#3B82F6' : 'var(--color-vemio-accent)') : 'var(--color-vemio-border)',
+              background: filterType === type ? (type === 'wireless' ? 'rgba(168,85,247,0.15)' : type === 'wired' ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.1)') : 'var(--color-vemio-surface)',
+              color: filterType === type ? 'var(--color-vemio-text)' : 'var(--color-vemio-text-muted)',
+              cursor: 'pointer', textTransform: 'capitalize',
+              fontWeight: filterType === type ? 600 : 400,
+            }}
+          >
+            {type === 'all' ? `All (${summary.total})` : type === 'wired' ? `Wired (${summary.wired})` : `Wireless (${summary.wireless})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{
+        borderRadius: 12, overflow: 'hidden',
+        border: '1px solid var(--color-vemio-border)',
+        background: 'var(--color-vemio-surface)',
+      }}>
+        {error ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#ef4444' }}>
+            Failed to load endpoints: {error}
           </div>
-        )}
-
-        <div className="dd-grid">
-          <InfoCard label="IP Address" value={device.ipAddress || "\u2014"} mono />
-          <InfoCard label="Last Seen" value={device.lastSeenAt ? timeAgo(device.lastSeenAt) : "\u2014"} />
-          <InfoCard label="SNMP Uptime" value={device.uptimeFormatted || "\u2014"} />
-          <InfoCard label="Serial Number" value={device.serialNumber || "\u2014"} mono />
-          <InfoCard label="Firmware" value={device.firmwareVersion || "\u2014"} mono />
-          <InfoCard label="First Discovered" value={formatDate(device.createdAt)} />
-        </div>
-
-        <Section title="Availability" subtitle={(uptime ? uptime.totalEvents : 0) + " events in " + days + "d"} icon={Activity} iconColor="#14b8a6">
-          <div className="dd-uptime-row">
-            <div className="dd-uptime-pct" style={{ color: (uptime && uptime.percent != null ? uptime.percent : 0) >= 99 ? "#22c55e" : (uptime && uptime.percent != null ? uptime.percent : 0) >= 95 ? "#f59e0b" : "#ef4444" }}>
-              {uptime && uptime.percent != null ? uptime.percent + "%" : "\u2014"}
-            </div>
-            <div className="dd-range-btns">
-              {[7, 30, 90].map(function(d) {
-                return <button key={d} onClick={function() { setDays(d); }}
-                  className={"dd-range-btn" + (days === d ? " dd-range-btn--active" : "")}>{d}d</button>;
-              })}
-            </div>
+        ) : loading ? (
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--color-vemio-text-muted)' }}>
+            Loading endpoints...
           </div>
-          {history.length > 0 && (
-            <div className="dd-timeline">
-              {history.map(function(h, i) {
-                var cfg = STATUS[h.status] || STATUS.unknown;
-                return (
-                  <div key={i} className="dd-timeline-item">
-                    <span className="dd-timeline-dot" style={{ background: cfg.color }} />
-                    <span className="dd-timeline-status" style={{ color: cfg.color }}>{cfg.label}</span>
-                    <span className="dd-timeline-time">{new Date(h.changedAt).toLocaleString("en-IN")}</span>
-                    <span className="dd-timeline-source">{h.source}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Section>
+        ) : filtered.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--color-vemio-text-muted)' }}>
+            No endpoints found
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'rgba(0,0,0,0.2)' }}>
+                  <SortHeader field="connectionType" label="Type" />
+                  <SortHeader field="mac" label="MAC Address" />
+                  <SortHeader field="ip" label="IP Address" />
+                  <SortHeader field="manufacturer" label="Manufacturer" />
+                  <th style={{
+                    padding: '10px 12px', textAlign: 'left', fontSize: '11px',
+                    fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em',
+                    color: 'var(--color-vemio-text-muted)',
+                    borderBottom: '1px solid var(--color-vemio-border)',
+                  }}>
+                    Connected To
+                  </th>
+                  <SortHeader field="port" label="Port" />
+                  <SortHeader field="vlanId" label="VLAN" />
+                  <SortHeader field="lastSeen" label="Last Seen" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((ep, i) => (
+                  <motion.tr
+                    key={ep.mac}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: Math.min(i * 0.01, 0.5) }}
+                    style={{
+                      borderBottom: '1px solid var(--color-vemio-border)',
+                      cursor: 'default',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    {/* Type */}
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+                        background: ep.connectionType === 'wireless'
+                          ? 'rgba(168,85,247,0.15)' : 'rgba(59,130,246,0.15)',
+                        color: ep.connectionType === 'wireless' ? '#A855F7' : '#3B82F6',
+                      }}>
+                        {ep.connectionType === 'wireless'
+                          ? <Wifi size={11} />
+                          : <Cable size={11} />}
+                        {ep.connectionType}
+                      </span>
+                    </td>
 
-        {interfaces.length > 0 && (
-          <Section title="IP Interfaces" icon={Globe} iconColor="#3b82f6" count={interfaces.length} collapsible defaultOpen={interfaces.length > 1}>
-            <div className="dd-iface-list">
-              {interfaces.map(function(iface, i) {
-                return (
-                  <div key={i} className={"dd-iface-row" + (iface.isPrimary ? " dd-iface-row--primary" : "")}>
-                    <span className="dd-iface-ip">{iface.ipAddress}</span>
-                    <div className="dd-iface-tags">
-                      {iface.isPrimary && <span className="dd-tag dd-tag--amber">Primary</span>}
-                      {iface.interfaceName && <span className="dd-tag">{iface.interfaceName}</span>}
-                      {iface.vlanId && <span className="dd-tag">VLAN {iface.vlanId}</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Section>
-        )}
+                    {/* MAC */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 13,
+                      color: 'var(--color-vemio-text)',
+                      fontFamily: 'monospace',
+                    }}>
+                      {ep.mac}
+                    </td>
 
-        {neighbors.length > 0 && (
-          <Section title="Connected Devices" icon={Network} iconColor="#3b82f6" count={neighbors.length}>
-            <div className="dd-neighbor-list">
-              {neighbors.map(function(n, i) {
-                var nst = STATUS[n.status] || STATUS.unknown;
-                return (
-                  <button key={i} className="dd-neighbor-item"
-                    onClick={function() { if (n.deviceId) router.push("/devices/" + n.deviceId); }}>
-                    <span className="dd-neighbor-dot" style={{ background: nst.color }} />
-                    <div className="dd-neighbor-info">
-                      <span className="dd-neighbor-name">{n.name}</span>
-                      <div className="dd-neighbor-meta">
-                        {n.ipAddress && <span className="dd-neighbor-ip">{n.ipAddress}</span>}
-                        {n.type && <span className="dd-tag">{n.type.replace(/_/g, " ")}</span>}
-                        {n.method && <span className="dd-tag dd-tag--method">{n.method}</span>}
+                    {/* IP */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 13,
+                      color: ep.ip ? 'var(--color-vemio-text)' : 'var(--color-vemio-text-muted)',
+                      fontFamily: ep.ip ? 'monospace' : 'inherit',
+                    }}>
+                      {ep.ip || '—'}
+                    </td>
+
+                    {/* Manufacturer */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 13,
+                      color: ep.manufacturer !== 'Unknown' ? 'var(--color-vemio-text)' : 'var(--color-vemio-text-muted)',
+                    }}>
+                      {ep.manufacturer}
+                    </td>
+
+                    {/* Connected To */}
+                    <td style={{ padding: '10px 12px', fontSize: 13 }}>
+                      <div style={{ color: 'var(--color-vemio-text)' }}>
+                        {ep.connectionType === 'wireless' && ep.apName ? (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Wifi size={12} style={{ color: '#A855F7' }} />
+                            {ep.apName}
+                          </span>
+                        ) : ep.switchName ? (
+                          <span>{ep.switchName}</span>
+                        ) : '—'}
                       </div>
-                      {(n.localInterface || n.remoteInterface) && (
-                        <div className="dd-neighbor-ports">
-                          {n.localInterface && <span className="dd-tag">{n.localInterface}</span>}
-                          {n.localInterface && n.remoteInterface && <span style={{ color: "var(--color-vemio-text-dim)", fontSize: 10 }}>{"\u2194"}</span>}
-                          {n.remoteInterface && <span className="dd-tag">{n.remoteInterface}</span>}
+                      {ep.switchName && ep.connectionType === 'wireless' && (
+                        <div style={{ fontSize: 11, color: 'var(--color-vemio-text-muted)', marginTop: 2 }}>
+                          via {ep.switchName}
                         </div>
                       )}
-                    </div>
-                    {n.deviceId && <ExternalLink size={12} style={{ opacity: 0.3, flexShrink: 0 }} />}
-                  </button>
-                );
-              })}
-            </div>
-          </Section>
-        )}
+                    </td>
 
-        {endpoints.length > 0 && (
-          <Section title="Connected Endpoints" icon={Users} iconColor="#a855f7" count={endpoints.length} collapsible defaultOpen={true}>
-            <div className="dd-ep-search-wrap">
-              <input type="text" placeholder="Search MAC, IP, manufacturer\u2026" value={epSearch}
-                onChange={function(e) { setEpSearch(e.target.value); }} className="dd-ep-search" />
-            </div>
-            <div className="dd-ep-table-wrap">
-              <table className="dd-ep-table">
-                <thead><tr><th>MAC</th><th>IP</th><th>Manufacturer</th><th>Type</th><th>Port</th><th>Last Seen</th></tr></thead>
-                <tbody>
-                  {filteredEps.slice(0, 50).map(function(ep, i) {
-                    return (
-                      <tr key={i}>
-                        <td className="mono">{ep.mac}</td>
-                        <td className="mono">{ep.ip || "\u2014"}</td>
-                        <td>{ep.manufacturer || "\u2014"}</td>
-                        <td><span className={"dd-conn-badge dd-conn-badge--" + (ep.connectionType || "wired")}>{ep.connectionType || "\u2014"}</span></td>
-                        <td className="mono">{ep.port || "\u2014"}</td>
-                        <td>{ep.lastSeen ? timeAgo(ep.lastSeen) : "\u2014"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {filteredEps.length > 50 && <p className="dd-ep-more">Showing 50 of {filteredEps.length}</p>}
-            </div>
-          </Section>
+                    {/* Port */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 13,
+                      color: 'var(--color-vemio-text-muted)',
+                    }}>
+                      {ep.port || '—'}
+                    </td>
+
+                    {/* VLAN */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 13,
+                      color: 'var(--color-vemio-text-muted)',
+                    }}>
+                      {ep.vlanId || '—'}
+                    </td>
+
+                    {/* Last Seen */}
+                    <td style={{
+                      padding: '10px 12px', fontSize: 12,
+                      color: 'var(--color-vemio-text-muted)',
+                    }}>
+                      {timeAgo(ep.lastSeen)}
+                    </td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .dd-root { display: flex; flex-direction: column; gap: 16px; max-width: 1200px; }
-        .dd-header { display: flex; align-items: flex-start; gap: 12px; }
-        .dd-back { padding: 8px; border-radius: 8px; border: 1px solid var(--color-vemio-border); background: var(--color-vemio-surface); cursor: pointer; display: flex; color: var(--color-vemio-text-muted); flex-shrink: 0; margin-top: 2px; }
-        .dd-back:hover { background: var(--color-vemio-surface-raised); }
-        .dd-header-body { min-width: 0; flex: 1; }
-        .dd-name-row { display: flex; align-items: center; gap: 10px; }
-        .dd-type-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .dd-name { font-size: 18px; font-weight: 700; color: var(--color-vemio-text, #e2e8f0); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .dd-retired-tag { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; border-radius: 4px; background: rgba(107,114,128,0.15); color: var(--color-vemio-text-dim); }
-        .dd-badges { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-        .dd-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: capitalize; }
-        .dd-badge--type { background: var(--color-vemio-surface-raised, rgba(255,255,255,0.05)); color: var(--color-vemio-text-muted); }
-        .dd-badge--muted { background: transparent; color: var(--color-vemio-text-dim); font-weight: 500; }
-        .dd-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-        .dd-desc { padding: 12px 16px; border-radius: 10px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); display: flex; flex-direction: column; gap: 4px; }
-        .dd-desc-label { font-size: 9px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
-        .dd-desc-text { font-size: 12px; color: var(--color-vemio-text-muted); font-family: monospace; line-height: 1.5; word-break: break-all; }
-        .dd-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-        @media (max-width: 767px) { .dd-grid { grid-template-columns: repeat(2, 1fr); } }
-        .dd-info-card { padding: 14px; border-radius: 10px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); }
-        .dd-info-label { font-size: 9px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; margin: 0; font-weight: 600; }
-        .dd-info-value { font-size: 14px; font-weight: 600; color: var(--color-vemio-text, #e2e8f0); margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .dd-info-value.mono { font-family: monospace; font-size: 13px; }
-        .dd-section { border-radius: 14px; background: var(--color-vemio-surface); border: 1px solid var(--color-vemio-border); overflow: hidden; }
-        .dd-section-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; }
-        .dd-section-header--click { cursor: pointer; transition: background 0.12s; }
-        .dd-section-header--click:hover { background: rgba(255,255,255,0.02); }
-        .dd-section-header-left { display: flex; align-items: flex-start; gap: 10px; }
-        .dd-section-title { font-size: 13px; font-weight: 600; color: var(--color-vemio-text, #e2e8f0); margin: 0; display: flex; align-items: center; gap: 6px; }
-        .dd-section-count { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; background: rgba(148,163,184,0.1); color: var(--color-vemio-text-dim); }
-        .dd-section-sub { font-size: 11px; color: var(--color-vemio-text-dim); margin: 2px 0 0; }
-        .dd-section-body { padding: 0 18px 16px; }
-        .dd-uptime-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-        .dd-uptime-pct { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
-        .dd-range-btns { display: flex; gap: 2px; }
-        .dd-range-btn { padding: 5px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; border: none; background: transparent; color: var(--color-vemio-text-dim); transition: all 0.12s; font-family: inherit; }
-        .dd-range-btn--active { background: rgba(245,158,11,0.1); color: var(--color-vemio-amber, #f59e0b); font-weight: 600; }
-        .dd-timeline { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
-        .dd-timeline-item { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; transition: background 0.1s; }
-        .dd-timeline-item:hover { background: rgba(255,255,255,0.02); }
-        .dd-timeline-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-        .dd-timeline-status { font-size: 12px; font-weight: 500; min-width: 56px; }
-        .dd-timeline-time { font-size: 11px; font-family: monospace; color: var(--color-vemio-text-dim); margin-left: auto; }
-        .dd-timeline-source { font-size: 9px; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
-        .dd-iface-list { display: flex; flex-direction: column; gap: 4px; }
-        .dd-iface-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; gap: 10px; }
-        .dd-iface-row:hover { background: rgba(255,255,255,0.02); }
-        .dd-iface-row--primary { background: rgba(245,158,11,0.03); }
-        .dd-iface-ip { font-family: monospace; font-size: 12px; color: var(--color-vemio-text, #e2e8f0); font-weight: 500; }
-        .dd-iface-tags { display: flex; gap: 4px; flex-wrap: wrap; }
-        .dd-tag { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 6px; border-radius: 4px; background: rgba(148,163,184,0.08); color: var(--color-vemio-text-dim); }
-        .dd-tag--amber { background: rgba(245,158,11,0.12); color: var(--color-vemio-amber, #f59e0b); }
-        .dd-tag--method { background: rgba(6,182,212,0.1); color: #06b6d4; }
-        .dd-neighbor-list { display: flex; flex-direction: column; gap: 2px; }
-        .dd-neighbor-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 8px; border: none; background: transparent; text-align: left; color: inherit; font-family: inherit; cursor: pointer; width: 100%; transition: background 0.12s; }
-        .dd-neighbor-item:hover { background: rgba(255,255,255,0.03); }
-        .dd-neighbor-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
-        .dd-neighbor-info { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-        .dd-neighbor-name { font-size: 13px; font-weight: 500; color: var(--color-vemio-text, #e2e8f0); }
-        .dd-neighbor-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-        .dd-neighbor-ip { font-size: 11px; font-family: monospace; color: var(--color-vemio-text-muted); }
-        .dd-neighbor-ports { display: flex; align-items: center; gap: 3px; }
-        .dd-ep-search-wrap { margin-bottom: 10px; }
-        .dd-ep-search { width: 100%; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: var(--color-vemio-bg); border: 1px solid var(--color-vemio-border); color: var(--color-vemio-text, #e2e8f0); outline: none; font-family: inherit; }
-        .dd-ep-search::placeholder { color: rgba(148,163,184,0.4); }
-        .dd-ep-search:focus { border-color: rgba(168,85,247,0.3); }
-        .dd-ep-table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--color-vemio-border); }
-        .dd-ep-table { width: 100%; border-collapse: collapse; min-width: 600px; }
-        .dd-ep-table th { padding: 8px 12px; text-align: left; font-size: 9px; font-weight: 600; color: var(--color-vemio-text-dim); text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid var(--color-vemio-border); }
-        .dd-ep-table td { padding: 7px 12px; font-size: 12px; color: var(--color-vemio-text-muted); border-bottom: 1px solid rgba(255,255,255,0.02); }
-        .dd-ep-table tr:hover td { background: rgba(255,255,255,0.02); }
-        .dd-ep-table .mono { font-family: monospace; font-size: 11px; }
-        .dd-conn-badge { font-size: 9px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
-        .dd-conn-badge--wired { background: rgba(59,130,246,0.1); color: #3b82f6; }
-        .dd-conn-badge--wireless { background: rgba(168,85,247,0.1); color: #a855f7; }
-        .dd-ep-more { font-size: 11px; color: var(--color-vemio-text-dim); text-align: center; padding: 8px; margin: 0; }
-      `}</style>
-    </>
+      {/* Footer */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginTop: 12, fontSize: 12, color: 'var(--color-vemio-text-muted)',
+      }}>
+        <span>Showing {filtered.length} of {endpoints.length} endpoints</span>
+        <span>Last updated: {loading ? '...' : 'just now'}</span>
+      </div>
+    </div>
   );
 }
+

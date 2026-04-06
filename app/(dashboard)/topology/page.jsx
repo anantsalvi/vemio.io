@@ -1481,7 +1481,7 @@ export default function TopologyPage() {
         {/* ═══════════ INSPECTOR PANEL ═══════════ */}
         <AnimatePresence>
           {/* Regular device inspector */}
-          {selected && !selected.isCluster && !selected.isInternet && (
+          {selected && !selected.isCluster && !selected.isInternet && !selected.isEndpoint && (
             <motion.div
               key="inspector"
               initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }}

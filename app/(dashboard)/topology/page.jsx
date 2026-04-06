@@ -539,13 +539,13 @@ export default function TopologyPage() {
   const [highlightedId, setHighlightedId]     = useState(null);
   const [expandedClusters, setExpandedClusters] = useState(new Set());
   const [cableFilter, setCableFilter]         = useState('all');
-  const [showEndpoints, setShowEndpoints]    = useState(false);
+  // Endpoints shown when category === "all" (via Network/All toggle)
   const [endpointData, setEndpointData]      = useState(null);
   useEffect(() => {
-    if (showEndpoints && !endpointData) {
+    if (category === "all" && !endpointData) {
       fetch("/api/topology/endpoints").then(r => r.json()).then(d => setEndpointData(d)).catch(e => console.error("Endpoint fetch:", e));
     }
-  }, [showEndpoints]);
+  }, [category]);
 
   const { category } = useDeviceCategory();
   const { selectedTenantId } = useTenantSwitcher();
@@ -984,7 +984,7 @@ export default function TopologyPage() {
       .attr('font-weight', 500).attr('pointer-events', 'none')
       .text(d => d.make);
     // ── Endpoint nodes + connection lines ──
-    if (showEndpoints && endpointData?.byDevice) {
+    if (category === "all" && endpointData?.byDevice) {
       const epLinkG = g.append('g').attr('class', 'tp-endpoint-links');
       const epNodeG = g.append('g').attr('class', 'tp-endpoint-nodes');
       const EP_R = 4;
@@ -1310,10 +1310,6 @@ export default function TopologyPage() {
             )}
             <button onClick={fetchTopology} className="tp-refresh-btn" aria-label="Refresh">
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} style={{ color: 'var(--color-vemio-text-muted)' }} />
-            </button>
-            <button onClick={() => { setShowEndpoints(v => !v); if (!endpointData) fetch("/api/topology/endpoints").then(r=>r.json()).then(d=>setEndpointData(d)).catch(()=>{}); }} className="tp-refresh-btn" style={showEndpoints ? {background:"rgba(168,85,247,0.2)",borderColor:"#A855F7",color:"#A855F7"} : {}} title={showEndpoints ? "Hide Endpoints" : "Show Endpoints"}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-              <span style={{fontSize:11,marginLeft:4}}>{showEndpoints ? "Hide" : "Show"} EP{endpointData?.summary?.total ? ` (${endpointData.summary.total})` : ""}</span>
             </button>
           </div>
         </motion.div>

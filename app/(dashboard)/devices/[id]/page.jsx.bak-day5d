@@ -12,7 +12,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
   ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { UniversalStencil, parseFirmware } from "@/app/components/stencil-templates";
+import { findStencilTemplate, findPortByName } from "@/app/components/stencil-templates";
 
 /* ═══════════════════════════════════════════════════════════
    CONSTANTS
@@ -588,6 +588,11 @@ export default function DeviceDetailPage() {
     );
   }, [data?.endpoints, epSearch]);
 
+  const stencilTemplate = useMemo(() => {
+    if (!data?.device) return null;
+    return findStencilTemplate(data.device.make, data.device.model);
+  }, [data?.device]);
+
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
       <div style={{ textAlign: "center" }}>
@@ -752,9 +757,13 @@ export default function DeviceDetailPage() {
           icon={Cable}
           iconColor="#3b82f6"
           count={data.portStats?.total}
+          badge={stencilTemplate ? { text: stencilTemplate.label, color: stencilTemplate.color, bg: stencilTemplate.color + "20" } : null}
           hint={!data.portStats?.hasTrafficData ? "Traffic byte counters not yet available — port states are accurate, deltas will populate after the next collection cycles." : null}
         >
-          <UniversalStencil device={dev} ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
+          {stencilTemplate
+            ? <ModelStencil template={stencilTemplate} ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
+            : <FallbackStencil ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
+          }
           {selectedPort && (
             <PortDetailPanel port={selectedPort} onClose={() => setSelectedPort(null)} onNavigate={(nid) => router.push(`/devices/${nid}`)} />
           )}

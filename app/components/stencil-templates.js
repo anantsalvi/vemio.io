@@ -129,48 +129,111 @@ function splitPhysicalRows(ports) {
    PortBox — single port chip in the stencil
    ─────────────────────────────────────────────────────────── */
 function PortBox({ port, onClick, isSelected, variant = "default" }) {
+  // STENCIL-V2-APR07: dense rack-realistic port with traffic micro-bar
   const color = PORT_STATUS_COLOR(port);
   const isUp = port?.operStatus === "up";
+  const isAdminDown = port?.adminStatus === "down";
   const hasEndpoints = port?.attachedCount > 0;
   const label = port?.name || String(port?.index || "?");
 
   const isSfp = variant === "sfp";
   const labelLen = label.length;
-  const width = Math.max(40, Math.min(110, labelLen * 7 + 16));
-  const height = isSfp ? 22 : 30;
+  const width = isSfp ? Math.max(48, labelLen * 7 + 14) : Math.max(34, labelLen * 6 + 12);
+  const height = isSfp ? 26 : 32;
+
+  // Compute traffic intensity 0-1 for the micro-bar (cap at 100 Mbps for visualization)
+  const inRate = Number(port?.inRateMbps) || 0;
+  const outRate = Number(port?.outRateMbps) || 0;
+  const totalRate = inRate + outRate;
+  const trafficPct = Math.min(100, Math.round((totalRate / 100) * 100));
+  const showTraffic = isUp && totalRate > 0.01;
+
+  const speedLabel = port?.speedMbps
+    ? (port.speedMbps >= 1000 ? (port.speedMbps / 1000) + " Gbps" : port.speedMbps + " Mbps")
+    : "";
+
+  const tooltipParts = [
+    label,
+    isAdminDown ? "Admin Down" : (port?.operStatus || "unknown").toUpperCase(),
+  ];
+  if (speedLabel) tooltipParts.push(speedLabel);
+  if (showTraffic) tooltipParts.push("In " + inRate.toFixed(1) + " / Out " + outRate.toFixed(1) + " Mbps");
+  if (port?.portIp) tooltipParts.push(port.portIp);
+  if (hasEndpoints) tooltipParts.push(port.attachedCount + " endpoint" + (port.attachedCount > 1 ? "s" : ""));
+  if (port?.connectedNeighborName) tooltipParts.push("\u2192 " + port.connectedNeighborName);
 
   return (
     <div
       onClick={() => onClick?.(port)}
-      title={port
-        ? `${label} \u00b7 ${port.adminStatus === "down" ? "Admin Down" : (port.operStatus || "unknown").toUpperCase()}${port.speedMbps ? " \u00b7 " + (port.speedMbps >= 1000 ? port.speedMbps/1000 + " Gbps" : port.speedMbps + " Mbps") : ""}${port.portIp ? " \u00b7 " + port.portIp : ""}${hasEndpoints ? " \u00b7 " + port.attachedCount + " endpoint(s)" : ""}`
-        : label}
+      title={tooltipParts.join(" \u00b7 ")}
       style={{
-        minWidth: width, height, padding: "0 8px",
-        borderRadius: isSfp ? 2 : 4,
-        background: isSelected ? "rgba(212,168,67,0.2)" : "rgba(0,0,0,0.5)",
-        border: `2px solid ${isSelected ? "#d4a843" : color}`,
+        minWidth: width,
+        height,
+        padding: "0 6px",
+        borderRadius: isSfp ? 3 : 4,
+        background: isSelected
+          ? "rgba(212,168,67,0.18)"
+          : isUp
+            ? "rgba(34,197,94,0.10)"
+            : isAdminDown
+              ? "rgba(239,68,68,0.08)"
+              : "rgba(0,0,0,0.45)",
+        border: "1.5px solid " + (isSelected ? "#d4a843" : color),
         cursor: "pointer",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
         transition: "all 0.15s",
-        boxShadow: isUp ? `0 0 10px ${color}40, inset 0 0 10px ${color}15` : "none",
+        boxShadow: isUp
+          ? "0 0 8px " + color + "40, inset 0 0 6px " + color + "15"
+          : "none",
         position: "relative",
       }}
     >
       <span style={{
-        fontSize: isSfp ? 9 : 11, fontWeight: 600,
-        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.5)",
+        fontSize: isSfp ? 10 : 11,
+        fontWeight: 600,
+        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)",
         fontFamily: "'JetBrains Mono', monospace",
         whiteSpace: "nowrap",
+        lineHeight: 1.1,
       }}>{label}</span>
+
+      {showTraffic && (
+        <div style={{
+          width: "85%",
+          height: 2,
+          marginTop: 2,
+          background: "rgba(255,255,255,0.08)",
+          borderRadius: 1,
+          overflow: "hidden",
+        }}>
+          <div style={{
+            width: trafficPct + "%",
+            height: "100%",
+            background: trafficPct > 70 ? "#f59e0b" : "#3b82f6",
+            transition: "width 0.3s",
+          }} />
+        </div>
+      )}
+
       {hasEndpoints && (
         <div style={{
-          position: "absolute", top: -4, right: -4,
-          width: 12, height: 12, borderRadius: "50%",
+          position: "absolute",
+          top: -5,
+          right: -5,
+          width: 13,
+          height: 13,
+          borderRadius: "50%",
           background: "#d4a843",
           border: "2px solid #0a0a14",
-          fontSize: 8, color: "#0a0a14", fontWeight: 700,
-          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 8,
+          color: "#0a0a14",
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}>{port.attachedCount > 9 ? "9+" : port.attachedCount}</div>
       )}
     </div>
@@ -178,16 +241,19 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   UniversalStencil — main renderer
+   UniversalStencil — main renderer (STENCIL-V2-APR07)
    ─────────────────────────────────────────────────────────── */
 export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
   if (!ports || ports.length === 0) {
     return (
       <div style={{
-        padding: 32, textAlign: "center",
-        background: "rgba(0,0,0,0.4)", borderRadius: 10,
+        padding: 32,
+        textAlign: "center",
+        background: "rgba(0,0,0,0.4)",
+        borderRadius: 10,
         border: "1px solid rgba(255,255,255,0.06)",
-        color: "rgba(255,255,255,0.4)", fontSize: 13,
+        color: "rgba(255,255,255,0.4)",
+        fontSize: 13,
       }}>
         No ports detected on this device.
       </div>
@@ -198,21 +264,18 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
   const model = cleanString(device?.model);
   const accent = vendorAccentColor(make);
 
-  // Dedup ports by name (collector sometimes returns duplicates)
   const seen = new Set();
   const dedupedPorts = ports.filter(p => {
-    const key = `${p.name}|${p.index}`;
+    const key = (p.name || "") + "|" + p.index;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  // Group by category
   const physical = dedupedPorts.filter(p => p.category === "physical");
   const sfp      = dedupedPorts.filter(p => p.category === "physical_sfp");
   const trunks   = dedupedPorts.filter(p => p.category === "trunk");
 
-  // Sort physical and SFP by extracted port number
   const sortedPhysical = [...physical].sort((a, b) =>
     portSortKey(a.name || a.index) - portSortKey(b.name || b.index)
   );
@@ -220,91 +283,216 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
     portSortKey(a.name || a.index) - portSortKey(b.name || b.index)
   );
 
-  // Decide top/bottom split for physical
   const { top, bottom } = splitPhysicalRows(sortedPhysical);
-
-  const totalShown = sortedPhysical.length + sortedSfp.length + trunks.length;
   const label = buildDeviceLabel(make, model, sortedPhysical.length, sortedSfp.length);
+
+  // Aggregate stats
+  const upCount = dedupedPorts.filter(p => p.operStatus === "up").length;
+  const totalCount = dedupedPorts.length;
+  const utilizationPct = totalCount > 0 ? Math.round((upCount / totalCount) * 100) : 0;
+  const totalIn = dedupedPorts.reduce((s, p) => s + (Number(p.inRateMbps) || 0), 0);
+  const totalOut = dedupedPorts.reduce((s, p) => s + (Number(p.outRateMbps) || 0), 0);
+  const totalThroughput = totalIn + totalOut;
+  const endpointPortCount = dedupedPorts.filter(p => p.attachedCount > 0).length;
+
+  // LED states based on real data
+  const ledPwr = "#22c55e"; // always on if device responds
+  const ledSta = upCount > 0 ? "#22c55e" : "#f59e0b";
+  const ledLnk = totalThroughput > 0.1 ? "#22c55e" : "#374151";
 
   return (
     <div style={{
-      background: "linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.4) 100%)",
+      background: "linear-gradient(180deg, rgba(15,20,32,0.95) 0%, rgba(10,14,26,0.98) 100%)",
       borderRadius: 12,
       padding: "20px 24px",
-      border: `1px solid ${accent}30`,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px ${accent}10`,
+      border: "1px solid " + accent + "30",
+      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px " + accent + "10",
     }}>
-      {/* ── Model label bar ── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 6, height: 22, background: accent, borderRadius: 2, boxShadow: `0 0 8px ${accent}80` }} />
+      {/* Header bar: model identity + LEDs + chip count */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: 18,
+        flexWrap: "wrap",
+        gap: 12,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{
+            width: 6,
+            height: 28,
+            background: accent,
+            borderRadius: 2,
+            boxShadow: "0 0 10px " + accent + "80",
+          }} />
           <div>
-            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", margin: 0, textTransform: "uppercase", letterSpacing: 1 }}>Device</p>
-            <p style={{ fontSize: 14, color: "rgba(255,255,255,0.95)", margin: "2px 0 0", fontWeight: 600 }}>{label}</p>
+            <p style={{
+              fontSize: 10,
+              color: "rgba(255,255,255,0.4)",
+              margin: 0,
+              textTransform: "uppercase",
+              letterSpacing: 1.2,
+              fontWeight: 600,
+            }}>Device Faceplate</p>
+            <p style={{
+              fontSize: 15,
+              color: "rgba(255,255,255,0.95)",
+              margin: "3px 0 0",
+              fontWeight: 600,
+            }}>{label}</p>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["PWR", "STA", "LNK"].map(led => (
-              <div key={led} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px #22c55e80" }} />
-                <span style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", fontFamily: "'JetBrains Mono', monospace" }}>{led}</span>
+
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[
+              { name: "PWR", color: ledPwr },
+              { name: "STA", color: ledSta },
+              { name: "LNK", color: ledLnk },
+            ].map(led => (
+              <div key={led.name} style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 3,
+              }}>
+                <div style={{
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: led.color,
+                  boxShadow: led.color === "#374151" ? "none" : "0 0 7px " + led.color + "90",
+                }} />
+                <span style={{
+                  fontSize: 8,
+                  color: "rgba(255,255,255,0.4)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontWeight: 600,
+                }}>{led.name}</span>
               </div>
             ))}
           </div>
-          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", padding: "3px 8px", borderRadius: 10, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-            {sortedPhysical.length} physical{sortedSfp.length > 0 ? ` · ${sortedSfp.length} SFP` : ""}{trunks.length > 0 ? ` · ${trunks.length} trunk` : ""}
+
+          <span style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.55)",
+            padding: "4px 10px",
+            borderRadius: 12,
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>
+            {sortedPhysical.length} physical{sortedSfp.length > 0 ? " \u00b7 " + sortedSfp.length + " SFP" : ""}{trunks.length > 0 ? " \u00b7 " + trunks.length + " trunk" : ""}
           </span>
         </div>
       </div>
 
-      {/* ── Faceplate ── */}
+      {/* Faceplate body */}
       <div style={{
-        display: "flex", flexDirection: "column", gap: 8,
-        padding: "14px 18px",
-        background: "rgba(0,0,0,0.5)", borderRadius: 6,
-        border: "1px solid rgba(255,255,255,0.06)",
+        display: "flex",
+        gap: 14,
+        padding: "16px 18px",
+        background: "linear-gradient(180deg, #1a2030 0%, #141926 100%)",
+        borderRadius: 6,
+        border: "1px solid rgba(255,255,255,0.08)",
+        overflowX: "auto",
+        alignItems: "center",
       }}>
-        {/* Physical ports */}
-        {sortedPhysical.length === 0 && sortedSfp.length === 0 && trunks.length === 0 && (
-          <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", margin: 0, textAlign: "center", padding: "10px 0" }}>
-            No physical, SFP, or trunk ports on this device — check the table below for virtual interfaces.
-          </p>
-        )}
+        {/* Brand strip */}
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          paddingRight: 14,
+          borderRight: "1px solid rgba(255,255,255,0.1)",
+          flexShrink: 0,
+        }}>
+          <div style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: "rgba(255,255,255,0.75)",
+            letterSpacing: 0.4,
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>{make || "DEVICE"}</div>
+          <div style={{
+            fontSize: 8,
+            color: "rgba(255,255,255,0.35)",
+            letterSpacing: 0.2,
+            fontFamily: "'JetBrains Mono', monospace",
+          }}>{model || ""}</div>
+          <div style={{
+            width: 22,
+            height: 16,
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 2,
+            background: "rgba(0,0,0,0.4)",
+            marginTop: 6,
+          }} title="Console port" />
+        </div>
 
-        {top.length > 0 && (
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {top.map(p => (
-              <PortBox
-                key={`top-${p.index}-${p.name}`}
-                port={p}
-                onClick={onPortClick}
-                isSelected={selectedPort?.index === p.index}
-              />
-            ))}
-          </div>
-        )}
-        {bottom.length > 0 && (
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-            {bottom.map(p => (
-              <PortBox
-                key={`bot-${p.index}-${p.name}`}
-                port={p}
-                onClick={onPortClick}
-                isSelected={selectedPort?.index === p.index}
-              />
-            ))}
-          </div>
-        )}
+        {/* Physical port grid */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
+          {sortedPhysical.length === 0 && sortedSfp.length === 0 && trunks.length === 0 && (
+            <p style={{
+              fontSize: 12,
+              color: "rgba(255,255,255,0.35)",
+              margin: 0,
+              textAlign: "center",
+              padding: "10px 20px",
+            }}>
+              No physical, SFP, or trunk ports — see table below for virtual interfaces.
+            </p>
+          )}
 
-        {/* SFP / fiber row */}
+          {top.length > 0 && (
+            <div style={{ display: "flex", gap: 4 }}>
+              {top.map(p => (
+                <PortBox
+                  key={"top-" + p.index + "-" + p.name}
+                  port={p}
+                  onClick={onPortClick}
+                  isSelected={selectedPort?.index === p.index}
+                />
+              ))}
+            </div>
+          )}
+          {bottom.length > 0 && (
+            <div style={{ display: "flex", gap: 4 }}>
+              {bottom.map(p => (
+                <PortBox
+                  key={"bot-" + p.index + "-" + p.name}
+                  port={p}
+                  onClick={onPortClick}
+                  isSelected={selectedPort?.index === p.index}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SFP / fiber section */}
         {sortedSfp.length > 0 && (
-          <div style={{ marginTop: 6, paddingTop: 8, borderTop: "1px dashed rgba(255,255,255,0.1)" }}>
-            <p style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 1 }}>SFP / Fiber</p>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            paddingLeft: 14,
+            borderLeft: "1px solid rgba(255,255,255,0.1)",
+            flexShrink: 0,
+          }}>
+            <div style={{
+              fontSize: 8,
+              color: "rgba(255,255,255,0.4)",
+              textAlign: "center",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              fontFamily: "'JetBrains Mono', monospace",
+              marginBottom: 2,
+            }}>SFP / Fiber</div>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", maxWidth: 200 }}>
               {sortedSfp.map(p => (
                 <PortBox
-                  key={`sfp-${p.index}-${p.name}`}
+                  key={"sfp-" + p.index + "-" + p.name}
                   port={p}
                   onClick={onPortClick}
                   isSelected={selectedPort?.index === p.index}
@@ -315,14 +503,29 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
           </div>
         )}
 
-        {/* Trunks (link aggregations) */}
+        {/* Trunks section */}
         {trunks.length > 0 && (
-          <div style={{ marginTop: 6, paddingTop: 8, borderTop: "1px dashed rgba(255,255,255,0.1)" }}>
-            <p style={{ fontSize: 9, color: "rgba(255,255,255,0.35)", margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 1 }}>Trunks / LAG</p>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+          <div style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+            paddingLeft: 14,
+            borderLeft: "1px solid rgba(255,255,255,0.1)",
+            flexShrink: 0,
+          }}>
+            <div style={{
+              fontSize: 8,
+              color: "rgba(255,255,255,0.4)",
+              textAlign: "center",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              fontFamily: "'JetBrains Mono', monospace",
+              marginBottom: 2,
+            }}>Trunks / LAG</div>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", maxWidth: 160 }}>
               {trunks.map(p => (
                 <PortBox
-                  key={`trk-${p.index}-${p.name}`}
+                  key={"trk-" + p.index + "-" + p.name}
                   port={p}
                   onClick={onPortClick}
                   isSelected={selectedPort?.index === p.index}
@@ -334,8 +537,81 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
         )}
       </div>
 
-      {/* ── Legend ── */}
-      <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+      {/* Stats row */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: 12,
+        marginTop: 16,
+        paddingTop: 16,
+        borderTop: "1px solid rgba(255,255,255,0.08)",
+      }}>
+        <div>
+          <div style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.45)",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+            marginBottom: 4,
+            fontWeight: 600,
+          }}>Total ports</div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "rgba(255,255,255,0.95)" }}>{totalCount}</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+            {sortedPhysical.length} copper{sortedSfp.length > 0 ? " \u00b7 " + sortedSfp.length + " SFP" : ""}
+          </div>
+        </div>
+        <div>
+          <div style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.45)",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+            marginBottom: 4,
+            fontWeight: 600,
+          }}>Up</div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "#22c55e" }}>{upCount}</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{utilizationPct}% utilization</div>
+        </div>
+        <div>
+          <div style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.45)",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+            marginBottom: 4,
+            fontWeight: 600,
+          }}>With endpoints</div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{endpointPortCount}</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>connected devices</div>
+        </div>
+        <div>
+          <div style={{
+            fontSize: 10,
+            color: "rgba(255,255,255,0.45)",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+            marginBottom: 4,
+            fontWeight: 600,
+          }}>Throughput</div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "rgba(255,255,255,0.95)" }}>
+            {totalThroughput >= 1000 ? (totalThroughput / 1000).toFixed(1) + " Gbps" : totalThroughput.toFixed(1) + " Mbps"}
+          </div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+            in {totalIn.toFixed(1)} / out {totalOut.toFixed(1)}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{
+        display: "flex",
+        gap: 16,
+        marginTop: 14,
+        flexWrap: "wrap",
+        alignItems: "center",
+        paddingTop: 12,
+        borderTop: "1px solid rgba(255,255,255,0.05)",
+      }}>
         {[
           { color: "#22c55e", label: "Up" },
           { color: "#374151", label: "Down" },
@@ -343,13 +619,34 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
           { color: "#f59e0b", label: "Dormant" },
         ].map(l => (
           <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 12, height: 12, borderRadius: 2, border: `2px solid ${l.color}`, background: "rgba(0,0,0,0.5)" }} />
+            <div style={{
+              width: 11,
+              height: 11,
+              borderRadius: 2,
+              border: "1.5px solid " + l.color,
+              background: "rgba(0,0,0,0.5)",
+            }} />
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{l.label}</span>
           </div>
         ))}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
-          <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#d4a843" }} />
+          <div style={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            background: "#d4a843",
+            border: "1.5px solid rgba(0,0,0,0.5)",
+          }} />
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Has endpoints</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{
+            width: 16,
+            height: 3,
+            borderRadius: 1,
+            background: "#3b82f6",
+          }} />
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Live traffic</span>
         </div>
       </div>
     </div>

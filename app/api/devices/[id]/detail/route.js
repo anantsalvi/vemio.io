@@ -111,7 +111,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         const attached = portEndpointMap.get(p.port_index) || [];
         return {
           ...p,
-          category: categorizePort(p.port_name, dev.device_type),
+          category: categorizePort(p.port_name, dev.device_type, p.port_index),
           attachedEndpoints: attached.map(e => ({
             mac: e.mac_address, ip: e.ip_address,
             manufacturer: e.manufacturer, hostname: e.hostname,
@@ -315,7 +315,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       ports: ports.map(p => ({
         index: p.port_index, name: p.port_name, category: p.category,
         adminStatus: p.admin_status, operStatus: p.oper_status,
-        speedMbps: p.speed_mbps, duplex: p.duplex,
+        speedMbps: (p.speed_mbps && p.speed_mbps > 10000) ? Math.round(p.speed_mbps / 1000000) : p.speed_mbps, duplex: p.duplex,
         inOctets: p.in_octets, outOctets: p.out_octets,
         inErrors: p.in_errors, outErrors: p.out_errors,
         inRateMbps: p.in_rate_mbps, outRateMbps: p.out_rate_mbps,
@@ -367,9 +367,13 @@ export const GET = withAuth(async (req, session, { params }) => {
   }
 });
 
-function categorizePort(name, deviceType) {
+function categorizePort(name, deviceType, portIndex) {
+  // DATAFIX-APR07: high port indices are virtual interfaces (VLANs/loopbacks/SVIs)
+  if (portIndex != null && portIndex >= 500) return 'virtual';
   if (!name) return 'other';
   const n = name.toLowerCase();
+  if (n.startsWith('switch loopback')) return 'loopback';
+  if (n.startsWith('default_vlan') || /^vlan\d/i.test(n)) return 'vlan_iface';
   if (n === 'lo' || n.startsWith('loop')) return 'loopback';
   if (/^(gre|gretap|ipsec|sit|ip6tnl|tun|erspan|vxlan|vti|pport_l|port\d+_ppp)/i.test(n)) return 'tunnel';
   if (/^(dummy|ifb|mv-|mvmgmt|spq|null|teql)/i.test(n)) return 'virtual';

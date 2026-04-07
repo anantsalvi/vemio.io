@@ -286,14 +286,15 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
   const { top, bottom } = splitPhysicalRows(sortedPhysical);
   const label = buildDeviceLabel(make, model, sortedPhysical.length, sortedSfp.length);
 
-  // Aggregate stats
-  const upCount = dedupedPorts.filter(p => p.operStatus === "up").length;
-  const totalCount = dedupedPorts.length;
+  // Aggregate stats — STENCIL-DATAFIX-APR07: count only rendered ports, not virtual interfaces
+  const renderedPorts = [...sortedPhysical, ...sortedSfp, ...trunks];
+  const upCount = renderedPorts.filter(p => p.operStatus === "up").length;
+  const totalCount = renderedPorts.length;
   const utilizationPct = totalCount > 0 ? Math.round((upCount / totalCount) * 100) : 0;
-  const totalIn = dedupedPorts.reduce((s, p) => s + (Number(p.inRateMbps) || 0), 0);
-  const totalOut = dedupedPorts.reduce((s, p) => s + (Number(p.outRateMbps) || 0), 0);
+  const totalIn = renderedPorts.reduce((s, p) => s + (Number(p.inRateMbps) || 0), 0);
+  const totalOut = renderedPorts.reduce((s, p) => s + (Number(p.outRateMbps) || 0), 0);
   const totalThroughput = totalIn + totalOut;
-  const endpointPortCount = dedupedPorts.filter(p => p.attachedCount > 0).length;
+  const endpointPortCount = renderedPorts.filter(p => p.attachedCount > 0).length;
 
   // LED states based on real data
   const ledPwr = "#22c55e"; // always on if device responds

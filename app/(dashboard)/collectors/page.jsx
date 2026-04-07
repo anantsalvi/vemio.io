@@ -67,7 +67,7 @@ export default function CollectorsPage() {
 
   useEffect(() => {
     fetchCollectors();
-    const t = setInterval(fetchCollectors, 15000); // 15s refresh
+    const t = setInterval(fetchCollectors, 5000); // 15s refresh
     return () => clearInterval(t);
   }, [fetchCollectors]);
 
@@ -293,6 +293,15 @@ function CollectorCard({ collector, index, busy, onSoftRediscover, onHardReset }
   const c = collector;
   const isOnline = c.isOnline;
   const lr = c.lastRun;
+  const isRunning = lr && lr.status === 'running';
+
+  // Tick every 1s while a discovery is running so the elapsed counter updates
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const t = setInterval(() => forceTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [isRunning]);
   const hasQueuedCommand = (c.pendingCommands + c.deliveredCommands + c.runningCommands) > 0;
 
   return (
@@ -399,10 +408,18 @@ function CollectorCard({ collector, index, busy, onSoftRediscover, onHardReset }
           style={{ borderTop: '1px solid var(--color-vemio-border)' }}>
           <Stat label="Devices" value={c.deviceCount} icon={Server} />
           <Stat
-            label="Last Run"
-            value={lr ? timeAgo(lr.startedAt) : '—'}
+            label={isRunning ? "Running" : "Last Run"}
+            value={
+              isRunning
+                ? formatDuration(Date.now() - new Date(lr.startedAt).getTime())
+                : (lr ? timeAgo(lr.startedAt) : '—')
+            }
             icon={Clock}
-            sub={lr ? formatDuration(lr.durationMs) : null}
+            sub={
+              isRunning
+                ? 'in progress...'
+                : (lr ? formatDuration(lr.durationMs) : null)
+            }
           />
           <Stat
             label="Endpoints Found"
@@ -416,7 +433,7 @@ function CollectorCard({ collector, index, busy, onSoftRediscover, onHardReset }
           />
         </div>
 
-        {hasQueuedCommand && (
+        {(hasQueuedCommand || isRunning) && (
           <div
             className="mt-4 p-3 rounded-lg flex items-center gap-2 text-xs"
             style={{
@@ -425,10 +442,14 @@ function CollectorCard({ collector, index, busy, onSoftRediscover, onHardReset }
               color: STATUS_COLORS.pending,
             }}
           >
-            <Clock size={14} />
-            {c.runningCommands > 0 && <span>Discovery running...</span>}
-            {c.runningCommands === 0 && c.deliveredCommands > 0 && <span>Command delivered, awaiting execution...</span>}
-            {c.runningCommands === 0 && c.deliveredCommands === 0 && c.pendingCommands > 0 && (
+            <RefreshCw size={14} className={isRunning ? 'animate-spin' : ''} />
+            {isRunning && (
+              <span>
+                Discovery running — {formatDuration(Date.now() - new Date(lr.startedAt).getTime())} elapsed
+              </span>
+            )}
+            {!isRunning && c.deliveredCommands > 0 && <span>Command delivered, starting discovery...</span>}
+            {!isRunning && c.deliveredCommands === 0 && c.pendingCommands > 0 && (
               <span>Command queued. Collector polls every 30s.</span>
             )}
           </div>

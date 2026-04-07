@@ -45,32 +45,16 @@ export const GET = withAuth(async (req, session, { params }) => {
 
     /* ── 2. Resolve collector_devices ── */
     const collectorDevResult = await queryWithTenant(tenantId,
-      `WITH ranked AS (
-         SELECT cd.id AS collector_device_id, cd.sys_descr, cd.make_model,
-                cd.cpu_percent, cd.memory_percent, cd.snmp_version,
-                cd.uptime_seconds AS collector_uptime, cd.collector_site_id,
-                cd.first_seen AS collector_first_seen, cd.last_seen AS collector_last_seen,
-                cd.sys_name,
-                cd.ip_address AS cd_ip,
-                (SELECT COUNT(*) FROM collector_switch_ports csp WHERE csp.device_id = cd.id) AS port_count,
-                CASE WHEN host(cd.ip_address) = host($1::inet) THEN 1 ELSE 0 END AS ip_match,
-                CASE WHEN cd.sys_name = $3 THEN 1 ELSE 0 END AS name_match
-         FROM collector_devices cd
-         WHERE cd.tenant_id = $2
-           AND (
-             host(cd.ip_address) = host($1::inet)
-             OR cd.sys_name = $3
-           )
-       )
-       SELECT * FROM ranked
-       ORDER BY
-         (port_count > 0)::int DESC,
-         ip_match DESC,
-         name_match DESC,
-         port_count DESC,
-         collector_last_seen DESC
+      `SELECT cd.id AS collector_device_id, cd.sys_descr, cd.make_model,
+              cd.cpu_percent, cd.memory_percent, cd.snmp_version,
+              cd.uptime_seconds AS collector_uptime, cd.collector_site_id,
+              cd.first_seen AS collector_first_seen, cd.last_seen AS collector_last_seen
+       FROM collector_devices cd
+       WHERE host(cd.ip_address) = host($1::inet)
+         AND cd.tenant_id = $2
+       ORDER BY cd.last_seen DESC
        LIMIT 1`,
-      [dev.ip_address, tenantId, dev.name]
+      [dev.ip_address, tenantId]
     );
 
     const collectorDev = collectorDevResult.rows[0] || null;

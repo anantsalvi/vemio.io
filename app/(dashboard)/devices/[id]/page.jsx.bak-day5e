@@ -726,7 +726,7 @@ export default function DeviceDetailPage() {
 
       {/* ── Uptime Chart ── */}
       <Section
-        title="Uptime"
+        title="Uptime History"
         icon={Activity}
         iconColor="#22c55e"
         badge={data.uptime?.percent != null ? {

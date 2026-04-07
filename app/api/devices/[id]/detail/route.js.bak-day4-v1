@@ -1,12 +1,9 @@
 /**
- * VEMIO™ — Device Detail API (Collector-Native, v2)
+ * VEMIO™ — Device Detail API (Collector-Native, Enhanced)
  * GET /api/devices/[id]/detail
  *
- * v2 changes:
- * - Firewalls/routers: pull ALL endpoints in the same /24 subnet (it IS the gateway)
- * - Port categorization for smart stencil grouping
- * - Better switch endpoint matching (prefix LIKE on "(switch)" suffix)
- * - hasTrafficData flag so the UI can hide useless 0-byte columns
+ * Returns: device info, ports, VLANs, neighbors, endpoints, uptime history
+ * Join: devices.ip_address → collector_devices.ip_address via host() cast
  */
 
 import { withAuth } from '@/lib/auth';
@@ -19,7 +16,7 @@ export const GET = withAuth(async (req, session, { params }) => {
   const days = Math.min(90, Math.max(1, parseInt(url.searchParams.get('days') || '30')));
 
   try {
-    /* ── 1. Device ── */
+    /* ── 1. Device from main devices table ── */
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.name, d.device_type, d.current_status, d.make, d.model,
               d.ip_address, d.mac_address, d.last_seen_at, d.auvik_device_id,
@@ -39,16 +36,13 @@ export const GET = withAuth(async (req, session, { params }) => {
     }
 
     const dev = deviceResult.rows[0];
-    const isFirewallOrRouter = ['firewall', 'router'].includes(dev.device_type);
-    const isSwitch = ['core_switch', 'access_switch'].includes(dev.device_type);
-    const isAP = dev.device_type === 'access_point';
 
-    /* ── 2. Resolve collector_devices ── */
+    /* ── 2. Resolve collector_devices ID via IP match ── */
+    /* Use host() on both sides to strip /32 suffix */
     const collectorDevResult = await queryWithTenant(tenantId,
       `SELECT cd.id AS collector_device_id, cd.sys_descr, cd.make_model,
               cd.cpu_percent, cd.memory_percent, cd.snmp_version,
-              cd.uptime_seconds AS collector_uptime, cd.collector_site_id,
-              cd.first_seen AS collector_first_seen, cd.last_seen AS collector_last_seen
+              cd.uptime_seconds AS collector_uptime, cd.collector_site_id
        FROM collector_devices cd
        WHERE host(cd.ip_address) = host($1::inet)
          AND cd.tenant_id = $2
@@ -59,8 +53,9 @@ export const GET = withAuth(async (req, session, { params }) => {
 
     const collectorDev = collectorDevResult.rows[0] || null;
     const collectorDeviceId = collectorDev?.collector_device_id;
+    const collectorSiteId = collectorDev?.collector_site_id;
 
-    /* ── 3. Ports with category ── */
+    /* ── 3. Switch Ports (collector_switch_ports) ── */
     let ports = [];
     if (collectorDeviceId) {
       const portsResult = await queryWithTenant(tenantId,
@@ -73,13 +68,10 @@ export const GET = withAuth(async (req, session, { params }) => {
          ORDER BY port_index ASC`,
         [collectorDeviceId]
       );
-      ports = portsResult.rows.map(p => ({
-        ...p,
-        category: categorizePort(p.port_name, dev.device_type),
-      }));
+      ports = portsResult.rows;
     }
 
-    /* ── 4. VLANs ── */
+    /* ── 4. VLAN Assignments ── */
     let vlans = [];
     if (collectorDeviceId) {
       const vlansResult = await queryWithTenant(tenantId,
@@ -92,7 +84,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       vlans = vlansResult.rows;
     }
 
-    /* ── 5. Neighbors ── */
+    /* ── 5. Neighbors (device_neighbors via auvik_device_id) ── */
     const neighborsResult = await queryWithTenant(tenantId,
       `SELECT
          dn.interface_name AS local_interface,
@@ -113,7 +105,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       [dev.auvik_device_id, tenantId]
     );
 
-    /* ── 6. IP Interfaces ── */
+    /* ── 6. IP Interfaces (device_interfaces — may be empty) ── */
     let interfaces = [];
     try {
       const interfacesResult = await queryWithTenant(tenantId,
@@ -124,89 +116,67 @@ export const GET = withAuth(async (req, session, { params }) => {
         [deviceId]
       );
       interfaces = interfacesResult.rows;
-    } catch (e) {}
-
-    /* ── 7. Endpoints — strategy depends on device type ── */
-    let endpoints = [];
-    let endpointMode = 'none';
-
-    if (isSwitch) {
-      const namePrefix = dev.name.split(' ')[0];
-      const r = await queryWithTenant(tenantId,
-        `SELECT mac_address, ip_address, manufacturer, connection_type,
-                port_index, port_name, hostname,
-                connected_ap_name, connected_switch_name,
-                vlan_id, vlan_name, status, first_seen, last_seen
-         FROM collector_port_clients
-         WHERE connected_switch_name ILIKE $1 AND tenant_id = $2
-         ORDER BY last_seen DESC LIMIT 300`,
-        [namePrefix + '%', tenantId]
-      );
-      endpoints = r.rows;
-      endpointMode = 'switch_clients';
-    } else if (isAP) {
-      const namePrefix = dev.name.split(' (')[0];
-      const r = await queryWithTenant(tenantId,
-        `SELECT mac_address, ip_address, manufacturer, connection_type,
-                port_index, port_name, hostname,
-                connected_ap_name, connected_switch_name,
-                vlan_id, vlan_name, status, first_seen, last_seen
-         FROM collector_port_clients
-         WHERE connected_ap_name ILIKE $1 AND tenant_id = $2
-         ORDER BY last_seen DESC LIMIT 300`,
-        [namePrefix + '%', tenantId]
-      );
-      endpoints = r.rows;
-      endpointMode = 'ap_clients';
-    } else if (isFirewallOrRouter) {
-      // Network-wide view: every endpoint in the same /24 routes through this gateway
-      const r = await queryWithTenant(tenantId,
-        `SELECT mac_address, ip_address, manufacturer, connection_type,
-                port_index, port_name, hostname,
-                connected_ap_name, connected_switch_name,
-                vlan_id, vlan_name, status, first_seen, last_seen
-         FROM collector_port_clients
-         WHERE ip_address IS NOT NULL
-           AND set_masklen(ip_address::cidr, 24) = set_masklen($1::inet::cidr, 24)
-           AND tenant_id = $2
-         ORDER BY last_seen DESC LIMIT 500`,
-        [dev.ip_address, tenantId]
-      );
-      endpoints = r.rows;
-      endpointMode = 'network_routed';
+    } catch (e) {
+      // device_interfaces table might not exist — that's fine
     }
 
-    /* ── 8. Status history ── */
+    /* ── 7. Connected Endpoints ── */
+    let endpoints = [];
+    if (['core_switch', 'access_switch', 'access_point', 'firewall'].includes(dev.device_type)) {
+      const cleanName = dev.name;
+      const endpointsResult = await queryWithTenant(tenantId,
+        `SELECT mac_address, ip_address, manufacturer, connection_type,
+                port_index, port_name, hostname,
+                connected_ap_name, connected_switch_name,
+                vlan_id, vlan_name,
+                status, first_seen, last_seen
+         FROM collector_port_clients
+         WHERE (connected_switch_name ILIKE $1 OR connected_ap_name ILIKE $2)
+           AND tenant_id = $3
+         ORDER BY last_seen DESC
+         LIMIT 200`,
+        ['%' + cleanName + '%', '%' + cleanName + '%', tenantId]
+      );
+      endpoints = endpointsResult.rows;
+    }
+
+    /* ── 8. Status History ── */
     let history = [];
     try {
-      const r = await queryWithTenant(tenantId,
-        `SELECT status, changed_at, source FROM device_status_history
-         WHERE device_id = $1 AND changed_at > NOW() - make_interval(days => $2)
+      const historyResult = await queryWithTenant(tenantId,
+        `SELECT status, changed_at, source
+         FROM device_status_history
+         WHERE device_id = $1
+           AND changed_at > NOW() - make_interval(days => $2)
          ORDER BY changed_at ASC`,
         [deviceId, days]
       );
-      history = r.rows;
-    } catch (e) {}
+      history = historyResult.rows;
+    } catch (e) {
+      // table might not exist
+    }
 
-    /* ── 9. Uptime calc ── */
+    /* ── 9. Uptime calculation ── */
     const periodStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const now = new Date();
     let uptimePercent = null;
+
     if (history.length > 0) {
       let uptimeMs = 0;
       let lastStatus = history[0].status;
       let lastTime = periodStart;
-      for (const e of history) {
-        const t = new Date(e.changed_at);
-        if (lastStatus === 'up') uptimeMs += t.getTime() - lastTime.getTime();
-        lastStatus = e.status;
-        lastTime = t;
+      for (const entry of history) {
+        const entryTime = new Date(entry.changed_at);
+        if (lastStatus === 'up') uptimeMs += entryTime.getTime() - lastTime.getTime();
+        lastStatus = entry.status;
+        lastTime = entryTime;
       }
       if (lastStatus === 'up') uptimeMs += now.getTime() - lastTime.getTime();
       const totalMs = now.getTime() - periodStart.getTime();
       uptimePercent = totalMs > 0 ? Math.round((uptimeMs / totalMs * 100) * 100) / 100 : null;
     }
 
+    /* ── 10. Format uptime ── */
     const rawUptime = dev.uptime_seconds || (collectorDev?.collector_uptime);
     let uptimeFormatted = null;
     if (rawUptime && rawUptime > 0) {
@@ -217,19 +187,16 @@ export const GET = withAuth(async (req, session, { params }) => {
       uptimeFormatted = d2 > 0 ? d2 + 'd ' + h + 'h ' + m + 'm' : h > 0 ? h + 'h ' + m + 'm' : m + 'm';
     }
 
-    /* ── 10. Stats ── */
-    const physicalPorts = ports.filter(p => p.category === 'physical' || p.category === 'physical_sfp');
+    /* ── 11. Port summary stats ── */
     const portStats = {
       total: ports.length,
       up: ports.filter(p => p.oper_status === 'up').length,
-      down: ports.filter(p => p.oper_status === 'down' && p.admin_status !== 'down').length,
-      adminDown: ports.filter(p => p.admin_status === 'down').length,
-      errors: ports.reduce((s, p) => s + (Number(p.in_errors) || 0) + (Number(p.out_errors) || 0), 0),
-      hasTrafficData: ports.some(p => Number(p.in_octets) > 0 || Number(p.out_octets) > 0),
-      physicalCount: physicalPorts.length,
-      physicalUp: physicalPorts.filter(p => p.oper_status === 'up').length,
+      down: ports.filter(p => p.oper_status === 'down').length,
+      disabled: ports.filter(p => p.admin_status === 'down').length,
+      errors: ports.reduce((sum, p) => sum + (Number(p.in_errors) || 0) + (Number(p.out_errors) || 0), 0),
     };
 
+    /* ── Response ── */
     return Response.json({
       device: {
         id: dev.id, name: dev.name, type: dev.device_type,
@@ -241,16 +208,17 @@ export const GET = withAuth(async (req, session, { params }) => {
         sysDescr: collectorDev?.sys_descr || null,
         makeModel: collectorDev?.make_model || null,
         eolDate: dev.eol_date, warrantyExpiry: dev.warranty_expiry,
-        uptimeSeconds: rawUptime, uptimeFormatted,
+        uptimeSeconds: rawUptime,
+        uptimeFormatted,
         cpuPercent: collectorDev?.cpu_percent || null,
         memoryPercent: collectorDev?.memory_percent || null,
         snmpVersion: collectorDev?.snmp_version || null,
-        isCritical: dev.is_critical, hasRedundancy: dev.has_redundancy, isRetired: dev.is_retired,
+        isCritical: dev.is_critical,
+        hasRedundancy: dev.has_redundancy, isRetired: dev.is_retired,
         createdAt: dev.created_at, updatedAt: dev.updated_at,
-        firstDiscovered: collectorDev?.collector_first_seen || dev.created_at,
       },
       ports: ports.map(p => ({
-        index: p.port_index, name: p.port_name, category: p.category,
+        index: p.port_index, name: p.port_name,
         adminStatus: p.admin_status, operStatus: p.oper_status,
         speedMbps: p.speed_mbps, duplex: p.duplex,
         inOctets: p.in_octets, outOctets: p.out_octets,
@@ -282,7 +250,6 @@ export const GET = withAuth(async (req, session, { params }) => {
         vlanId: e.vlan_id, vlanName: e.vlan_name,
         status: e.status, firstSeen: e.first_seen, lastSeen: e.last_seen,
       })),
-      endpointMode,
       uptime: { percent: uptimePercent, days, totalEvents: history.length },
       history: history.map(h => ({ status: h.status, changedAt: h.changed_at, source: h.source })),
     });
@@ -291,19 +258,3 @@ export const GET = withAuth(async (req, session, { params }) => {
     return Response.json({ error: 'Failed to fetch device detail' }, { status: 500 });
   }
 });
-
-/* Port categorization for stencil grouping */
-function categorizePort(name, deviceType) {
-  if (!name) return 'other';
-  const n = name.toLowerCase();
-  if (n === 'lo' || n.startsWith('loop')) return 'loopback';
-  if (/^(gre|gretap|ipsec|sit|ip6tnl|tun|erspan|vxlan|vti|pport_l|port\d+_ppp)/i.test(n)) return 'tunnel';
-  if (/^(dummy|ifb|mv-|mvmgmt|spq|null|teql)/i.test(n)) return 'virtual';
-  if (/^(wlan|ath|guestap|ssid)/i.test(n)) return 'wireless';
-  if (/^portf\d+$/i.test(n)) return 'physical_sfp';
-  if (/^port\d+$/i.test(n)) return 'physical';
-  if (/^(eth|gi|te|fa|xe|ge)\d/i.test(n)) return 'physical';
-  if (/^trk\d+$/i.test(n)) return 'trunk';
-  if (/^\d+$/.test(n)) return 'physical';
-  return 'other';
-}

@@ -6,7 +6,7 @@ import {
   ArrowLeft, RefreshCw, Shield, Wifi, Server, MonitorSpeaker, Radio,
   Network, Globe, Clock, Activity, Cpu, HardDrive, Cable, Users,
   ChevronDown, ChevronUp, ExternalLink, AlertTriangle, Zap,
-  Search, CircleDot, Layers, Hash, Info,
+  Search, ArrowUpDown, CircleDot, Layers, Hash, MemoryStick,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
@@ -34,22 +34,11 @@ const TYPE_META = {
   other:        { icon: Server,         color: "#6b7280", label: "Device" },
 };
 
-const PORT_CAT = {
-  physical:     { label: "Physical Ports",     color: "#22c55e" },
-  physical_sfp: { label: "SFP / Fiber",        color: "#06b6d4" },
-  trunk:        { label: "Trunks",             color: "#f59e0b" },
-  loopback:     { label: "Loopback",           color: "#6366f1" },
-  tunnel:       { label: "Tunnels & PPP",      color: "#a855f7" },
-  virtual:      { label: "Virtual Interfaces", color: "#6b7280" },
-  wireless:     { label: "Wireless",           color: "#ec4899" },
-  other:        { label: "Other",              color: "#6b7280" },
-};
-
-const PORT_STATUS_COLOR = (p) => {
-  if (p.adminStatus === "down") return "#ef4444";
-  if (p.operStatus === "up") return "#22c55e";
-  if (p.operStatus === "dormant") return "#f59e0b";
-  return "#374151";
+const PORT_STATUS_COLORS = {
+  up:   "#22c55e",
+  down: "#374151",
+  adminDown: "#ef4444",
+  dormant: "#f59e0b",
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -79,16 +68,10 @@ function fmtSpeed(mbps) {
   return mbps + " Mbps";
 }
 
-function fmtIp(ip) {
-  if (!ip) return "\u2014";
-  // Strip /32 from postgres inet output
-  return String(ip).replace(/\/32$/, "");
-}
-
 /* ═══════════════════════════════════════════════════════════
-   COMPONENTS
+   REUSABLE COMPONENTS
    ═══════════════════════════════════════════════════════════ */
-function Section({ title, subtitle, icon: Icon, iconColor, children, collapsible, defaultOpen, count, badge, hint }) {
+function Section({ title, subtitle, icon: Icon, iconColor, children, collapsible, defaultOpen, count, badge }) {
   const [open, setOpen] = useState(defaultOpen !== false);
   return (
     <div style={{
@@ -103,10 +86,10 @@ function Section({ title, subtitle, icon: Icon, iconColor, children, collapsible
           borderBottom: (!collapsible || open) ? "1px solid rgba(255,255,255,0.04)" : "none",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {Icon && <Icon size={16} style={{ color: iconColor || "#d4a843", flexShrink: 0 }} />}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.92)" }}>{title}</span>
               {count != null && (
                 <span style={{
@@ -122,16 +105,11 @@ function Section({ title, subtitle, icon: Icon, iconColor, children, collapsible
               )}
             </div>
             {subtitle && <p style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>{subtitle}</p>}
-            {hint && (
-              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", margin: "4px 0 0", display: "flex", alignItems: "center", gap: 4 }}>
-                <Info size={11} /> {hint}
-              </p>
-            )}
           </div>
         </div>
         {collapsible && (open
-          ? <ChevronUp size={16} style={{ color: "rgba(255,255,255,0.3)", flexShrink: 0 }} />
-          : <ChevronDown size={16} style={{ color: "rgba(255,255,255,0.3)", flexShrink: 0 }} />
+          ? <ChevronUp size={16} style={{ color: "rgba(255,255,255,0.3)" }} />
+          : <ChevronDown size={16} style={{ color: "rgba(255,255,255,0.3)" }} />
         )}
       </div>
       {(!collapsible || open) && <div style={{ padding: "16px 18px" }}>{children}</div>}
@@ -143,7 +121,8 @@ function StatCard({ label, value, sub, color }) {
   return (
     <div style={{
       background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)",
-      borderRadius: 10, padding: "14px 16px", flex: "1 1 0", minWidth: 140,
+      borderRadius: 10, padding: "14px 16px", flex: "1 1 0",
+      minWidth: 120,
     }}>
       <p style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", margin: 0, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</p>
       <p style={{ fontSize: 22, fontWeight: 700, color: color || "rgba(255,255,255,0.92)", margin: "4px 0 0", fontFamily: "'JetBrains Mono', monospace" }}>{value}</p>
@@ -152,122 +131,86 @@ function StatCard({ label, value, sub, color }) {
   );
 }
 
+function InfoRow({ label, value, mono }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <span style={{ fontSize: 13, color: "rgba(255,255,255,0.5)" }}>{label}</span>
+      <span style={{ fontSize: 13, color: "rgba(255,255,255,0.88)", fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit", textAlign: "right", maxWidth: "60%", wordBreak: "break-all" }}>{value || "\u2014"}</span>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════
-   PORT STENCIL — auto-sized boxes, grouped by category
+   PORT STENCIL — Visual grid like Auvik
    ═══════════════════════════════════════════════════════════ */
-function PortBox({ port, onClick, isSelected }) {
-  const color = PORT_STATUS_COLOR(port);
-  const isUp = port.operStatus === "up";
-  // Auto-size width: 8px per char, min 36, max 96
-  const labelLen = (port.name || String(port.index)).length;
-  const width = Math.max(36, Math.min(96, labelLen * 7 + 14));
-
-  return (
-    <div
-      onClick={() => onClick?.(port)}
-      title={`${port.name || port.index} \u00b7 ${port.adminStatus === "down" ? "Admin Down" : (port.operStatus || "unknown").toUpperCase()}${port.speedMbps ? " \u00b7 " + fmtSpeed(port.speedMbps) : ""}`}
-      style={{
-        minWidth: width, height: 26, padding: "0 8px",
-        borderRadius: 4,
-        background: isSelected ? "rgba(212,168,67,0.18)" : "rgba(0,0,0,0.4)",
-        border: `1.5px solid ${isSelected ? "#d4a843" : color}`,
-        cursor: "pointer",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        transition: "all 0.15s",
-        boxShadow: isUp ? `0 0 8px ${color}30, inset 0 0 8px ${color}10` : "none",
-        position: "relative",
-      }}
-    >
-      <span style={{
-        fontSize: 10, fontWeight: 600,
-        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.45)",
-        fontFamily: "'JetBrains Mono', monospace",
-        whiteSpace: "nowrap",
-      }}>{port.name || port.index}</span>
-    </div>
-  );
-}
-
-function PortStencilGroup({ category, ports, onPortClick, selectedPort }) {
-  if (!ports || ports.length === 0) return null;
-  const meta = PORT_CAT[category] || PORT_CAT.other;
-
-  // For physical ports: render as switch-style (top/bottom rows)
-  const isPhysical = category === "physical" || category === "physical_sfp";
-  let topRow = ports;
-  let bottomRow = [];
-
-  if (isPhysical && ports.length >= 6) {
-    // Split into odd-index top, even-index bottom (1,3,5... / 2,4,6...)
-    topRow = [];
-    bottomRow = [];
-    ports.forEach((p, i) => {
-      if (i % 2 === 0) topRow.push(p);
-      else bottomRow.push(p);
-    });
-  }
-
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <div style={{ width: 8, height: 8, borderRadius: 2, background: meta.color }} />
-        <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-          {meta.label}
-        </span>
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{ports.length}</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {topRow.map(p => (
-            <PortBox key={`${p.index}-${p.name}`} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
-          ))}
-        </div>
-        {bottomRow.length > 0 && (
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            {bottomRow.map(p => (
-              <PortBox key={`${p.index}-${p.name}`} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function PortStencil({ ports, onPortClick, selectedPort }) {
   if (!ports || ports.length === 0) return null;
 
-  // Group ports by category
-  const groups = {};
-  ports.forEach(p => {
-    const c = p.category || "other";
-    if (!groups[c]) groups[c] = [];
-    groups[c].push(p);
-  });
+  const getPortColor = (p) => {
+    if (p.adminStatus === "down") return PORT_STATUS_COLORS.adminDown;
+    if (p.operStatus === "up") return PORT_STATUS_COLORS.up;
+    if (p.operStatus === "dormant") return PORT_STATUS_COLORS.dormant;
+    return PORT_STATUS_COLORS.down;
+  };
 
-  // Display order
-  const order = ["physical", "physical_sfp", "trunk", "wireless", "loopback", "tunnel", "virtual", "other"];
+  // Split into rows of 24 ports (typical switch layout)
+  const ROW_SIZE = Math.min(ports.length, 24);
+  // Top row = odd ports (1,3,5...), bottom = even ports (2,4,6...)
+  // But if port names are just numbers, split top/bottom
+  const topRow = ports.filter((_, i) => i % 2 === 0);
+  const bottomRow = ports.filter((_, i) => i % 2 === 1);
+
+  const PortDot = ({ port }) => {
+    const isSelected = selectedPort?.index === port.index;
+    const color = getPortColor(port);
+    const isUp = port.operStatus === "up";
+    return (
+      <div
+        onClick={() => onPortClick?.(port)}
+        title={`Port ${port.name || port.index} — ${port.operStatus} ${port.speedMbps ? fmtSpeed(port.speedMbps) : ""}`}
+        style={{
+          width: 28, height: 20, borderRadius: 3,
+          background: isSelected ? "rgba(212,168,67,0.25)" : "rgba(255,255,255,0.04)",
+          border: `2px solid ${color}`,
+          cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          transition: "all 0.15s",
+          position: "relative",
+          boxShadow: isUp ? `0 0 6px ${color}40` : "none",
+        }}
+      >
+        <span style={{
+          fontSize: 8, fontWeight: 600, color: "rgba(255,255,255,0.6)",
+          fontFamily: "'JetBrains Mono', monospace",
+        }}>{port.name || port.index}</span>
+      </div>
+    );
+  };
 
   return (
     <div style={{
-      background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "16px 16px 12px",
+      background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "16px 14px",
       border: "1px solid rgba(255,255,255,0.08)",
     }}>
-      {order.filter(c => groups[c]?.length).map(c => (
-        <PortStencilGroup key={c} category={c} ports={groups[c]} onPortClick={onPortClick} selectedPort={selectedPort} />
-      ))}
-
+      {/* Top row */}
+      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginBottom: 4 }}>
+        {topRow.map(p => <PortDot key={p.index} port={p} />)}
+      </div>
+      {/* Bottom row */}
+      <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+        {bottomRow.map(p => <PortDot key={p.index} port={p} />)}
+      </div>
       {/* Legend */}
-      <div style={{ display: "flex", gap: 16, marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
         {[
-          { color: "#22c55e", label: "Up" },
-          { color: "#374151", label: "Down" },
-          { color: "#ef4444", label: "Admin Down" },
-          { color: "#f59e0b", label: "Dormant" },
+          { color: PORT_STATUS_COLORS.up, label: "Up" },
+          { color: PORT_STATUS_COLORS.down, label: "Down" },
+          { color: PORT_STATUS_COLORS.adminDown, label: "Admin Down" },
+          { color: PORT_STATUS_COLORS.dormant, label: "Dormant" },
         ].map(l => (
-          <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 12, height: 12, borderRadius: 2, border: `1.5px solid ${l.color}`, background: "rgba(0,0,0,0.4)" }} />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{l.label}</span>
+          <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 2, border: `2px solid ${l.color}` }} />
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{l.label}</span>
           </div>
         ))}
       </div>
@@ -276,61 +219,48 @@ function PortStencil({ ports, onPortClick, selectedPort }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   PORT DETAIL PANEL
+   PORT DETAIL PANEL — shows when a port is clicked
    ═══════════════════════════════════════════════════════════ */
 function PortDetailPanel({ port, endpoints, onClose }) {
   if (!port) return null;
 
+  // Find endpoints on this port
   const portEndpoints = (endpoints || []).filter(e =>
-    e.port === port.index || (e.portName && e.portName === port.name)
+    e.port === port.index || e.portName === port.name
   );
-
-  const rows = [
-    { label: "Status", value: (
-      <span style={{ color: port.operStatus === "up" ? "#22c55e" : port.adminStatus === "down" ? "#ef4444" : "#6b7280", fontWeight: 600 }}>
-        {port.adminStatus === "down" ? "ADMIN DOWN" : (port.operStatus || "unknown").toUpperCase()}
-      </span>
-    )},
-    { label: "Admin", value: (port.adminStatus || "\u2014").toUpperCase() },
-    { label: "Speed", value: fmtSpeed(port.speedMbps) },
-    { label: "Duplex", value: port.duplex || "\u2014" },
-    { label: "Category", value: PORT_CAT[port.category]?.label || "\u2014" },
-    { label: "In Traffic", value: fmtBytes(port.inOctets) },
-    { label: "Out Traffic", value: fmtBytes(port.outOctets) },
-    { label: "In Errors", value: String(port.inErrors || 0) },
-    { label: "Out Errors", value: String(port.outErrors || 0) },
-  ];
-
-  if (port.connectedDevice) rows.push({ label: "Connected Device", value: port.connectedDevice });
 
   return (
     <div style={{
-      background: "rgba(212,168,67,0.05)", border: "1px solid rgba(212,168,67,0.25)",
+      background: "rgba(212,168,67,0.05)", border: "1px solid rgba(212,168,67,0.2)",
       borderRadius: 10, padding: 16, marginTop: 12,
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 10, height: 10, borderRadius: 2, background: PORT_STATUS_COLOR(port) }} />
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#d4a843" }}>
-            Port {port.name || port.index}
-          </span>
-        </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#d4a843" }}>
+          Port {port.name || port.index}
+        </span>
         <button onClick={onClose} style={{
           background: "none", border: "none", color: "rgba(255,255,255,0.4)",
-          cursor: "pointer", fontSize: 22, lineHeight: 1, padding: 0,
+          cursor: "pointer", fontSize: 18, lineHeight: 1,
         }}>&times;</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "8px 16px" }}>
-        {rows.map((r, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{r.label}</span>
-            <span style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", fontFamily: "'JetBrains Mono', monospace", textAlign: "right" }}>{r.value}</span>
-          </div>
-        ))}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
+        <InfoRow label="Status" value={
+          <span style={{ color: port.operStatus === "up" ? "#22c55e" : "#ef4444" }}>
+            {port.operStatus?.toUpperCase()}
+          </span>
+        } />
+        <InfoRow label="Admin" value={port.adminStatus?.toUpperCase()} />
+        <InfoRow label="Speed" value={fmtSpeed(port.speedMbps)} />
+        <InfoRow label="Duplex" value={port.duplex || "\u2014"} />
+        <InfoRow label="In Traffic" value={fmtBytes(port.inOctets)} mono />
+        <InfoRow label="Out Traffic" value={fmtBytes(port.outOctets)} mono />
+        <InfoRow label="In Errors" value={String(port.inErrors || 0)} mono />
+        <InfoRow label="Out Errors" value={String(port.outErrors || 0)} mono />
+        {port.connectedDevice && <InfoRow label="Connected" value={port.connectedDevice} />}
       </div>
       {portEndpoints.length > 0 && (
-        <div style={{ marginTop: 14 }}>
-          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>
+        <div style={{ marginTop: 12 }}>
+          <p style={{ fontSize: 12, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>
             Connected Endpoints ({portEndpoints.length})
           </p>
           {portEndpoints.map((ep, i) => (
@@ -359,11 +289,15 @@ function UptimeChart({ history, days }) {
     const data = [];
     const now = new Date();
     const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-    const bucketMs = days <= 7 ? 3600000 : 86400000;
+    // Create hourly buckets
+    const bucketMs = days <= 7 ? 3600000 : 86400000; // hourly for <=7d, daily otherwise
     let t = start.getTime();
     let statusIdx = 0;
     while (t < now.getTime()) {
-      while (statusIdx < history.length - 1 && new Date(history[statusIdx + 1].changedAt).getTime() <= t) statusIdx++;
+      // Find status at this time
+      while (statusIdx < history.length - 1 && new Date(history[statusIdx + 1].changedAt).getTime() <= t) {
+        statusIdx++;
+      }
       const status = history[statusIdx]?.status || "unknown";
       data.push({
         time: t,
@@ -375,18 +309,14 @@ function UptimeChart({ history, days }) {
     return data;
   }, [history, days]);
 
-  if (chartData.length === 0) return (
-    <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", textAlign: "center", padding: 20 }}>
-      No uptime data available
-    </p>
-  );
+  if (chartData.length === 0) return <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", textAlign: "center", padding: 20 }}>No uptime data available</p>;
 
   return (
     <ResponsiveContainer width="100%" height={100}>
       <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
         <defs>
           <linearGradient id="uptimeGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
+            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.3} />
             <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
           </linearGradient>
         </defs>
@@ -405,7 +335,7 @@ function UptimeChart({ history, days }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   MAIN PAGE
+   MAIN PAGE COMPONENT
    ═══════════════════════════════════════════════════════════ */
 export default function DeviceDetailPage() {
   const { id } = useParams();
@@ -416,7 +346,7 @@ export default function DeviceDetailPage() {
   const [error, setError] = useState(null);
   const [selectedPort, setSelectedPort] = useState(null);
   const [portSearch, setPortSearch] = useState("");
-  const [portFilter, setPortFilter] = useState("all");
+  const [portFilter, setPortFilter] = useState("all"); // all, up, down, errors
   const [epSearch, setEpSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
@@ -436,6 +366,8 @@ export default function DeviceDetailPage() {
   }, [id, days]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-refresh every 60s
   useEffect(() => {
     const iv = setInterval(fetchData, 60000);
     return () => clearInterval(iv);
@@ -443,13 +375,13 @@ export default function DeviceDetailPage() {
 
   const handleRefresh = () => { setRefreshing(true); fetchData(); };
 
+  /* ── Filtered ports ── */
   const filteredPorts = useMemo(() => {
     if (!data?.ports) return [];
     let list = data.ports;
     if (portFilter === "up") list = list.filter(p => p.operStatus === "up");
     else if (portFilter === "down") list = list.filter(p => p.operStatus !== "up");
     else if (portFilter === "errors") list = list.filter(p => (p.inErrors || 0) + (p.outErrors || 0) > 0);
-    else if (portFilter === "physical") list = list.filter(p => p.category === "physical" || p.category === "physical_sfp");
     if (portSearch) {
       const q = portSearch.toLowerCase();
       list = list.filter(p =>
@@ -461,6 +393,7 @@ export default function DeviceDetailPage() {
     return list;
   }, [data?.ports, portFilter, portSearch]);
 
+  /* ── Filtered endpoints ── */
   const filteredEndpoints = useMemo(() => {
     if (!data?.endpoints) return [];
     if (!epSearch) return data.endpoints;
@@ -473,12 +406,13 @@ export default function DeviceDetailPage() {
     );
   }, [data?.endpoints, epSearch]);
 
+  /* ── Loading / Error states ── */
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
       <div style={{ textAlign: "center" }}>
-        <RefreshCw size={24} style={{ color: "#d4a843", animation: "ddspin 1s linear infinite" }} />
+        <RefreshCw size={24} style={{ color: "#d4a843", animation: "spin 1s linear infinite" }} />
         <p style={{ color: "rgba(255,255,255,0.5)", marginTop: 12, fontSize: 14 }}>Loading device details...</p>
-        <style>{`@keyframes ddspin { to { transform: rotate(360deg); } }`}</style>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     </div>
   );
@@ -502,54 +436,25 @@ export default function DeviceDetailPage() {
   const tm = TYPE_META[dev.type] || TYPE_META.other;
   const TypeIcon = tm.icon;
 
-  // Build Device Info rows — 2-column proper grid
-  const infoRows = [
-    { label: "Primary IP", value: fmtIp(dev.ipAddress), mono: true },
-    { label: "MAC Address", value: dev.macAddress, mono: true },
-    { label: "Make", value: dev.make },
-    { label: "Model", value: dev.model || dev.makeModel?.split(" ").slice(-2).join(" ") },
-    { label: "Serial Number", value: dev.serialNumber, mono: true },
-    { label: "Firmware", value: dev.firmwareVersion },
-    { label: "SNMP Version", value: dev.snmpVersion },
-    { label: "Site", value: dev.siteName },
-    { label: "Last Seen", value: timeAgo(dev.lastSeenAt) },
-    { label: "First Discovered", value: dev.firstDiscovered ? new Date(dev.firstDiscovered).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : null },
-  ];
-  if (dev.cpuPercent != null) infoRows.push({ label: "CPU Usage", value: `${dev.cpuPercent}%` });
-  if (dev.memoryPercent != null) infoRows.push({ label: "Memory Usage", value: `${dev.memoryPercent}%` });
-
-  const endpointModeBadge = {
-    network_routed: { text: "Network-Wide (Gateway)", color: "#f97316", bg: "rgba(249,115,22,0.12)" },
-    switch_clients: { text: "Switch Clients", color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
-    ap_clients: { text: "Wireless Clients", color: "#a855f7", bg: "rgba(168,85,247,0.12)" },
-  }[data.endpointMode];
-
   return (
-    <div style={{ maxWidth: 1180, margin: "0 auto", padding: "20px 16px 60px" }}>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "20px 16px 60px" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
-        @keyframes ddspin { to { transform: rotate(360deg); } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .dd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         .dd-table th { text-align: left; padding: 8px 10px; color: rgba(255,255,255,0.45); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid rgba(255,255,255,0.08); }
         .dd-table td { padding: 8px 10px; color: rgba(255,255,255,0.78); border-bottom: 1px solid rgba(255,255,255,0.04); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
         .dd-table tr:hover td { background: rgba(255,255,255,0.02); }
         .dd-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
         .dd-filter-btn { padding: 5px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.08); background: transparent; color: rgba(255,255,255,0.5); cursor: pointer; font-size: 12px; transition: all 0.15s; }
-        .dd-filter-btn:hover { color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.15); }
         .dd-filter-btn.active { background: rgba(212,168,67,0.15); border-color: rgba(212,168,67,0.3); color: #d4a843; }
-        .dd-search { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 7px 12px 7px 32px; color: rgba(255,255,255,0.85); font-size: 13px; outline: none; width: 240px; }
+        .dd-search { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 7px 12px 7px 32px; color: rgba(255,255,255,0.85); font-size: 13px; outline: none; width: 220px; }
         .dd-search:focus { border-color: rgba(212,168,67,0.4); }
         .dd-search::placeholder { color: rgba(255,255,255,0.25); }
-        .dd-info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 32px; }
-        @media (max-width: 720px) { .dd-info-grid { grid-template-columns: 1fr; } }
-        .dd-info-row { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.04); gap: 12px; }
-        .dd-info-label { font-size: 13px; color: rgba(255,255,255,0.5); flex-shrink: 0; }
-        .dd-info-value { font-size: 13px; color: rgba(255,255,255,0.88); text-align: right; word-break: break-all; }
-        .dd-info-value.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
       `}</style>
 
       {/* ── Header ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
         <button onClick={() => router.push("/devices")} style={{
           background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 8, padding: "8px 10px", cursor: "pointer", color: "rgba(255,255,255,0.6)",
@@ -561,15 +466,15 @@ export default function DeviceDetailPage() {
         }}>
           <TypeIcon size={22} style={{ color: tm.color }} />
         </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: "rgba(255,255,255,0.95)", margin: 0 }}>{dev.name}</h1>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: "rgba(255,255,255,0.95)", margin: 0 }}>{dev.name}</h1>
             <span className="dd-pill" style={{ background: st.bg, color: st.color }}>
               <CircleDot size={10} /> {st.label}
             </span>
           </div>
           <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>
-            {tm.label}{dev.make ? ` \u00b7 ${dev.make}` : ""}{dev.model ? ` ${dev.model}` : ""}{dev.siteName ? ` \u00b7 ${dev.siteName}` : ""}
+            {tm.label} {dev.make ? `\u00b7 ${dev.make}` : ""} {dev.model ? dev.model : ""} {dev.siteName ? `\u00b7 ${dev.siteName}` : ""}
           </p>
         </div>
         <button onClick={handleRefresh} style={{
@@ -577,53 +482,42 @@ export default function DeviceDetailPage() {
           borderRadius: 8, padding: "8px 14px", cursor: "pointer", color: "#d4a843",
           display: "flex", alignItems: "center", gap: 6, fontSize: 13,
         }}>
-          <RefreshCw size={14} style={refreshing ? { animation: "ddspin 1s linear infinite" } : {}} />
+          <RefreshCw size={14} style={refreshing ? { animation: "spin 1s linear infinite" } : {}} />
           Refresh
         </button>
       </div>
 
-      {/* ── Stat cards ── */}
+      {/* ── Top stat cards ── */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
         <StatCard label="Uptime" value={dev.uptimeFormatted || "\u2014"} sub={data.uptime?.percent != null ? `${data.uptime.percent}% (${days}d)` : null} color="#22c55e" />
-        {data.portStats?.physicalCount > 0 && (
-          <StatCard label="Physical Ports" value={data.portStats.physicalCount} sub={`${data.portStats.physicalUp} up`} color="#3b82f6" />
-        )}
-        <StatCard label="Total Interfaces" value={data.portStats?.total || 0} sub={`${data.portStats?.up || 0} up \u00b7 ${data.portStats?.adminDown || 0} disabled`} color="#06b6d4" />
-        <StatCard label="Endpoints" value={data.endpoints?.length || 0} sub={data.endpointMode === "network_routed" ? "in subnet" : null} color="#a855f7" />
+        <StatCard label="Ports" value={data.portStats?.total || 0} sub={`${data.portStats?.up || 0} up \u00b7 ${data.portStats?.down || 0} down`} color="#3b82f6" />
+        <StatCard label="Endpoints" value={data.endpoints?.length || 0} color="#a855f7" />
         <StatCard label="Neighbors" value={data.neighbors?.length || 0} color="#06b6d4" />
         {data.portStats?.errors > 0 && (
           <StatCard label="Port Errors" value={data.portStats.errors} color="#ef4444" />
         )}
       </div>
 
-      {/* ── Device Information (2-col grid) ── */}
+      {/* ── Device Info ── */}
       <Section title="Device Information" icon={Server} iconColor={tm.color}>
-        <div className="dd-info-grid">
-          {infoRows.filter(r => r.value != null && r.value !== "").map((r, i) => (
-            <div key={i} className="dd-info-row">
-              <span className="dd-info-label">{r.label}</span>
-              <span className={`dd-info-value${r.mono ? " mono" : ""}`}>{r.value}</span>
-            </div>
-          ))}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 0 }}>
+          <InfoRow label="IP Address" value={dev.ipAddress} mono />
+          <InfoRow label="MAC Address" value={dev.macAddress} mono />
+          <InfoRow label="Make / Model" value={[dev.make, dev.model].filter(Boolean).join(" ") || dev.makeModel || "\u2014"} />
+          <InfoRow label="Serial Number" value={dev.serialNumber} mono />
+          <InfoRow label="Firmware" value={dev.firmwareVersion} />
+          <InfoRow label="SNMP Version" value={dev.snmpVersion} />
+          <InfoRow label="Last Seen" value={timeAgo(dev.lastSeenAt)} />
+          <InfoRow label="First Discovered" value={dev.createdAt ? new Date(dev.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "\u2014"} />
+          {dev.sysDescr && <InfoRow label="System Description" value={dev.sysDescr} />}
+          {dev.cpuPercent != null && <InfoRow label="CPU" value={`${dev.cpuPercent}%`} />}
+          {dev.memoryPercent != null && <InfoRow label="Memory" value={`${dev.memoryPercent}%`} />}
         </div>
-        {dev.sysDescr && (
-          <div style={{ marginTop: 14, padding: 12, background: "rgba(0,0,0,0.3)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.04)" }}>
-            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 0.5 }}>System Description</p>
-            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", margin: 0, fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.5 }}>{dev.sysDescr}</p>
-          </div>
-        )}
       </Section>
 
       {/* ── Uptime Chart ── */}
-      <Section
-        title="Uptime History"
-        icon={Activity}
-        iconColor="#22c55e"
-        badge={data.uptime?.percent != null ? {
-          text: `${data.uptime.percent}%`,
-          color: data.uptime.percent >= 99 ? "#22c55e" : data.uptime.percent >= 95 ? "#f59e0b" : "#ef4444",
-          bg: data.uptime.percent >= 99 ? "rgba(34,197,94,0.12)" : data.uptime.percent >= 95 ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)",
-        } : null}
+      <Section title="Uptime History" icon={Activity} iconColor="#22c55e"
+        badge={data.uptime?.percent != null ? { text: `${data.uptime.percent}%`, color: data.uptime.percent >= 99 ? "#22c55e" : data.uptime.percent >= 95 ? "#f59e0b" : "#ef4444", bg: data.uptime.percent >= 99 ? "rgba(34,197,94,0.12)" : data.uptime.percent >= 95 ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)" } : null}
       >
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {[7, 14, 30, 90].map(d => (
@@ -635,50 +529,37 @@ export default function DeviceDetailPage() {
         <UptimeChart history={data.history} days={days} />
       </Section>
 
-      {/* ── Port Stencil + Table ── */}
+      {/* ── Port Stencil ── */}
       {data.ports?.length > 0 && (
-        <Section
-          title="Ports & Interfaces"
-          icon={Cable}
-          iconColor="#3b82f6"
-          count={data.portStats?.total}
-          hint={!data.portStats?.hasTrafficData ? "Traffic counters not yet available from collector — port states are accurate, byte counters will populate after the next collection cycle with delta tracking." : null}
-        >
+        <Section title="Ports &amp; Interfaces" icon={Cable} iconColor="#3b82f6" count={data.portStats?.total}>
           <PortStencil ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
           {selectedPort && (
             <PortDetailPanel port={selectedPort} endpoints={data.endpoints} onClose={() => setSelectedPort(null)} />
           )}
 
+          {/* Port filters + search */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
               <input className="dd-search" placeholder="Search ports..." value={portSearch} onChange={e => setPortSearch(e.target.value)} />
             </div>
-            {[
-              { k: "all", l: "All" },
-              { k: "physical", l: "Physical Only" },
-              { k: "up", l: "Up" },
-              { k: "down", l: "Down" },
-              { k: "errors", l: "Errors" },
-            ].map(f => (
-              <button key={f.k} className={`dd-filter-btn${portFilter === f.k ? " active" : ""}`} onClick={() => setPortFilter(f.k)}>
-                {f.l}
+            {["all", "up", "down", "errors"].map(f => (
+              <button key={f} className={`dd-filter-btn${portFilter === f ? " active" : ""}`} onClick={() => setPortFilter(f)}>
+                {f === "all" ? "All" : f === "up" ? "Up" : f === "down" ? "Down" : "Errors"}
               </button>
             ))}
           </div>
 
+          {/* Port table */}
           <div style={{ overflowX: "auto", marginTop: 12 }}>
             <table className="dd-table">
               <thead>
                 <tr>
                   <th>Port</th>
-                  <th>Type</th>
                   <th>Status</th>
                   <th>Speed</th>
-                  {data.portStats?.hasTrafficData && <>
-                    <th>In Traffic</th>
-                    <th>Out Traffic</th>
-                  </>}
+                  <th>In Traffic</th>
+                  <th>Out Traffic</th>
                   <th>Errors</th>
                   <th>Connected</th>
                 </tr>
@@ -686,26 +567,22 @@ export default function DeviceDetailPage() {
               <tbody>
                 {filteredPorts.map(p => {
                   const errs = (p.inErrors || 0) + (p.outErrors || 0);
-                  const cat = PORT_CAT[p.category] || PORT_CAT.other;
                   return (
-                    <tr key={`${p.index}-${p.name}`} onClick={() => setSelectedPort(p)} style={{ cursor: "pointer" }}>
+                    <tr key={p.index} onClick={() => setSelectedPort(p)} style={{ cursor: "pointer" }}>
                       <td style={{ fontWeight: 600 }}>{p.name || p.index}</td>
-                      <td style={{ color: cat.color, fontSize: 10, textTransform: "uppercase" }}>{cat.label}</td>
                       <td>
                         <span className="dd-pill" style={{
-                          background: p.operStatus === "up" ? "rgba(34,197,94,0.12)" : p.adminStatus === "down" ? "rgba(239,68,68,0.12)" : "rgba(107,114,128,0.12)",
+                          background: p.operStatus === "up" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.08)",
                           color: p.operStatus === "up" ? "#22c55e" : p.adminStatus === "down" ? "#ef4444" : "#6b7280",
                         }}>
                           <CircleDot size={8} />
-                          {p.adminStatus === "down" ? "ADMIN DOWN" : (p.operStatus || "unknown").toUpperCase()}
+                          {p.adminStatus === "down" ? "Admin Off" : (p.operStatus || "unknown").toUpperCase()}
                         </span>
                       </td>
                       <td>{fmtSpeed(p.speedMbps)}</td>
-                      {data.portStats?.hasTrafficData && <>
-                        <td>{fmtBytes(p.inOctets)}</td>
-                        <td>{fmtBytes(p.outOctets)}</td>
-                      </>}
-                      <td style={{ color: errs > 0 ? "#ef4444" : "rgba(255,255,255,0.4)" }}>{errs > 0 ? errs : "\u2014"}</td>
+                      <td>{fmtBytes(p.inOctets)}</td>
+                      <td>{fmtBytes(p.outOctets)}</td>
+                      <td style={{ color: errs > 0 ? "#ef4444" : "inherit" }}>{errs > 0 ? errs : "\u2014"}</td>
                       <td style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{p.connectedDevice || "\u2014"}</td>
                     </tr>
                   );
@@ -722,97 +599,86 @@ export default function DeviceDetailPage() {
       {/* ── VLANs ── */}
       {data.vlans?.length > 0 && (
         <Section title="VLANs" icon={Layers} iconColor="#f59e0b" count={data.vlans.length} collapsible defaultOpen>
-          <div style={{ overflowX: "auto" }}>
-            <table className="dd-table">
-              <thead>
-                <tr>
-                  <th>VLAN ID</th>
-                  <th>Name</th>
-                  <th>Tagged Ports</th>
-                  <th>Untagged Ports</th>
+          <table className="dd-table">
+            <thead>
+              <tr>
+                <th>VLAN ID</th>
+                <th>Name</th>
+                <th>Tagged Ports</th>
+                <th>Untagged Ports</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.vlans.map(v => (
+                <tr key={v.id}>
+                  <td style={{ fontWeight: 600, color: "#d4a843" }}>{v.id}</td>
+                  <td>{v.name || "\u2014"}</td>
+                  <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
+                    {v.taggedPorts || "\u2014"}
+                  </td>
+                  <td style={{ fontSize: 11 }}>{v.untaggedPorts || "\u2014"}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {data.vlans.map(v => (
-                  <tr key={v.id}>
-                    <td style={{ fontWeight: 700, color: "#d4a843" }}>{v.id}</td>
-                    <td>{v.name || "\u2014"}</td>
-                    <td style={{ maxWidth: 400, fontSize: 11, wordBreak: "break-all" }}>{v.taggedPorts || "\u2014"}</td>
-                    <td style={{ fontSize: 11, wordBreak: "break-all" }}>{v.untaggedPorts || "\u2014"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </Section>
       )}
 
       {/* ── Neighbors ── */}
       {data.neighbors?.length > 0 && (
         <Section title="Connected Neighbors" icon={Network} iconColor="#06b6d4" count={data.neighbors.length} collapsible defaultOpen>
-          <div style={{ overflowX: "auto" }}>
-            <table className="dd-table">
-              <thead>
-                <tr>
-                  <th>Device</th>
-                  <th>Type</th>
-                  <th>Status</th>
-                  <th>Local Port</th>
-                  <th>Remote Port</th>
-                  <th>Method</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.neighbors.map((n, i) => {
-                  const ntm = TYPE_META[n.type] || TYPE_META.other;
-                  const NIcon = ntm.icon;
-                  return (
-                    <tr key={i} onClick={() => n.deviceId && router.push(`/devices/${n.deviceId}`)} style={{ cursor: n.deviceId ? "pointer" : "default" }}>
-                      <td>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <NIcon size={14} style={{ color: ntm.color, flexShrink: 0 }} />
-                          <span style={{ fontWeight: 500, color: "rgba(255,255,255,0.88)" }}>{n.name}</span>
-                          {n.deviceId && <ExternalLink size={10} style={{ color: "rgba(255,255,255,0.25)" }} />}
-                        </div>
-                      </td>
-                      <td style={{ color: ntm.color, fontSize: 11, textTransform: "uppercase" }}>{ntm.label}</td>
-                      <td>
-                        <span className="dd-pill" style={{
-                          background: n.status === "up" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.08)",
-                          color: n.status === "up" ? "#22c55e" : "#ef4444",
-                        }}>
-                          <CircleDot size={8} /> {(n.status || "unknown").toUpperCase()}
-                        </span>
-                      </td>
-                      <td>{n.localInterface || "\u2014"}</td>
-                      <td>{n.remoteInterface || "\u2014"}</td>
-                      <td>
-                        <span className="dd-pill" style={{
-                          background: n.method === "lldp" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)",
-                          color: n.method === "lldp" ? "#3b82f6" : "#f59e0b",
-                        }}>{(n.method || "").toUpperCase()}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <table className="dd-table">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Local Port</th>
+                <th>Remote Port</th>
+                <th>Method</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.neighbors.map((n, i) => {
+                const ntm = TYPE_META[n.type] || TYPE_META.other;
+                const NIcon = ntm.icon;
+                return (
+                  <tr key={i} onClick={() => n.deviceId && router.push(`/devices/${n.deviceId}`)} style={{ cursor: n.deviceId ? "pointer" : "default" }}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <NIcon size={14} style={{ color: ntm.color, flexShrink: 0 }} />
+                        <span style={{ fontWeight: 500, color: "rgba(255,255,255,0.88)" }}>{n.name}</span>
+                        {n.deviceId && <ExternalLink size={10} style={{ color: "rgba(255,255,255,0.25)" }} />}
+                      </div>
+                    </td>
+                    <td style={{ color: ntm.color, fontSize: 11, textTransform: "uppercase" }}>{ntm.label}</td>
+                    <td>
+                      <span className="dd-pill" style={{
+                        background: n.status === "up" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.08)",
+                        color: n.status === "up" ? "#22c55e" : "#ef4444",
+                      }}>
+                        <CircleDot size={8} /> {(n.status || "unknown").toUpperCase()}
+                      </span>
+                    </td>
+                    <td>{n.localInterface || "\u2014"}</td>
+                    <td>{n.remoteInterface || "\u2014"}</td>
+                    <td>
+                      <span className="dd-pill" style={{
+                        background: n.method === "lldp" ? "rgba(59,130,246,0.12)" : "rgba(245,158,11,0.12)",
+                        color: n.method === "lldp" ? "#3b82f6" : "#f59e0b",
+                      }}>{(n.method || "").toUpperCase()}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </Section>
       )}
 
-      {/* ── Endpoints ── */}
+      {/* ── Connected Endpoints ── */}
       {data.endpoints?.length > 0 && (
-        <Section
-          title={data.endpointMode === "network_routed" ? "Network Endpoints (Routed)" : "Connected Endpoints"}
-          icon={Users}
-          iconColor="#a855f7"
-          count={data.endpoints.length}
-          badge={endpointModeBadge}
-          hint={data.endpointMode === "network_routed" ? "Showing all endpoints in this device's /24 subnet. As the gateway, all traffic from these endpoints routes through this device." : null}
-          collapsible
-          defaultOpen
-        >
+        <Section title="Connected Endpoints" icon={Users} iconColor="#a855f7" count={data.endpoints.length} collapsible defaultOpen>
           <div style={{ position: "relative", marginBottom: 12 }}>
             <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
             <input className="dd-search" placeholder="Search endpoints..." value={epSearch} onChange={e => setEpSearch(e.target.value)} />
@@ -825,7 +691,7 @@ export default function DeviceDetailPage() {
                   <th>MAC Address</th>
                   <th>Manufacturer</th>
                   <th>Type</th>
-                  {data.endpointMode === "network_routed" && <th>Connected Via</th>}
+                  <th>Port</th>
                   <th>VLAN</th>
                   <th>Last Seen</th>
                 </tr>
@@ -845,11 +711,7 @@ export default function DeviceDetailPage() {
                         {(ep.connectionType || "wired").toUpperCase()}
                       </span>
                     </td>
-                    {data.endpointMode === "network_routed" && (
-                      <td style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
-                        {ep.apName ? `${ep.apName.replace(/ \(.*\)$/, "")}` : ep.switchName ? ep.switchName.replace(/ \(.*\)$/, "") : "\u2014"}
-                      </td>
-                    )}
+                    <td>{ep.portName || ep.port || "\u2014"}</td>
                     <td>{ep.vlanId ? `${ep.vlanId}${ep.vlanName ? ` (${ep.vlanName})` : ""}` : "\u2014"}</td>
                     <td style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>{timeAgo(ep.lastSeen)}</td>
                   </tr>
@@ -865,32 +727,22 @@ export default function DeviceDetailPage() {
 
       {/* ── IP Interfaces ── */}
       {data.interfaces?.length > 0 && (
-        <Section
-          title="IP Interfaces"
-          icon={Globe}
-          iconColor="#6366f1"
-          count={data.interfaces.length}
-          collapsible
-          defaultOpen
-          hint={data.interfaces.length === 1 && (dev.type === "firewall" || dev.type === "router") ? "Only the management IP is currently being collected. Additional interface IPs (WAN, LAN, DMZ) will populate when SNMP ipAddrTable walking is enabled in the collector." : null}
-        >
+        <Section title="IP Interfaces" icon={Globe} iconColor="#6366f1" count={data.interfaces.length} collapsible>
           <table className="dd-table">
             <thead>
               <tr>
                 <th>IP Address</th>
                 <th>Interface</th>
                 <th>VLAN</th>
-                <th>Source</th>
                 <th>Primary</th>
               </tr>
             </thead>
             <tbody>
               {data.interfaces.map((iface, i) => (
                 <tr key={i}>
-                  <td>{fmtIp(iface.ipAddress)}</td>
+                  <td>{iface.ipAddress || "\u2014"}</td>
                   <td>{iface.interfaceName || "\u2014"}</td>
                   <td>{iface.vlanId || "\u2014"}</td>
-                  <td style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>{iface.source || "\u2014"}</td>
                   <td>{iface.isPrimary ? "\u2705" : ""}</td>
                 </tr>
               ))}
@@ -899,7 +751,7 @@ export default function DeviceDetailPage() {
         </Section>
       )}
 
-      {/* ── Status History ── */}
+      {/* ── Status History Log ── */}
       {data.history?.length > 0 && (
         <Section title="Status Change Log" icon={Clock} iconColor="rgba(255,255,255,0.4)" count={data.history.length} collapsible defaultOpen={false}>
           <table className="dd-table">

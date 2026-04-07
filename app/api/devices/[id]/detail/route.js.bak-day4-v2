@@ -1,13 +1,12 @@
 /**
- * VEMIO™ — Device Detail API (Collector-Native, v3)
+ * VEMIO™ — Device Detail API (Collector-Native, v2)
  * GET /api/devices/[id]/detail
  *
- * v3 changes:
- * - Endpoints filtered to ip_address IS NOT NULL only
- * - Switches/APs: query by collector device_id (FK), not name matching
- * - Each port now carries its attached endpoints array (JOIN on device_id + port_index)
- * - Firewall mode: shows directly-attached only (usually empty — collector limitation)
- *   with clear hint explaining why
+ * v2 changes:
+ * - Firewalls/routers: pull ALL endpoints in the same /24 subnet (it IS the gateway)
+ * - Port categorization for smart stencil grouping
+ * - Better switch endpoint matching (prefix LIKE on "(switch)" suffix)
+ * - hasTrafficData flag so the UI can hide useless 0-byte columns
  */
 
 import { withAuth } from '@/lib/auth';
@@ -61,10 +60,8 @@ export const GET = withAuth(async (req, session, { params }) => {
     const collectorDev = collectorDevResult.rows[0] || null;
     const collectorDeviceId = collectorDev?.collector_device_id;
 
-    /* ── 3. Ports + JOIN to endpoints by (device_id, port_index) ── */
+    /* ── 3. Ports with category ── */
     let ports = [];
-    let portEndpointMap = new Map(); // port_index -> [endpoints]
-
     if (collectorDeviceId) {
       const portsResult = await queryWithTenant(tenantId,
         `SELECT port_index, port_name, admin_status, oper_status,
@@ -76,41 +73,10 @@ export const GET = withAuth(async (req, session, { params }) => {
          ORDER BY port_index ASC`,
         [collectorDeviceId]
       );
-
-      // Aggregate endpoints per port_index for THIS device
-      const portClientsResult = await queryWithTenant(tenantId,
-        `SELECT port_index, mac_address, ip_address, manufacturer, hostname,
-                connection_type, vlan_id, last_seen
-         FROM collector_port_clients
-         WHERE device_id = $1
-           AND port_index IS NOT NULL
-         ORDER BY last_seen DESC`,
-        [collectorDeviceId]
-      );
-
-      for (const ep of portClientsResult.rows) {
-        const idx = ep.port_index;
-        if (!portEndpointMap.has(idx)) portEndpointMap.set(idx, []);
-        portEndpointMap.get(idx).push(ep);
-      }
-
-      ports = portsResult.rows.map(p => {
-        const attached = portEndpointMap.get(p.port_index) || [];
-        return {
-          ...p,
-          category: categorizePort(p.port_name, dev.device_type),
-          attachedEndpoints: attached.map(e => ({
-            mac: e.mac_address, ip: e.ip_address,
-            manufacturer: e.manufacturer, hostname: e.hostname,
-            connectionType: e.connection_type, vlanId: e.vlan_id,
-            lastSeen: e.last_seen,
-          })),
-          attachedCount: attached.length,
-          // Convenience: first endpoint's IP/MAC for the table column
-          primaryEndpointIp: attached.find(e => e.ip_address)?.ip_address || null,
-          primaryEndpointMac: attached[0]?.mac_address || null,
-        };
-      });
+      ports = portsResult.rows.map(p => ({
+        ...p,
+        category: categorizePort(p.port_name, dev.device_type),
+      }));
     }
 
     /* ── 4. VLANs ── */
@@ -160,27 +126,54 @@ export const GET = withAuth(async (req, session, { params }) => {
       interfaces = interfacesResult.rows;
     } catch (e) {}
 
-    /* ── 7. Endpoints — DIRECTLY connected only, with IP ── */
+    /* ── 7. Endpoints — strategy depends on device type ── */
     let endpoints = [];
     let endpointMode = 'none';
 
-    if (collectorDeviceId) {
-      // Use the proper FK: collector_port_clients.device_id
+    if (isSwitch) {
+      const namePrefix = dev.name.split(' ')[0];
       const r = await queryWithTenant(tenantId,
         `SELECT mac_address, ip_address, manufacturer, connection_type,
                 port_index, port_name, hostname,
                 connected_ap_name, connected_switch_name,
                 vlan_id, vlan_name, status, first_seen, last_seen
          FROM collector_port_clients
-         WHERE device_id = $1
-           AND ip_address IS NOT NULL
-           AND tenant_id = $2
-         ORDER BY ip_address ASC
-         LIMIT 500`,
-        [collectorDeviceId, tenantId]
+         WHERE connected_switch_name ILIKE $1 AND tenant_id = $2
+         ORDER BY last_seen DESC LIMIT 300`,
+        [namePrefix + '%', tenantId]
       );
       endpoints = r.rows;
-      endpointMode = isAP ? 'ap_clients' : isSwitch ? 'switch_clients' : 'direct';
+      endpointMode = 'switch_clients';
+    } else if (isAP) {
+      const namePrefix = dev.name.split(' (')[0];
+      const r = await queryWithTenant(tenantId,
+        `SELECT mac_address, ip_address, manufacturer, connection_type,
+                port_index, port_name, hostname,
+                connected_ap_name, connected_switch_name,
+                vlan_id, vlan_name, status, first_seen, last_seen
+         FROM collector_port_clients
+         WHERE connected_ap_name ILIKE $1 AND tenant_id = $2
+         ORDER BY last_seen DESC LIMIT 300`,
+        [namePrefix + '%', tenantId]
+      );
+      endpoints = r.rows;
+      endpointMode = 'ap_clients';
+    } else if (isFirewallOrRouter) {
+      // Network-wide view: every endpoint in the same /24 routes through this gateway
+      const r = await queryWithTenant(tenantId,
+        `SELECT mac_address, ip_address, manufacturer, connection_type,
+                port_index, port_name, hostname,
+                connected_ap_name, connected_switch_name,
+                vlan_id, vlan_name, status, first_seen, last_seen
+         FROM collector_port_clients
+         WHERE ip_address IS NOT NULL
+           AND set_masklen(ip_address::cidr, 24) = set_masklen($1::inet::cidr, 24)
+           AND tenant_id = $2
+         ORDER BY last_seen DESC LIMIT 500`,
+        [dev.ip_address, tenantId]
+      );
+      endpoints = r.rows;
+      endpointMode = 'network_routed';
     }
 
     /* ── 8. Status history ── */
@@ -233,7 +226,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       adminDown: ports.filter(p => p.admin_status === 'down').length,
       errors: ports.reduce((s, p) => s + (Number(p.in_errors) || 0) + (Number(p.out_errors) || 0), 0),
       hasTrafficData: ports.some(p => Number(p.in_octets) > 0 || Number(p.out_octets) > 0),
-      hasEndpointData: ports.some(p => p.attachedCount > 0),
       physicalCount: physicalPorts.length,
       physicalUp: physicalPorts.filter(p => p.oper_status === 'up').length,
     };
@@ -265,11 +257,6 @@ export const GET = withAuth(async (req, session, { params }) => {
         inErrors: p.in_errors, outErrors: p.out_errors,
         connectedDevice: p.connected_device,
         inRateMbps: p.in_rate_mbps, outRateMbps: p.out_rate_mbps,
-        // NEW: endpoint correlation
-        attachedEndpoints: p.attachedEndpoints,
-        attachedCount: p.attachedCount,
-        primaryEndpointIp: p.primaryEndpointIp,
-        primaryEndpointMac: p.primaryEndpointMac,
       })),
       portStats,
       vlans: vlans.map(v => ({
@@ -305,6 +292,7 @@ export const GET = withAuth(async (req, session, { params }) => {
   }
 });
 
+/* Port categorization for stencil grouping */
 function categorizePort(name, deviceType) {
   if (!name) return 'other';
   const n = name.toLowerCase();

@@ -12,7 +12,6 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
   ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { findStencilTemplate, findPortByName } from "@/app/components/stencil-templates";
 
 /* ═══════════════════════════════════════════════════════════
    CONSTANTS
@@ -90,11 +89,6 @@ function fmtMac(mac) {
   return String(mac).toLowerCase();
 }
 
-function cleanModel(m) {
-  if (!m) return "";
-  return String(m).trim().replace(/,$/, "");
-}
-
 /* ═══════════════════════════════════════════════════════════
    COMPONENTS
    ═══════════════════════════════════════════════════════════ */
@@ -163,49 +157,44 @@ function StatCard({ label, value, sub, color }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   MODEL-AWARE STENCIL — uses stencil-templates.js for known models,
-   falls back to grouped rendering for unknown ones
+   PORT STENCIL
    ═══════════════════════════════════════════════════════════ */
-function StencilPort({ name, type, port, onClick, isSelected }) {
-  const isSfp = type === "sfp";
-  const color = port ? PORT_STATUS_COLOR(port) : "#374151";
-  const isUp = port?.operStatus === "up";
-  const hasEndpoints = port?.attachedCount > 0;
-  const labelLen = name.length;
-  const width = Math.max(40, Math.min(86, labelLen * 7 + 14));
+function PortBox({ port, onClick, isSelected }) {
+  const color = PORT_STATUS_COLOR(port);
+  const isUp = port.operStatus === "up";
+  const labelLen = (port.name || String(port.index)).length;
+  const width = Math.max(36, Math.min(96, labelLen * 7 + 14));
+  const hasEndpoints = port.attachedCount > 0;
 
   return (
     <div
-      onClick={() => port && onClick?.(port)}
-      title={port
-        ? `${name} \u00b7 ${port.adminStatus === "down" ? "Admin Down" : (port.operStatus || "unknown").toUpperCase()}${port.speedMbps ? " \u00b7 " + fmtSpeed(port.speedMbps) : ""}${port.portIp ? " \u00b7 " + fmtIp(port.portIp) : ""}${port.connectedNeighborName ? " \u00b7 → " + port.connectedNeighborName : ""}`
-        : `${name} (not detected)`}
+      onClick={() => onClick?.(port)}
+      title={`${port.name || port.index} \u00b7 ${port.adminStatus === "down" ? "Admin Down" : (port.operStatus || "unknown").toUpperCase()}${port.speedMbps ? " \u00b7 " + fmtSpeed(port.speedMbps) : ""}${hasEndpoints ? " \u00b7 " + port.attachedCount + " endpoint(s)" : ""}`}
       style={{
-        minWidth: width, height: isSfp ? 22 : 32, padding: "0 8px",
-        borderRadius: isSfp ? 2 : 4,
-        background: isSelected ? "rgba(212,168,67,0.18)" : "rgba(0,0,0,0.5)",
-        border: `2px solid ${isSelected ? "#d4a843" : color}`,
-        cursor: port ? "pointer" : "default",
-        opacity: port ? 1 : 0.35,
+        minWidth: width, height: 26, padding: "0 8px",
+        borderRadius: 4,
+        background: isSelected ? "rgba(212,168,67,0.18)" : "rgba(0,0,0,0.4)",
+        border: `1.5px solid ${isSelected ? "#d4a843" : color}`,
+        cursor: "pointer",
         display: "flex", alignItems: "center", justifyContent: "center",
         transition: "all 0.15s",
-        boxShadow: isUp ? `0 0 10px ${color}40, inset 0 0 10px ${color}15` : "none",
+        boxShadow: isUp ? `0 0 8px ${color}30, inset 0 0 8px ${color}10` : "none",
         position: "relative",
       }}
     >
       <span style={{
-        fontSize: isSfp ? 9 : 11, fontWeight: 600,
-        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.5)",
+        fontSize: 10, fontWeight: 600,
+        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.45)",
         fontFamily: "'JetBrains Mono', monospace",
         whiteSpace: "nowrap",
-      }}>{name}</span>
+      }}>{port.name || port.index}</span>
       {hasEndpoints && (
         <div style={{
-          position: "absolute", top: -4, right: -4,
-          width: 12, height: 12, borderRadius: "50%",
+          position: "absolute", top: -3, right: -3,
+          width: 10, height: 10, borderRadius: "50%",
           background: "#d4a843",
-          border: "2px solid #0a0a14",
-          fontSize: 8, color: "#0a0a14", fontWeight: 700,
+          border: "1.5px solid #0a0a14",
+          fontSize: 7, color: "#0a0a14", fontWeight: 700,
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>{port.attachedCount > 9 ? "9+" : port.attachedCount}</div>
       )}
@@ -213,85 +202,80 @@ function StencilPort({ name, type, port, onClick, isSelected }) {
   );
 }
 
-function ModelStencil({ template, ports, onPortClick, selectedPort }) {
-  const accentColor = template.color || "#3b82f6";
+function PortStencilGroup({ category, ports, onPortClick, selectedPort }) {
+  if (!ports || ports.length === 0) return null;
+  const meta = PORT_CAT[category] || PORT_CAT.other;
+
+  const isPhysical = category === "physical" || category === "physical_sfp";
+  let topRow = ports;
+  let bottomRow = [];
+
+  if (isPhysical && ports.length >= 6) {
+    topRow = [];
+    bottomRow = [];
+    ports.forEach((p, i) => {
+      if (i % 2 === 0) topRow.push(p);
+      else bottomRow.push(p);
+    });
+  }
 
   return (
-    <div style={{
-      background: "linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.4) 100%)",
-      borderRadius: 12,
-      padding: "20px 24px",
-      border: `1px solid ${accentColor}30`,
-      boxShadow: `inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px ${accentColor}10`,
-    }}>
-      {/* Model badge bar */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 6, height: 22, background: accentColor, borderRadius: 2, boxShadow: `0 0 8px ${accentColor}80` }} />
-          <div>
-            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", margin: 0, textTransform: "uppercase", letterSpacing: 1 }}>Device Model</p>
-            <p style={{ fontSize: 14, color: "rgba(255,255,255,0.95)", margin: "2px 0 0", fontWeight: 600 }}>{template.label}</p>
-          </div>
-        </div>
-        {/* Status LEDs */}
-        <div style={{ display: "flex", gap: 6 }}>
-          {["PWR", "STA", "LNK"].map(led => (
-            <div key={led} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px #22c55e80" }} />
-              <span style={{ fontSize: 8, color: "rgba(255,255,255,0.4)", fontFamily: "'JetBrains Mono', monospace" }}>{led}</span>
-            </div>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <div style={{ width: 8, height: 8, borderRadius: 2, background: meta.color }} />
+        <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          {meta.label}
+        </span>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{ports.length}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {topRow.map(p => (
+            <PortBox key={`${p.index}-${p.name}`} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
           ))}
         </div>
-      </div>
-
-      {/* Port rows */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "12px 16px", background: "rgba(0,0,0,0.4)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.06)" }}>
-        {template.rows.map((row, ri) => (
-          <div key={ri} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            {row.map((slot, si) => {
-              if (slot.type === "gap") return <div key={si} style={{ width: slot.width || 16 }} />;
-              const port = findPortByName(ports, slot.name);
-              return (
-                <StencilPort
-                  key={si}
-                  name={slot.name}
-                  type={slot.type}
-                  port={port}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.name === slot.name}
-                />
-              );
-            })}
-          </div>
-        ))}
-        {template.sfpRow && (
-          <div style={{ display: "flex", gap: 6, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-            {template.sfpRow.map((slot, si) => {
-              const port = findPortByName(ports, slot.name);
-              return (
-                <StencilPort
-                  key={si}
-                  name={slot.name}
-                  type={slot.type}
-                  port={port}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.name === slot.name}
-                />
-              );
-            })}
+        {bottomRow.length > 0 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {bottomRow.map(p => (
+              <PortBox key={`${p.index}-${p.name}`} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
+            ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* Legend */}
-      <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+function PortStencil({ ports, onPortClick, selectedPort }) {
+  if (!ports || ports.length === 0) return null;
+
+  const groups = {};
+  ports.forEach(p => {
+    const c = p.category || "other";
+    if (!groups[c]) groups[c] = [];
+    groups[c].push(p);
+  });
+
+  const order = ["physical", "physical_sfp", "trunk", "wireless", "loopback", "tunnel", "virtual", "other"];
+
+  return (
+    <div style={{
+      background: "rgba(0,0,0,0.35)", borderRadius: 10, padding: "16px 16px 12px",
+      border: "1px solid rgba(255,255,255,0.08)",
+    }}>
+      {order.filter(c => groups[c]?.length).map(c => (
+        <PortStencilGroup key={c} category={c} ports={groups[c]} onPortClick={onPortClick} selectedPort={selectedPort} />
+      ))}
+
+      <div style={{ display: "flex", gap: 16, marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)", flexWrap: "wrap", alignItems: "center" }}>
         {[
           { color: "#22c55e", label: "Up" },
           { color: "#374151", label: "Down" },
           { color: "#ef4444", label: "Admin Down" },
+          { color: "#f59e0b", label: "Dormant" },
         ].map(l => (
           <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 12, height: 12, borderRadius: 2, border: `2px solid ${l.color}`, background: "rgba(0,0,0,0.5)" }} />
+            <div style={{ width: 12, height: 12, borderRadius: 2, border: `1.5px solid ${l.color}`, background: "rgba(0,0,0,0.4)" }} />
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{l.label}</span>
           </div>
         ))}
@@ -304,62 +288,10 @@ function ModelStencil({ template, ports, onPortClick, selectedPort }) {
   );
 }
 
-function FallbackStencil({ ports, onPortClick, selectedPort }) {
-  // Only show physical ports in the fallback stencil
-  const physicalPorts = ports.filter(p =>
-    p.category === "physical" || p.category === "physical_sfp"
-  );
-  if (physicalPorts.length === 0) {
-    return (
-      <div style={{
-        padding: 20, textAlign: "center",
-        background: "rgba(0,0,0,0.3)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.06)",
-        color: "rgba(255,255,255,0.4)", fontSize: 13,
-      }}>
-        No physical ports detected on this device.
-      </div>
-    );
-  }
-
-  // Auto top/bottom split for switch-style layout
-  const topRow = [];
-  const bottomRow = [];
-  physicalPorts.forEach((p, i) => {
-    if (i % 2 === 0) topRow.push(p);
-    else bottomRow.push(p);
-  });
-
-  return (
-    <div style={{
-      background: "rgba(0,0,0,0.4)", borderRadius: 10, padding: "16px 16px 12px",
-      border: "1px solid rgba(255,255,255,0.08)",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <Info size={12} style={{ color: "rgba(255,255,255,0.4)" }} />
-        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>
-          Generic stencil — model-specific layout not available for this device
-        </span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {topRow.map(p => (
-            <StencilPort key={`${p.index}-${p.name}`} name={p.name || String(p.index)} type={p.category === "physical_sfp" ? "sfp" : "port"} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {bottomRow.map(p => (
-            <StencilPort key={`${p.index}-${p.name}`} name={p.name || String(p.index)} type={p.category === "physical_sfp" ? "sfp" : "port"} port={p} onClick={onPortClick} isSelected={selectedPort?.index === p.index} />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════
    PORT DETAIL PANEL
    ═══════════════════════════════════════════════════════════ */
-function PortDetailPanel({ port, onClose, onNavigate }) {
+function PortDetailPanel({ port, onClose }) {
   if (!port) return null;
 
   const rows = [
@@ -368,32 +300,15 @@ function PortDetailPanel({ port, onClose, onNavigate }) {
         {port.adminStatus === "down" ? "ADMIN DOWN" : (port.operStatus || "unknown").toUpperCase()}
       </span>
     )},
+    { label: "Admin", value: (port.adminStatus || "\u2014").toUpperCase() },
     { label: "Speed", value: fmtSpeed(port.speedMbps) },
     { label: "Duplex", value: port.duplex || "\u2014" },
     { label: "Category", value: PORT_CAT[port.category]?.label || "\u2014" },
+    { label: "In Traffic", value: fmtBytes(port.inOctets) },
+    { label: "Out Traffic", value: fmtBytes(port.outOctets) },
+    { label: "In Errors", value: String(port.inErrors || 0) },
+    { label: "Out Errors", value: String(port.outErrors || 0) },
   ];
-  if (port.portIp) rows.push({ label: "Port IP", value: fmtIp(port.portIp), highlight: true });
-  if (port.connectedNeighborName) {
-    rows.push({
-      label: "Connected To",
-      value: (
-        <span
-          onClick={() => port.connectedNeighborId && onNavigate?.(port.connectedNeighborId)}
-          style={{
-            cursor: port.connectedNeighborId ? "pointer" : "default",
-            color: "#06b6d4", textDecoration: port.connectedNeighborId ? "underline" : "none",
-          }}
-        >
-          {port.connectedNeighborName} {port.connectedNeighborPort ? `(${port.connectedNeighborPort})` : ""}
-        </span>
-      ),
-      highlight: true,
-    });
-  }
-  rows.push({ label: "In Traffic", value: fmtBytes(port.inOctets) });
-  rows.push({ label: "Out Traffic", value: fmtBytes(port.outOctets) });
-  rows.push({ label: "In Errors", value: String(port.inErrors || 0) });
-  rows.push({ label: "Out Errors", value: String(port.outErrors || 0) });
 
   return (
     <div style={{
@@ -418,13 +333,9 @@ function PortDetailPanel({ port, onClose, onNavigate }) {
           cursor: "pointer", fontSize: 22, lineHeight: 1, padding: 0,
         }}>&times;</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "8px 16px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "8px 16px" }}>
         {rows.map((r, i) => (
-          <div key={i} style={{
-            display: "flex", justifyContent: "space-between", padding: "6px 0",
-            borderBottom: "1px solid rgba(255,255,255,0.05)",
-            background: r.highlight ? "rgba(6,182,212,0.04)" : "transparent",
-          }}>
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
             <span style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{r.label}</span>
             <span style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", fontFamily: "'JetBrains Mono', monospace", textAlign: "right" }}>{r.value}</span>
           </div>
@@ -527,7 +438,7 @@ export default function DeviceDetailPage() {
   const [error, setError] = useState(null);
   const [selectedPort, setSelectedPort] = useState(null);
   const [portSearch, setPortSearch] = useState("");
-  const [portFilter, setPortFilter] = useState("physical");
+  const [portFilter, setPortFilter] = useState("all");
   const [epSearch, setEpSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
@@ -557,18 +468,17 @@ export default function DeviceDetailPage() {
   const filteredPorts = useMemo(() => {
     if (!data?.ports) return [];
     let list = data.ports;
-    if (portFilter === "physical") list = list.filter(p => p.category === "physical" || p.category === "physical_sfp");
-    else if (portFilter === "up") list = list.filter(p => p.operStatus === "up");
+    if (portFilter === "up") list = list.filter(p => p.operStatus === "up");
     else if (portFilter === "down") list = list.filter(p => p.operStatus !== "up");
     else if (portFilter === "errors") list = list.filter(p => (p.inErrors || 0) + (p.outErrors || 0) > 0);
+    else if (portFilter === "physical") list = list.filter(p => p.category === "physical" || p.category === "physical_sfp");
     else if (portFilter === "with_endpoints") list = list.filter(p => p.attachedCount > 0);
     if (portSearch) {
       const q = portSearch.toLowerCase();
       list = list.filter(p =>
         (p.name || "").toLowerCase().includes(q) ||
         String(p.index).includes(q) ||
-        (p.portIp || "").includes(q) ||
-        (p.connectedNeighborName || "").toLowerCase().includes(q) ||
+        (p.connectedDevice || "").toLowerCase().includes(q) ||
         (p.primaryEndpointIp || "").includes(q) ||
         (p.primaryEndpointMac || "").toLowerCase().includes(q)
       );
@@ -587,11 +497,6 @@ export default function DeviceDetailPage() {
       (e.hostname || "").toLowerCase().includes(q)
     );
   }, [data?.endpoints, epSearch]);
-
-  const stencilTemplate = useMemo(() => {
-    if (!data?.device) return null;
-    return findStencilTemplate(data.device.make, data.device.model);
-  }, [data?.device]);
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
@@ -627,7 +532,7 @@ export default function DeviceDetailPage() {
     { label: "Primary IP", value: fmtIp(dev.ipAddress), mono: true },
     { label: "MAC Address", value: dev.macAddress, mono: true },
     { label: "Make", value: dev.make },
-    { label: "Model", value: cleanModel(dev.model) || cleanModel(dev.makeModel?.split(" ").slice(-2).join(" ")) },
+    { label: "Model", value: dev.model || dev.makeModel?.split(" ").slice(-2).join(" ") },
     { label: "Serial Number", value: dev.serialNumber, mono: true },
     { label: "Firmware", value: dev.firmwareVersion },
     { label: "SNMP Version", value: dev.snmpVersion },
@@ -684,7 +589,7 @@ export default function DeviceDetailPage() {
             </span>
           </div>
           <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", margin: "2px 0 0" }}>
-            {tm.label}{dev.make ? ` \u00b7 ${dev.make}` : ""}{cleanModel(dev.model) ? ` ${cleanModel(dev.model)}` : ""}{dev.siteName ? ` \u00b7 ${dev.siteName}` : ""}
+            {tm.label}{dev.make ? ` \u00b7 ${dev.make}` : ""}{dev.model ? ` ${dev.model}` : ""}{dev.siteName ? ` \u00b7 ${dev.siteName}` : ""}
           </p>
         </div>
         <button onClick={handleRefresh} style={{
@@ -757,25 +662,21 @@ export default function DeviceDetailPage() {
           icon={Cable}
           iconColor="#3b82f6"
           count={data.portStats?.total}
-          badge={stencilTemplate ? { text: stencilTemplate.label, color: stencilTemplate.color, bg: stencilTemplate.color + "20" } : null}
-          hint={!data.portStats?.hasTrafficData ? "Traffic byte counters not yet available — port states are accurate, deltas will populate after the next collection cycles." : null}
+          hint={!data.portStats?.hasTrafficData ? "Traffic byte counters are not yet available from the collector — port states are accurate, deltas will populate after the next collection cycles." : null}
         >
-          {stencilTemplate
-            ? <ModelStencil template={stencilTemplate} ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
-            : <FallbackStencil ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
-          }
+          <PortStencil ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
           {selectedPort && (
-            <PortDetailPanel port={selectedPort} onClose={() => setSelectedPort(null)} onNavigate={(nid) => router.push(`/devices/${nid}`)} />
+            <PortDetailPanel port={selectedPort} onClose={() => setSelectedPort(null)} />
           )}
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
             <div style={{ position: "relative" }}>
               <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
-              <input className="dd-search" placeholder="Search ports, IPs, neighbors..." value={portSearch} onChange={e => setPortSearch(e.target.value)} />
+              <input className="dd-search" placeholder="Search by port, IP, MAC..." value={portSearch} onChange={e => setPortSearch(e.target.value)} />
             </div>
             {[
+              { k: "all", l: "All" },
               { k: "physical", l: "Physical Only" },
-              { k: "all", l: "All Interfaces" },
               { k: "up", l: "Up" },
               { k: "down", l: "Down" },
               { k: "with_endpoints", l: "With Endpoints" },
@@ -792,15 +693,15 @@ export default function DeviceDetailPage() {
               <thead>
                 <tr>
                   <th>Port</th>
+                  <th>Type</th>
                   <th>Status</th>
                   <th>Speed</th>
-                  <th>Port IP</th>
-                  <th>Connected To</th>
                   <th>Endpoint IP</th>
                   <th>Endpoint MAC</th>
+                  <th>Manufacturer</th>
                   {data.portStats?.hasTrafficData && <>
-                    <th>In</th>
-                    <th>Out</th>
+                    <th>In Traffic</th>
+                    <th>Out Traffic</th>
                   </>}
                   <th>Errors</th>
                 </tr>
@@ -808,6 +709,8 @@ export default function DeviceDetailPage() {
               <tbody>
                 {filteredPorts.map(p => {
                   const errs = (p.inErrors || 0) + (p.outErrors || 0);
+                  const cat = PORT_CAT[p.category] || PORT_CAT.other;
+                  const firstEp = p.attachedEndpoints?.[0];
                   return (
                     <tr key={`${p.index}-${p.name}`} onClick={() => setSelectedPort(p)} style={{ cursor: "pointer" }}>
                       <td style={{ fontWeight: 600 }}>
@@ -816,30 +719,25 @@ export default function DeviceDetailPage() {
                           <span style={{ marginLeft: 6, fontSize: 9, padding: "1px 5px", borderRadius: 8, background: "rgba(212,168,67,0.18)", color: "#d4a843" }}>+{p.attachedCount - 1}</span>
                         )}
                       </td>
+                      <td style={{ color: cat.color, fontSize: 10, textTransform: "uppercase" }}>{cat.label}</td>
                       <td>
                         <span className="dd-pill" style={{
                           background: p.operStatus === "up" ? "rgba(34,197,94,0.12)" : p.adminStatus === "down" ? "rgba(239,68,68,0.12)" : "rgba(107,114,128,0.12)",
                           color: p.operStatus === "up" ? "#22c55e" : p.adminStatus === "down" ? "#ef4444" : "#6b7280",
                         }}>
                           <CircleDot size={8} />
-                          {p.adminStatus === "down" ? "ADMIN OFF" : (p.operStatus || "unknown").toUpperCase()}
+                          {p.adminStatus === "down" ? "ADMIN DOWN" : (p.operStatus || "unknown").toUpperCase()}
                         </span>
                       </td>
                       <td>{fmtSpeed(p.speedMbps)}</td>
-                      <td style={{ color: p.portIp ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.3)", fontWeight: p.portIsPrimary ? 600 : 400 }}>
-                        {fmtIp(p.portIp)}
-                        {p.portIsPrimary && <span style={{ marginLeft: 4, fontSize: 9, color: "#22c55e" }}>★</span>}
-                      </td>
-                      <td style={{ color: p.connectedNeighborName ? "#06b6d4" : "rgba(255,255,255,0.3)", fontFamily: "inherit", fontSize: 11 }}>
-                        {p.connectedNeighborName
-                          ? `${p.connectedNeighborName}${p.connectedNeighborPort ? " / " + p.connectedNeighborPort : ""}`
-                          : "\u2014"}
-                      </td>
                       <td style={{ color: p.primaryEndpointIp ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.3)" }}>
                         {fmtIp(p.primaryEndpointIp)}
                       </td>
                       <td style={{ color: p.primaryEndpointMac ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.3)", fontSize: 11 }}>
                         {fmtMac(p.primaryEndpointMac)}
+                      </td>
+                      <td style={{ color: "rgba(255,255,255,0.55)", fontFamily: "inherit" }}>
+                        {firstEp?.manufacturer || "\u2014"}
                       </td>
                       {data.portStats?.hasTrafficData && <>
                         <td>{fmtBytes(p.inOctets)}</td>
@@ -940,7 +838,7 @@ export default function DeviceDetailPage() {
         </Section>
       )}
 
-      {/* ── Endpoints ── */}
+      {/* ── Endpoints — Directly Connected only ── */}
       <Section
         title="Connected Endpoints"
         icon={Users}
@@ -1015,6 +913,9 @@ export default function DeviceDetailPage() {
           count={data.interfaces.length}
           collapsible
           defaultOpen
+          hint={data.interfaces.length === 1 && isFirewall
+            ? "Only the management IP is currently being collected. Additional interface IPs (WAN, LAN, DMZ) will populate when SNMP ipAddrTable walking is enabled in the collector module (Day 5)."
+            : null}
         >
           <table className="dd-table">
             <thead>
@@ -1029,7 +930,7 @@ export default function DeviceDetailPage() {
             <tbody>
               {data.interfaces.map((iface, i) => (
                 <tr key={i}>
-                  <td style={{ fontWeight: iface.isPrimary ? 600 : 400 }}>{fmtIp(iface.ipAddress)}</td>
+                  <td>{fmtIp(iface.ipAddress)}</td>
                   <td>{iface.interfaceName || "\u2014"}</td>
                   <td>{iface.vlanId || "\u2014"}</td>
                   <td style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>{iface.source || "\u2014"}</td>

@@ -1,12 +1,13 @@
 /**
- * VEMIO™ — Device Detail API (Collector-Native, v4)
+ * VEMIO™ — Device Detail API (Collector-Native, v3)
  * GET /api/devices/[id]/detail
  *
- * v4 changes:
- * - Each port now carries portIp (from device_interfaces JOIN on interface_name)
- * - Each port now carries connectedDevice (from device_neighbors LLDP JOIN on local_interface)
- * - Smart endpoint primary detection
- * - Neighbor matching normalizes "Port 24" vs "24" naming differences
+ * v3 changes:
+ * - Endpoints filtered to ip_address IS NOT NULL only
+ * - Switches/APs: query by collector device_id (FK), not name matching
+ * - Each port now carries its attached endpoints array (JOIN on device_id + port_index)
+ * - Firewall mode: shows directly-attached only (usually empty — collector limitation)
+ *   with clear hint explaining why
  */
 
 import { withAuth } from '@/lib/auth';
@@ -60,9 +61,9 @@ export const GET = withAuth(async (req, session, { params }) => {
     const collectorDev = collectorDevResult.rows[0] || null;
     const collectorDeviceId = collectorDev?.collector_device_id;
 
-    /* ── 3. Ports ── */
+    /* ── 3. Ports + JOIN to endpoints by (device_id, port_index) ── */
     let ports = [];
-    let portEndpointMap = new Map();
+    let portEndpointMap = new Map(); // port_index -> [endpoints]
 
     if (collectorDeviceId) {
       const portsResult = await queryWithTenant(tenantId,
@@ -76,11 +77,13 @@ export const GET = withAuth(async (req, session, { params }) => {
         [collectorDeviceId]
       );
 
+      // Aggregate endpoints per port_index for THIS device
       const portClientsResult = await queryWithTenant(tenantId,
         `SELECT port_index, mac_address, ip_address, manufacturer, hostname,
                 connection_type, vlan_id, last_seen
          FROM collector_port_clients
-         WHERE device_id = $1 AND port_index IS NOT NULL
+         WHERE device_id = $1
+           AND port_index IS NOT NULL
          ORDER BY last_seen DESC`,
         [collectorDeviceId]
       );
@@ -103,6 +106,7 @@ export const GET = withAuth(async (req, session, { params }) => {
             lastSeen: e.last_seen,
           })),
           attachedCount: attached.length,
+          // Convenience: first endpoint's IP/MAC for the table column
           primaryEndpointIp: attached.find(e => e.ip_address)?.ip_address || null,
           primaryEndpointMac: attached[0]?.mac_address || null,
         };
@@ -143,8 +147,6 @@ export const GET = withAuth(async (req, session, { params }) => {
       [dev.auvik_device_id, tenantId]
     );
 
-    const neighbors = neighborsResult.rows.filter(r => r.neighbor_name);
-
     /* ── 6. IP Interfaces ── */
     let interfaces = [];
     try {
@@ -158,11 +160,12 @@ export const GET = withAuth(async (req, session, { params }) => {
       interfaces = interfacesResult.rows;
     } catch (e) {}
 
-    /* ── 7. Endpoints (directly connected with IP) ── */
+    /* ── 7. Endpoints — DIRECTLY connected only, with IP ── */
     let endpoints = [];
     let endpointMode = 'none';
 
     if (collectorDeviceId) {
+      // Use the proper FK: collector_port_clients.device_id
       const r = await queryWithTenant(tenantId,
         `SELECT mac_address, ip_address, manufacturer, connection_type,
                 port_index, port_name, hostname,
@@ -221,48 +224,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       uptimeFormatted = d2 > 0 ? d2 + 'd ' + h + 'h ' + m + 'm' : h > 0 ? h + 'h ' + m + 'm' : m + 'm';
     }
 
-    /* ── 10. ENRICH PORTS with Port IP (from device_interfaces) and Connected To (from neighbors) ── */
-    // Build interface lookup: interface_name → ip_address
-    const ifaceByName = new Map();
-    for (const i of interfaces) {
-      const key = (i.interface_name || '').toLowerCase().trim();
-      if (key && !ifaceByName.has(key)) {
-        ifaceByName.set(key, { ip: i.ip_address, isPrimary: i.is_primary });
-      }
-    }
-
-    // Build neighbor lookup: normalized local_interface → neighbor info
-    // LLDP returns "Port 24" with space, but switch port_name might be "24"
-    function normalizeIfName(s) {
-      if (!s) return '';
-      return String(s).toLowerCase().replace(/^port\s*/i, '').replace(/\s+/g, '').trim();
-    }
-
-    const neighborByPort = new Map();
-    for (const n of neighbors) {
-      const key = normalizeIfName(n.local_interface);
-      if (key) neighborByPort.set(key, n);
-    }
-
-    ports = ports.map(p => {
-      const ifaceKey = (p.port_name || '').toLowerCase().trim();
-      const iface = ifaceByName.get(ifaceKey);
-      const nKey = normalizeIfName(p.port_name);
-      const nbr = neighborByPort.get(nKey);
-
-      return {
-        ...p,
-        portIp: iface?.ip || null,
-        portIsPrimary: iface?.isPrimary || false,
-        connectedNeighborName: nbr?.neighbor_name || null,
-        connectedNeighborPort: nbr?.remote_interface || null,
-        connectedNeighborId: nbr?.neighbor_device_id || null,
-        connectedNeighborType: nbr?.neighbor_type || null,
-        connectedNeighborMethod: nbr?.relationship_type || null,
-      };
-    });
-
-    /* ── 11. Stats ── */
+    /* ── 10. Stats ── */
     const physicalPorts = ports.filter(p => p.category === 'physical' || p.category === 'physical_sfp');
     const portStats = {
       total: ports.length,
@@ -271,8 +233,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       adminDown: ports.filter(p => p.admin_status === 'down').length,
       errors: ports.reduce((s, p) => s + (Number(p.in_errors) || 0) + (Number(p.out_errors) || 0), 0),
       hasTrafficData: ports.some(p => Number(p.in_octets) > 0 || Number(p.out_octets) > 0),
-      hasPortIps: ports.some(p => p.portIp),
-      hasNeighbors: ports.some(p => p.connectedNeighborName),
+      hasEndpointData: ports.some(p => p.attachedCount > 0),
       physicalCount: physicalPorts.length,
       physicalUp: physicalPorts.filter(p => p.oper_status === 'up').length,
     };
@@ -302,16 +263,9 @@ export const GET = withAuth(async (req, session, { params }) => {
         speedMbps: p.speed_mbps, duplex: p.duplex,
         inOctets: p.in_octets, outOctets: p.out_octets,
         inErrors: p.in_errors, outErrors: p.out_errors,
+        connectedDevice: p.connected_device,
         inRateMbps: p.in_rate_mbps, outRateMbps: p.out_rate_mbps,
-        // NEW v4 fields
-        portIp: p.portIp,
-        portIsPrimary: p.portIsPrimary,
-        connectedNeighborName: p.connectedNeighborName,
-        connectedNeighborPort: p.connectedNeighborPort,
-        connectedNeighborId: p.connectedNeighborId,
-        connectedNeighborType: p.connectedNeighborType,
-        connectedNeighborMethod: p.connectedNeighborMethod,
-        // Endpoint correlation (existing)
+        // NEW: endpoint correlation
         attachedEndpoints: p.attachedEndpoints,
         attachedCount: p.attachedCount,
         primaryEndpointIp: p.primaryEndpointIp,
@@ -322,7 +276,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         id: v.vlan_id, name: v.vlan_name,
         taggedPorts: v.tagged_ports, untaggedPorts: v.untagged_ports,
       })),
-      neighbors: neighbors.map(r => ({
+      neighbors: neighborsResult.rows.filter(r => r.neighbor_name).map(r => ({
         name: r.neighbor_name, type: r.neighbor_type, make: r.neighbor_make,
         model: r.neighbor_model, status: r.neighbor_status,
         ipAddress: r.neighbor_ip, deviceId: r.neighbor_device_id,

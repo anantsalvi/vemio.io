@@ -705,45 +705,6 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
         </div>
       </div>
 
-      {/* Legend */}
-      <div style={{
-        display: "flex",
-        gap: 16,
-        marginTop: 14,
-        flexWrap: "wrap",
-        alignItems: "center",
-        paddingTop: 12,
-        borderTop: "1px solid rgba(255,255,255,0.05)",
-      }}>
-        {[
-          { color: "#22c55e", label: "Up" },
-          { color: "#374151", label: "Down" },
-          { color: "#ef4444", label: "Admin Down" },
-          { color: "#f59e0b", label: "Dormant" },
-        ].map(l => (
-          <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{
-              width: 11,
-              height: 11,
-              borderRadius: 2,
-              border: "1.5px solid " + l.color,
-              background: "rgba(0,0,0,0.5)",
-            }} />
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{l.label}</span>
-          </div>
-        ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
-          <div style={{
-            width: 10,
-            height: 10,
-            borderRadius: "50%",
-            background: "#d4a843",
-            border: "1.5px solid rgba(0,0,0,0.5)",
-          }} />
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Has endpoints</span>
-        </div>
-        
-      </div>
     </div>
   );
 }

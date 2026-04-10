@@ -406,37 +406,8 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
           </div>
         </div>
 
+        {/* STENCIL-MOVELEDS-APR10: LEDs moved into grey faceplate bar below */}
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {[
-              { name: "PWR", color: ledPwr },
-              { name: "STA", color: ledSta },
-              { name: "FAN", color: ledPwr },
-              { name: "TMP", color: ledPwr },
-            ].map(led => (
-              <div key={led.name} style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-              }}>
-                <div style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: led.color,
-                  boxShadow: "0 0 6px " + led.color + "a0",
-                }} />
-                <span style={{
-                  fontSize: 9,
-                  color: "rgba(255,255,255,0.55)",
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontWeight: 600,
-                  letterSpacing: 0.3,
-                }}>{led.name}</span>
-              </div>
-            ))}
-          </div>
-
           <span style={{
             fontSize: 10,
             color: "rgba(255,255,255,0.55)",
@@ -599,6 +570,43 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
             </div>
           </div>
         )}
+        {/* LEDs anchored to the right of the port grid */}
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          paddingLeft: 14,
+          borderLeft: "1px solid rgba(255,255,255,0.1)",
+          flexShrink: 0,
+        }}>
+          {[
+            { name: "PWR", color: ledPwr },
+            { name: "STA", color: ledSta },
+            { name: "FAN", color: ledPwr },
+            { name: "TMP", color: ledPwr },
+          ].map(led => (
+            <div key={led.name} style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}>
+              <div style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: led.color,
+                boxShadow: "0 0 6px " + led.color + "a0",
+              }} />
+              <span style={{
+                fontSize: 9,
+                color: "rgba(255,255,255,0.55)",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontWeight: 600,
+                letterSpacing: 0.3,
+              }}>{led.name}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Stats row */}

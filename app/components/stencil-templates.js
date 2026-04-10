@@ -170,10 +170,11 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
         : "rgba(20,25,40,0.55)";
 
   const tileBorder = isSelected ? "#d4a843" : color;
+  // STENCIL-LAYOUTV2-APR10: stronger LED-like glow
   const tileGlow = isUp
-    ? "0 0 14px " + color + "80, inset 0 0 10px " + color + "55"
+    ? "0 0 18px " + color + "a0, inset 0 0 14px " + color + "70, 0 0 4px " + color
     : isAdminDown
-      ? "0 0 6px " + color + "40, inset 0 0 4px " + color + "30"
+      ? "0 0 8px " + color + "60, inset 0 0 6px " + color + "40"
       : "none";
 
   return (
@@ -325,38 +326,83 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
       border: "1px solid " + accent + "30",
       boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px " + accent + "10",
     }}>
-      {/* Header bar: model identity + LEDs + chip count */}
+      {/* STENCIL-LAYOUTV2-APR10: device header + legend moved to top */}
       <div style={{
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
         justifyContent: "space-between",
-        marginBottom: 18,
+        marginBottom: 12,
         flexWrap: "wrap",
         gap: 12,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, minWidth: 0, flex: 1 }}>
           <div style={{
-            width: 6,
-            height: 28,
-            background: accent,
-            borderRadius: 2,
-            boxShadow: "0 0 10px " + accent + "80",
-          }} />
-          <div>
-            <p style={{
-              fontSize: 10,
-              color: "rgba(255,255,255,0.4)",
-              margin: 0,
-              textTransform: "uppercase",
-              letterSpacing: 1.2,
-              fontWeight: 600,
-            }}>Device Faceplate</p>
-            <p style={{
-              fontSize: 15,
-              color: "rgba(255,255,255,0.95)",
-              margin: "3px 0 0",
-              fontWeight: 600,
-            }}>{label}</p>
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            background: "rgba(96,165,250,0.15)",
+            border: "1px solid rgba(96,165,250,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}>
+            <div style={{
+              width: 16,
+              height: 12,
+              border: "1.5px solid #60a5fa",
+              borderRadius: 2,
+            }} />
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{
+              fontSize: 18,
+              fontWeight: 700,
+              color: "rgba(255,255,255,0.98)",
+              lineHeight: 1.2,
+            }}>{device?.name || label}</div>
+            <div style={{
+              fontSize: 12,
+              color: "rgba(255,255,255,0.55)",
+              marginTop: 3,
+              lineHeight: 1.4,
+            }}>
+              {(() => {
+                const parts = [];
+                if (device?.type) {
+                  parts.push(device.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()));
+                }
+                if (make) parts.push(make + (model ? " " + model : ""));
+                if (device?.ipAddress) parts.push(String(device.ipAddress).replace("/32", ""));
+                if (device?.siteName) parts.push(device.siteName);
+                return parts.join(" \u00b7 ");
+              })()}
+            </div>
+            <div style={{
+              display: "flex",
+              gap: 14,
+              marginTop: 10,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}>
+              {[
+                { color: "#22c55e", label: "Up" },
+                { color: "#374151", label: "Down" },
+                { color: "#ef4444", label: "Admin down" },
+                { color: "#f59e0b", label: "Dormant" },
+              ].map(l => (
+                <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{
+                    width: 11,
+                    height: 11,
+                    borderRadius: 3,
+                    border: "2px solid " + l.color,
+                    background: "rgba(0,0,0,0.4)",
+                  }} />
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{l.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 

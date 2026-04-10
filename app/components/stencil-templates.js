@@ -129,7 +129,7 @@ function splitPhysicalRows(ports) {
    PortBox — single port chip in the stencil
    ─────────────────────────────────────────────────────────── */
 function PortBox({ port, onClick, isSelected, variant = "default" }) {
-  // STENCIL-V2-APR07: dense rack-realistic port with traffic micro-bar
+  // STENCIL-TARGETMATCH-APR10: rounded square tile with thick glow matching locked target
   const color = PORT_STATUS_COLOR(port);
   const isUp = port?.operStatus === "up";
   const isAdminDown = port?.adminStatus === "down";
@@ -137,15 +137,13 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
   const label = port?.name || String(port?.index || "?");
 
   const isSfp = variant === "sfp";
-  const labelLen = label.length;
-  const width = isSfp ? Math.max(48, labelLen * 7 + 14) : Math.max(34, labelLen * 6 + 12);
-  const height = isSfp ? 26 : 32;
+  const width = isSfp ? 42 : 36;
+  const height = isSfp ? 30 : 34;
 
-  // Compute traffic intensity 0-1 for the micro-bar (cap at 100 Mbps for visualization)
   const inRate = Number(port?.inRateMbps) || 0;
   const outRate = Number(port?.outRateMbps) || 0;
   const totalRate = inRate + outRate;
-  const trafficPct = Math.min(100, Math.round((totalRate / 100) * 100));
+  const trafficPct = Math.min(100, Math.round(totalRate));
   const showTraffic = isUp && totalRate > 0.01;
 
   const speedLabel = port?.speedMbps
@@ -162,50 +160,66 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
   if (hasEndpoints) tooltipParts.push(port.attachedCount + " endpoint" + (port.attachedCount > 1 ? "s" : ""));
   if (port?.connectedNeighborName) tooltipParts.push("\u2192 " + port.connectedNeighborName);
 
+  // Strong visual weight for up ports — LED-like inner glow + thick border
+  const tileBg = isSelected
+    ? "rgba(212,168,67,0.22)"
+    : isUp
+      ? "rgba(34,197,94,0.22)"
+      : isAdminDown
+        ? "rgba(239,68,68,0.15)"
+        : "rgba(20,25,40,0.55)";
+
+  const tileBorder = isSelected ? "#d4a843" : color;
+  const tileGlow = isUp
+    ? "0 0 14px " + color + "80, inset 0 0 10px " + color + "55"
+    : isAdminDown
+      ? "0 0 6px " + color + "40, inset 0 0 4px " + color + "30"
+      : "none";
+
   return (
     <div
       onClick={() => onClick?.(port)}
       title={tooltipParts.join(" \u00b7 ")}
       style={{
-        minWidth: width,
-        height,
-        padding: "0 6px",
-        borderRadius: isSfp ? 3 : 4,
-        background: isSelected
-          ? "rgba(212,168,67,0.18)"
-          : isUp
-            ? "rgba(34,197,94,0.10)"
-            : isAdminDown
-              ? "rgba(239,68,68,0.08)"
-              : "rgba(0,0,0,0.45)",
-        border: "1.5px solid " + (isSelected ? "#d4a843" : color),
+        width: width,
+        height: height,
+        padding: 0,
+        borderRadius: 6,
+        background: tileBg,
+        border: "2.5px solid " + tileBorder,
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         transition: "all 0.15s",
-        boxShadow: isUp
-          ? "0 0 8px " + color + "40, inset 0 0 6px " + color + "15"
-          : "none",
+        boxShadow: tileGlow,
         position: "relative",
+        flexShrink: 0,
       }}
     >
       <span style={{
-        fontSize: isSfp ? 10 : 11,
-        fontWeight: 600,
-        color: isSelected ? "#d4a843" : isUp ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)",
-        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: isSfp ? 11 : 12,
+        fontWeight: 700,
+        color: isSelected
+          ? "#d4a843"
+          : isUp
+            ? "#ffffff"
+            : isAdminDown
+              ? "#fca5a5"
+              : "rgba(255,255,255,0.5)",
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
         whiteSpace: "nowrap",
-        lineHeight: 1.1,
+        lineHeight: 1,
+        textShadow: isUp ? "0 0 4px " + color + "80" : "none",
       }}>{label}</span>
 
       {showTraffic && (
         <div style={{
-          width: "85%",
+          width: "75%",
           height: 2,
-          marginTop: 2,
-          background: "rgba(255,255,255,0.08)",
+          marginTop: 3,
+          background: "rgba(0,0,0,0.4)",
           borderRadius: 1,
           overflow: "hidden",
         }}>
@@ -221,19 +235,21 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
       {hasEndpoints && (
         <div style={{
           position: "absolute",
-          top: -5,
-          right: -5,
-          width: 13,
-          height: 13,
-          borderRadius: "50%",
+          top: -6,
+          right: -6,
+          minWidth: 14,
+          height: 14,
+          padding: "0 3px",
+          borderRadius: 7,
           background: "#d4a843",
-          border: "2px solid #0a0a14",
-          fontSize: 8,
-          color: "#0a0a14",
+          border: "2px solid #0a0e1a",
+          fontSize: 9,
+          color: "#0a0e1a",
           fontWeight: 700,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
+          lineHeight: 1,
         }}>{port.attachedCount > 9 ? "9+" : port.attachedCount}</div>
       )}
     </div>
@@ -345,30 +361,31 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
         </div>
 
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
               { name: "PWR", color: ledPwr },
               { name: "STA", color: ledSta },
-              { name: "LNK", color: ledLnk },
+              { name: "FAN", color: ledPwr },
+              { name: "TMP", color: ledPwr },
             ].map(led => (
               <div key={led.name} style={{
                 display: "flex",
-                flexDirection: "column",
                 alignItems: "center",
-                gap: 3,
+                gap: 6,
               }}>
                 <div style={{
-                  width: 9,
-                  height: 9,
+                  width: 8,
+                  height: 8,
                   borderRadius: "50%",
                   background: led.color,
-                  boxShadow: led.color === "#374151" ? "none" : "0 0 7px " + led.color + "90",
+                  boxShadow: "0 0 6px " + led.color + "a0",
                 }} />
                 <span style={{
-                  fontSize: 8,
-                  color: "rgba(255,255,255,0.4)",
+                  fontSize: 9,
+                  color: "rgba(255,255,255,0.55)",
                   fontFamily: "'JetBrains Mono', monospace",
                   fontWeight: 600,
+                  letterSpacing: 0.3,
                 }}>{led.name}</span>
               </div>
             ))}
@@ -574,16 +591,47 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{utilizationPct}% utilization</div>
         </div>
         <div>
-          <div style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.45)",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            marginBottom: 4,
-            fontWeight: 600,
-          }}>Active VLANs</div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{vlanCount || 0}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{endpointPortCount} ports with endpoints</div>
+          {/* STENCIL-TARGETMATCH-APR10: PoE card when data exists, Active VLANs fallback */}
+          {(() => {
+            const poeDraw = Number(device?.poeDrawWatts) || 0;
+            const poeBudget = Number(device?.poeBudgetWatts) || 0;
+            const hasPoE = poeBudget > 0;
+            if (hasPoE) {
+              const pct = Math.round((poeDraw / poeBudget) * 100);
+              return (
+                <>
+                  <div style={{
+                    fontSize: 10,
+                    color: "rgba(255,255,255,0.45)",
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    marginBottom: 4,
+                    fontWeight: 600,
+                  }}>PoE Budget</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: "#f59e0b" }}>{poeDraw}W</div>
+                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+                    of {poeBudget}W ({pct}%)
+                  </div>
+                </>
+              );
+            }
+            return (
+              <>
+                <div style={{
+                  fontSize: 10,
+                  color: "rgba(255,255,255,0.45)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                  marginBottom: 4,
+                  fontWeight: 600,
+                }}>Active VLANs</div>
+                <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{vlanCount || 0}</div>
+                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
+                  {endpointPortCount} ports with endpoints
+                </div>
+              </>
+            );
+          })()}
         </div>
         <div>
           <div style={{
@@ -640,15 +688,7 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
           }} />
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Has endpoints</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{
-            width: 16,
-            height: 3,
-            borderRadius: 1,
-            background: "#3b82f6",
-          }} />
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>Live traffic</span>
-        </div>
+        
       </div>
     </div>
   );

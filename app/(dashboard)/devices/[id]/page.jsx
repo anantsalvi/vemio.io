@@ -751,10 +751,10 @@ export default function DeviceDetailPage() {
           title="Ports & Interfaces"
           icon={Cable}
           iconColor="#3b82f6"
-          count={data.portStats?.total}
+          count={data.portStats?.physicalCount}
           hint={!data.portStats?.hasTrafficData ? "Traffic byte counters not yet available — port states are accurate, deltas will populate after the next collection cycles." : null}
         >
-          <UniversalStencil device={dev} ports={data.ports} onPortClick={setSelectedPort} selectedPort={selectedPort} />
+          <UniversalStencil device={dev} ports={data.ports} vlanCount={data.vlans?.length || 0} onPortClick={setSelectedPort} selectedPort={selectedPort} />
           {selectedPort && (
             <PortDetailPanel port={selectedPort} onClose={() => setSelectedPort(null)} onNavigate={(nid) => router.push(`/devices/${nid}`)} />
           )}

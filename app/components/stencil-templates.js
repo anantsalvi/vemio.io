@@ -243,7 +243,7 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
 /* ───────────────────────────────────────────────────────────
    UniversalStencil — main renderer (STENCIL-V2-APR07)
    ─────────────────────────────────────────────────────────── */
-export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
+export function UniversalStencil({ device, ports, vlanCount, onPortClick, selectedPort }) {
   if (!ports || ports.length === 0) {
     return (
       <div style={{
@@ -581,9 +581,9 @@ export function UniversalStencil({ device, ports, onPortClick, selectedPort }) {
             letterSpacing: 0.5,
             marginBottom: 4,
             fontWeight: 600,
-          }}>With endpoints</div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{endpointPortCount}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>connected devices</div>
+          }}>Active VLANs</div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{vlanCount || 0}</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{endpointPortCount} ports with endpoints</div>
         </div>
         <div>
           <div style={{

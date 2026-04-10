@@ -258,6 +258,61 @@ function PortBox({ port, onClick, isSelected, variant = "default" }) {
 }
 
 /* ───────────────────────────────────────────────────────────
+   parseDeviceTopology — STENCIL-PARSETOPO-APR10
+   Extracts port topology from makeModel string (vendor-agnostic).
+   Returns { copperPorts, sfpPorts, poeBudgetWatts, hasPoE, confidence }
+   ─────────────────────────────────────────────────────────── */
+function parseDeviceTopology(makeModel, model) {
+  const result = {
+    copperPorts: 0,
+    sfpPorts: 0,
+    poeBudgetWatts: 0,
+    hasPoE: false,
+    confidence: "none",
+  };
+
+  const combined = [makeModel, model].filter(Boolean).join(" ");
+  if (!combined) return result;
+  const s = combined.toLowerCase();
+
+  // Copper port count: "24p", "24-port", "24 port", "24G" (but not "24 GHz")
+  const copperMatch = s.match(/(\d+)\s*(?:p(?![a-z])|port|-port)/);
+  if (copperMatch) {
+    result.copperPorts = parseInt(copperMatch[1], 10);
+    result.confidence = "partial";
+  } else {
+    // Fallback: "24G" where G = Gigabit (HPE Instant On, HP ProCurve naming)
+    const gMatch = s.match(/(\d+)g[- ]/);
+    if (gMatch) {
+      result.copperPorts = parseInt(gMatch[1], 10);
+      result.confidence = "partial";
+    }
+  }
+
+  // SFP port count: "2p SFP", "4 SFP", "2x SFP+"
+  const sfpMatch = s.match(/(\d+)\s*(?:p|x|-port)?\s*sfp/);
+  if (sfpMatch) {
+    result.sfpPorts = parseInt(sfpMatch[1], 10);
+    if (result.confidence === "partial") result.confidence = "high";
+  }
+
+  // PoE budget in watts: "195W", "195 W", "370W"
+  const poeMatch = s.match(/(\d+)\s*w(?:[^a-z]|$)/);
+  if (poeMatch) {
+    const watts = parseInt(poeMatch[1], 10);
+    if (watts >= 30 && watts <= 2000) {
+      result.poeBudgetWatts = watts;
+      result.hasPoE = true;
+    }
+  }
+
+  // PoE hint from other markers
+  if (/poe/.test(s)) result.hasPoE = true;
+
+  return result;
+}
+
+/* ───────────────────────────────────────────────────────────
    UniversalStencil — main renderer (STENCIL-V2-APR07)
    ─────────────────────────────────────────────────────────── */
 export function UniversalStencil({ device, ports, vlanCount, onPortClick, selectedPort }) {
@@ -280,6 +335,9 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
   const make = cleanString(device?.make);
   const model = cleanString(device?.model);
   const accent = vendorAccentColor(make);
+
+  // STENCIL-PARSETOPO-APR10: parse topology from SNMP make_model string
+  const topology = parseDeviceTopology(device?.makeModel, device?.model);
 
   const seen = new Set();
   const dedupedPorts = ports.filter(p => {
@@ -648,7 +706,8 @@ export function UniversalStencil({ device, ports, vlanCount, onPortClick, select
           {/* STENCIL-TARGETMATCH-APR10: PoE card when data exists, Active VLANs fallback */}
           {(() => {
             const poeDraw = Number(device?.poeDrawWatts) || 0;
-            const poeBudget = Number(device?.poeBudgetWatts) || 0;
+            // STENCIL-PARSETOPO-APR10: use parsed budget from makeModel as fallback
+            const poeBudget = Number(device?.poeBudgetWatts) || topology.poeBudgetWatts || 0;
             const hasPoE = poeBudget > 0;
             if (hasPoE) {
               const pct = Math.round((poeDraw / poeBudget) * 100);

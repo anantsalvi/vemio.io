@@ -102,7 +102,7 @@ export const GET = withAuth(async (req, session) => {
         a.title, a.description, a.source_type,
         a.notification_sent, a.notification_channel,
         a.triggered_at, a.acknowledged_at, a.resolved_at,
-        a.acknowledged_by, a.resolved_by,
+        a.acknowledged_by,
         a.glpi_ticket_id,
         d.name AS device_name, d.device_type,
         s.name AS site_name
@@ -333,9 +333,9 @@ export const PATCH = withAuth(async (req, session) => {
 
       await queryWithTenant(targetTenantId, `
         UPDATE alerts
-        SET state = 'resolved', resolved_at = NOW(), resolved_by = $1
-        WHERE id = $2
-      `, [userName, alertId]);
+        SET state = 'resolved', resolved_at = NOW()
+        WHERE id = $1
+      `, [alertId]);
 
       let ticketClosed = false;
       if (alert.glpi_ticket_id) {
@@ -356,7 +356,7 @@ export const PATCH = withAuth(async (req, session) => {
 
       return Response.json({
         success: true,
-        alert: { id: alertId, state: 'resolved', resolved_by: userName },
+        alert: { id: alertId, state: 'resolved' },
         downtime: downtimeStr,
         glpiTicketClosed: ticketClosed,
       });

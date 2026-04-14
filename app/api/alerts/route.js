@@ -46,7 +46,7 @@ export const GET = withAuth(async (req, session) => {
   const state    = searchParams.get('state');
   const severity = searchParams.get('severity');
   const type     = searchParams.get('type');
-  const category = searchParams.get('category') || 'network';
+  const category = searchParams.get('category') || 'all';
   const limit    = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);
   const offset   = parseInt(searchParams.get('offset') || '0', 10);
 

@@ -173,8 +173,8 @@ export const GET = withAuth(async (req, session) => {
       })),
       isAllTenants: isAllMode,
       category,
-      canManage: isMSPUser(session),
-      canResolve: isMSPAdmin(session),
+      canManage: isMSPUser(session) || session.user.role === 'admin',
+      canResolve: isMSPAdmin(session) || session.user.role === 'admin',
       summary: {
         active:          parseInt(summaryAgg.active || 0),
         acknowledged:    parseInt(summaryAgg.acknowledged || 0),
@@ -197,9 +197,9 @@ export const PATCH = withAuth(async (req, session) => {
   const userName = session.user.name || session.user.email || 'Unknown';
 
   // ── Access control: only MSP users can manage alerts ──
-  if (!isMSPUser(session)) {
+  if (!isMSPUser(session) && session.user.role !== 'admin') {
     return Response.json(
-      { error: 'Alert management is restricted to MSP operations team' },
+      { error: 'Alert management requires admin or MSP role' },
       { status: 403 }
     );
   }
@@ -305,7 +305,7 @@ export const PATCH = withAuth(async (req, session) => {
 
     // ── RESOLVE ──
     if (action === 'resolve') {
-      if (!isMSPAdmin(session)) {
+      if (!isMSPAdmin(session) && session.user.role !== 'admin') {
         return Response.json(
           { error: 'Only administrators can resolve alerts. Please escalate to an admin.' },
           { status: 403 }

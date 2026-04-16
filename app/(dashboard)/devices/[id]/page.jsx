@@ -13,6 +13,9 @@ import {
   ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import { UniversalStencil, parseFirmware } from "@/app/components/stencil-templates";
+import TimeRangePicker from "@/app/components/TimeRangePicker";
+import UptimeTimeline from "@/app/components/device/UptimeTimeline";
+import HealthChart from "@/app/components/device/HealthChart";
 
 /* ═══════════════════════════════════════════════════════════
    CONSTANTS
@@ -523,6 +526,7 @@ export default function DeviceDetailPage() {
   const router = useRouter();
   const [data, setData] = useState(null);
   const [days, setDays] = useState(30);
+  const [healthRange, setHealthRange] = useState(() => TimeRangePicker.defaultRange('1h'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPort, setSelectedPort] = useState(null);
@@ -724,25 +728,29 @@ export default function DeviceDetailPage() {
         )}
       </Section>
 
-      {/* ── Uptime Chart ── */}
+      {/* ── Uptime + Utilization (Day 16 Scope 2) ── */}
       <Section
-        title="Uptime"
+        title="Uptime & Utilization"
         icon={Activity}
         iconColor="#22c55e"
-        badge={data.uptime?.percent != null ? {
-          text: `${data.uptime.percent}%`,
-          color: data.uptime.percent >= 99 ? "#22c55e" : data.uptime.percent >= 95 ? "#f59e0b" : "#ef4444",
-          bg: data.uptime.percent >= 99 ? "rgba(34,197,94,0.12)" : data.uptime.percent >= 95 ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)",
-        } : null}
       >
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          {[7, 14, 30, 90].map(d => (
-            <button key={d} className={`dd-filter-btn${days === d ? " active" : ""}`} onClick={() => setDays(d)}>
-              {d}d
-            </button>
-          ))}
+        <div style={{ marginBottom: 16 }}>
+          <TimeRangePicker value={healthRange} onChange={setHealthRange} />
         </div>
-        <UptimeChart history={data.history} days={days} />
+
+        <div style={{ marginBottom: 20 }}>
+          <UptimeTimeline
+            deviceId={dev.id}
+            from={healthRange.from}
+            to={healthRange.to}
+          />
+        </div>
+
+        <HealthChart
+          deviceId={dev.id}
+          from={healthRange.from}
+          to={healthRange.to}
+        />
       </Section>
 
       {/* ── Ports + Stencil + Table ── */}

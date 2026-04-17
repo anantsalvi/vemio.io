@@ -45,7 +45,6 @@ app/
 │   └── tickets/            # Tickets & SLA tab (Phase 3)
 ├── api/
 │   ├── auth/[...nextauth]/ # NextAuth.js handlers
-│   ├── webhooks/auvik/     # Auvik webhook receiver
 │   ├── overview/           # Dashboard overview data
 │   └── health/             # Health check endpoint
 ├── components/
@@ -56,14 +55,6 @@ lib/
 ├── db.js                   # PostgreSQL connection pool + tenant scoping
 └── auth.js                 # Auth helpers (requireAuth, withAuth)
 ```
-
-## Webhook Endpoint
-
-```
-POST https://vemio.vinayenterprises.co.in/api/webhooks/auvik
-```
-
-Configure in Auvik dashboard with HMAC-SHA256 secret matching `AUVIK_WEBHOOK_SECRET`.
 
 ## Vercel Deployment
 

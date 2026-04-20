@@ -36,6 +36,7 @@ import {
   HeartPulse,
   Laptop,
   Radio,
+  Gauge,
 } from "lucide-react";
 
 /* ── Nav structure with collapsible groups ── */
@@ -49,6 +50,7 @@ const NAV_STRUCTURE = [
       { href: "/devices",      label: "Device Health",  icon: Monitor },
       { href: "/availability", label: "Availability",   icon: Signal },
       { href: "/alerts",       label: "Alerts",         icon: BellDot },
+      { href: "/traffic",      label: "Traffic",        icon: Gauge },
     ],
   },
   { href: "/topology",    label: "Topology",      icon: Network },

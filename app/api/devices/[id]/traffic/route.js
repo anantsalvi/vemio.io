@@ -36,13 +36,18 @@ export const GET = withAuth(async (req, session, { params }) => {
     //    not devices.id.
     const deviceResult = await queryForTenant(target,
       `SELECT d.id, d.name, d.device_type, d.tenant_id,
-              d.ip_address::text AS ip_address,
+              host(d.ip_address) AS ip_address,
               d.make, d.model,
               cd.id AS collector_device_id
        FROM devices d
-       LEFT JOIN collector_devices cd
-         ON cd.tenant_id = d.tenant_id
-        AND cd.ip_address = d.ip_address::text
+       LEFT JOIN LATERAL (
+         SELECT id
+         FROM collector_devices
+         WHERE tenant_id = d.tenant_id
+           AND ip_address = d.ip_address
+         ORDER BY last_seen DESC NULLS LAST
+         LIMIT 1
+       ) cd ON TRUE
        WHERE d.id = $1`,
       [id]
     );

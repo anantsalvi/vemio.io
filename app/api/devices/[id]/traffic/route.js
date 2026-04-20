@@ -83,19 +83,21 @@ export const GET = withAuth(async (req, session, { params }) => {
     //    Alias: in_bps (to switch) = rx ; out_bps (from switch) = tx
     const summaryResult = await queryForTenant(target,
       `SELECT
-         port_index::text            AS interface_id,
-         ('Port ' || port_index)     AS interface_name,
-         ROUND(AVG(out_bps))         AS avg_tx_bps,
-         ROUND(AVG(in_bps))          AS avg_rx_bps,
-         ROUND(AVG(in_bps + out_bps))AS avg_total_bps,
-         MAX(in_bps + out_bps)       AS peak_total_bps,
-         NULL::numeric               AS avg_utilization,
-         COUNT(*)                    AS sample_count
-       FROM collector_port_traffic
-       WHERE device_id = $1
-         AND measured_at > NOW() - INTERVAL '1 hour' * $2
-       GROUP BY port_index
-       HAVING AVG(in_bps + out_bps) > 0
+         t.port_index::text                                 AS interface_id,
+         COALESCE(sp.port_name, 'Port ' || t.port_index)    AS interface_name,
+         ROUND(AVG(t.out_bps))                              AS avg_tx_bps,
+         ROUND(AVG(t.in_bps))                               AS avg_rx_bps,
+         ROUND(AVG(t.in_bps + t.out_bps))                   AS avg_total_bps,
+         MAX(t.in_bps + t.out_bps)                          AS peak_total_bps,
+         NULL::numeric                                      AS avg_utilization,
+         COUNT(*)                                           AS sample_count
+       FROM collector_port_traffic t
+       LEFT JOIN collector_switch_ports sp
+         ON sp.device_id = t.device_id AND sp.port_index = t.port_index
+       WHERE t.device_id = $1
+         AND t.measured_at > NOW() - INTERVAL '1 hour' * $2
+       GROUP BY t.port_index, sp.port_name
+       HAVING AVG(t.in_bps + t.out_bps) > 0
        ORDER BY avg_total_bps DESC
        LIMIT 20`,
       [collectorDeviceId, hours]
@@ -124,35 +126,39 @@ export const GET = withAuth(async (req, session, { params }) => {
 
     const timeSeriesResult = await queryForTenant(target,
       `SELECT
-         port_index::text            AS interface_id,
-         ('Port ' || port_index)     AS interface_name,
-         date_bin('${bucketInterval}', measured_at, TIMESTAMP '2020-01-01') AS bucket,
-         ROUND(AVG(out_bps))         AS tx_bps,
-         ROUND(AVG(in_bps))          AS rx_bps,
-         ROUND(AVG(in_bps + out_bps))AS total_bps
-       FROM collector_port_traffic
-       WHERE device_id = $1
-         AND measured_at > NOW() - INTERVAL '1 hour' * $2
+         t.port_index::text                                 AS interface_id,
+         COALESCE(sp.port_name, 'Port ' || t.port_index)    AS interface_name,
+         date_bin('${bucketInterval}', t.measured_at, TIMESTAMP '2020-01-01') AS bucket,
+         ROUND(AVG(t.out_bps))                              AS tx_bps,
+         ROUND(AVG(t.in_bps))                               AS rx_bps,
+         ROUND(AVG(t.in_bps + t.out_bps))                   AS total_bps
+       FROM collector_port_traffic t
+       LEFT JOIN collector_switch_ports sp
+         ON sp.device_id = t.device_id AND sp.port_index = t.port_index
+       WHERE t.device_id = $1
+         AND t.measured_at > NOW() - INTERVAL '1 hour' * $2
          ${ifaceWhere}
-       GROUP BY port_index, bucket
-       ORDER BY bucket ASC, port_index`,
+       GROUP BY t.port_index, sp.port_name, bucket
+       ORDER BY bucket ASC, t.port_index`,
       tsParams
     );
 
     // 4. Latest sample per port (last 15 min).
     const latestResult = await queryForTenant(target,
-      `SELECT DISTINCT ON (port_index)
-         port_index::text            AS interface_id,
-         ('Port ' || port_index)     AS interface_name,
-         out_bps                     AS tx_bps,
-         in_bps                      AS rx_bps,
-         (in_bps + out_bps)          AS total_bps,
-         NULL::numeric               AS utilization_pct,
-         measured_at                 AS recorded_at
-       FROM collector_port_traffic
-       WHERE device_id = $1
-         AND measured_at > NOW() - INTERVAL '15 minutes'
-       ORDER BY port_index, measured_at DESC`,
+      `SELECT DISTINCT ON (t.port_index)
+         t.port_index::text                                 AS interface_id,
+         COALESCE(sp.port_name, 'Port ' || t.port_index)    AS interface_name,
+         t.out_bps                                          AS tx_bps,
+         t.in_bps                                           AS rx_bps,
+         (t.in_bps + t.out_bps)                             AS total_bps,
+         NULL::numeric                                      AS utilization_pct,
+         t.measured_at                                      AS recorded_at
+       FROM collector_port_traffic t
+       LEFT JOIN collector_switch_ports sp
+         ON sp.device_id = t.device_id AND sp.port_index = t.port_index
+       WHERE t.device_id = $1
+         AND t.measured_at > NOW() - INTERVAL '15 minutes'
+       ORDER BY t.port_index, t.measured_at DESC`,
       [collectorDeviceId]
     );
 

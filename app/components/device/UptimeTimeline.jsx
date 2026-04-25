@@ -73,7 +73,7 @@ function buildSamples(from, to, priorStatus, events) {
   return samples;
 }
 
-export default function UptimeTimeline({ deviceId, from, to, height = 80 }) {
+export default function UptimeTimeline({ deviceId, from, to, height = 80, onData, showHeader = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -97,6 +97,7 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80 }) {
       .then((body) => {
         if (cancelled) return;
         setData(body);
+        if (onData) onData(body);
         setLoading(false);
       })
       .catch((err) => {
@@ -117,15 +118,17 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80 }) {
 
   return (
     <div className="vemio-uptime-timeline">
-      <div className="vemio-uptime-header">
-        <h4 className="vemio-uptime-title">Online Status</h4>
-        {data && data.uptimePercent !== null && (
-          <span className="vemio-uptime-meta">
-            {data.uptimePercent.toFixed(2)}% up
-            {data.priorInferred && <span className="vemio-uptime-inferred"> · starting state inferred</span>}
-          </span>
-        )}
-      </div>
+      {showHeader && (
+        <div className="vemio-uptime-header">
+          <h4 className="vemio-uptime-title">Online Status</h4>
+          {data && data.uptimePercent !== null && (
+            <span className="vemio-uptime-meta">
+              {data.uptimePercent.toFixed(2)}% up
+              {data.priorInferred && <span className="vemio-uptime-inferred"> · starting state inferred</span>}
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="vemio-uptime-body" style={{ height }}>
         {loading && <div className="vemio-uptime-state">Loading…</div>}

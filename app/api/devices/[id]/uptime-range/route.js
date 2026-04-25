@@ -16,7 +16,7 @@ import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
 
 const MIN_RANGE_MS = 60 * 1000;
-const MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_RANGE_MS = 90 * 24 * 60 * 60 * 1000;
 const DEFAULT_RANGE_MS = 60 * 60 * 1000;
 
 function parseIso(s) {

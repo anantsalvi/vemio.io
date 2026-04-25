@@ -6,7 +6,7 @@ import {
   ArrowLeft, RefreshCw, Shield, Wifi, Server, MonitorSpeaker, Radio,
   Network, Globe, Clock, Activity, Cpu, HardDrive, Cable, Users,
   ChevronDown, ChevronUp, ExternalLink, AlertTriangle,
-  Search, CircleDot, Layers, Info,
+  Search, CircleDot, Layers, Info, HeartPulse,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
@@ -465,60 +465,6 @@ function PortDetailPanel({ port, onClose, onNavigate }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   UPTIME CHART
-   ═══════════════════════════════════════════════════════════ */
-function UptimeChart({ history, days }) {
-  const chartData = useMemo(() => {
-    if (!history || history.length === 0) return [];
-    const data = [];
-    const now = new Date();
-    const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-    const bucketMs = days <= 7 ? 3600000 : 86400000;
-    let t = start.getTime();
-    let statusIdx = 0;
-    while (t < now.getTime()) {
-      while (statusIdx < history.length - 1 && new Date(history[statusIdx + 1].changedAt).getTime() <= t) statusIdx++;
-      const status = history[statusIdx]?.status || "unknown";
-      data.push({
-        time: t,
-        label: new Date(t).toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
-        value: status === "up" ? 1 : 0,
-      });
-      t += bucketMs;
-    }
-    return data;
-  }, [history, days]);
-
-  if (chartData.length === 0) return (
-    <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", textAlign: "center", padding: 20 }}>
-      No uptime data available
-    </p>
-  );
-
-  return (
-    <ResponsiveContainer width="100%" height={100}>
-      <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
-        <defs>
-          <linearGradient id="uptimeGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#22c55e" stopOpacity={0.4} />
-            <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-        <XAxis dataKey="label" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }} interval="preserveStartEnd" />
-        <YAxis domain={[0, 1]} hide />
-        <ReTooltip
-          contentStyle={{ background: "#1a1a2e", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }}
-          labelStyle={{ color: "rgba(255,255,255,0.6)" }}
-          formatter={(v) => [v === 1 ? "Online" : "Offline", "Status"]}
-        />
-        <Area type="stepAfter" dataKey="value" stroke="#22c55e" fill="url(#uptimeGrad)" strokeWidth={2} />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════
    MAIN PAGE
    ═══════════════════════════════════════════════════════════ */
 export default function DeviceDetailPage() {
@@ -527,6 +473,12 @@ export default function DeviceDetailPage() {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(30);
   const [healthRange, setHealthRange] = useState(() => TimeRangePicker.defaultRange('1h'));
+  const [uptimeDays, setUptimeDays] = useState(30);
+  const [uptimeData, setUptimeData] = useState(null);
+  const uptimeRange = useMemo(() => ({
+    from: new Date(Date.now() - uptimeDays * 86400000),
+    to: new Date(),
+  }), [uptimeDays]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPort, setSelectedPort] = useState(null);
@@ -728,24 +680,54 @@ export default function DeviceDetailPage() {
         )}
       </Section>
 
-      {/* ── Uptime + Utilization (Day 16 Scope 2) ── */}
+      {/* ── Uptime History (Day 21 rebuild) ── */}
       <Section
-        title="Uptime & Utilization"
+        title="Uptime History"
         icon={Activity}
-        iconColor="#22c55e"
+        iconColor="#14b8a6"
+        subtitle={`${uptimeData?.events?.length ?? 0} status changes in the last ${uptimeDays} days`}
       >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+          <span style={{ fontSize: 28, fontWeight: 700, color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>
+            {uptimeData?.uptimePercent != null ? `${uptimeData.uptimePercent}%` : '—'}
+          </span>
+          <div style={{ display: 'flex', gap: 4, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: 2 }}>
+            {[7, 30, 90].map(d => (
+              <button
+                key={d}
+                onClick={() => setUptimeDays(d)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  background: uptimeDays === d ? 'rgba(245,158,11,0.12)' : 'transparent',
+                  color: uptimeDays === d ? '#fb923c' : 'rgba(255,255,255,0.5)',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {d}d
+              </button>
+            ))}
+          </div>
+        </div>
+        <UptimeTimeline
+          deviceId={dev.id}
+          from={uptimeRange.from}
+          to={uptimeRange.to}
+          onData={setUptimeData}
+          showHeader={false}
+          height={180}
+        />
+      </Section>
+
+      {/* ── Health (CPU / Memory) ── */}
+      <Section title="Health" icon={HeartPulse} iconColor="#3b82f6">
         <div style={{ marginBottom: 16 }}>
           <TimeRangePicker value={healthRange} onChange={setHealthRange} />
         </div>
-
-        <div style={{ marginBottom: 20 }}>
-          <UptimeTimeline
-            deviceId={dev.id}
-            from={healthRange.from}
-            to={healthRange.to}
-          />
-        </div>
-
         <HealthChart
           deviceId={dev.id}
           from={healthRange.from}

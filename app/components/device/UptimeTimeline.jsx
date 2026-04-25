@@ -5,16 +5,14 @@
  * Filled-area uptime chart: green band where device was up, red band where down.
  * Backed by GET /api/devices/:id/uptime-range.
  *
- * Rendering approach (two-layer recharts):
- *   1. Query returns priorStatus + events within window.
- *   2. Build a dense sample series at granularity derived from range span
- *      (target ~200 points, capped at 600).
- *   3. For each sample, set { up: 100, down: null } when state is up,
- *      inverse when down.
- *   4. Two stacked <Area> layers — each ignores the other's nulls,
- *      yielding green/red bands with no smoothing/transitions.
+ * DAY 22 — three-tier rendering:
+ *   - Confirmed up (green, solid)
+ *   - Confirmed down (red, solid) — sysuptime-delta or snmp-trap events
+ *   - Inferred down (red, diagonal-stripe pattern) — collector poll-failure
+ *     events that may not represent actual outages
  *
- * Day 16 — Scope 2.
+ * Sample series carries `confidenceDown` for inferred-down regions, so the
+ * chart can render a separate striped layer on top of solid red.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -40,7 +38,17 @@ function formatTooltipLabel(ts) {
   return new Date(ts).toLocaleString();
 }
 
-function buildSamples(from, to, priorStatus, events) {
+/**
+ * Build a dense sample series. Each sample has three nullable bands so that
+ * each <Area> only renders where that particular state is active:
+ *   - up:           filled when status is up
+ *   - downSolid:    filled when status is down AND last transition was confirmed
+ *   - downStriped:  filled when status is down AND last transition was inferred
+ *
+ * "Inferred" includes the case where status started inferred and there have
+ * been no confirmed events since.
+ */
+function buildSamples(from, to, priorStatus, priorInferred, events) {
   const rangeMs = to.getTime() - from.getTime();
   let granularity = Math.max(MIN_GRANULARITY_MS, Math.floor(rangeMs / TARGET_POINTS));
   let pointCount = Math.floor(rangeMs / granularity) + 1;
@@ -56,18 +64,21 @@ function buildSamples(from, to, priorStatus, events) {
   const samples = [];
   let eventIdx = 0;
   let currentStatus = priorStatus;
+  let currentConfirmed = !priorInferred;
 
   for (let i = 0; i < pointCount; i++) {
     const t = from.getTime() + i * granularity;
     while (eventIdx < sorted.length && new Date(sorted[eventIdx].changedAt).getTime() <= t) {
       currentStatus = sorted[eventIdx].status;
+      currentConfirmed = !!sorted[eventIdx].confirmed;
       eventIdx++;
     }
     const isUp = currentStatus === 'up';
     samples.push({
       t,
       up: isUp ? 100 : null,
-      down: isUp ? null : 100,
+      downSolid: !isUp && currentConfirmed ? 100 : null,
+      downStriped: !isUp && !currentConfirmed ? 100 : null,
     });
   }
   return samples;
@@ -111,7 +122,7 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
 
   const samples = useMemo(() => {
     if (!data || !from || !to) return [];
-    return buildSamples(from, to, data.priorStatus, data.events || []);
+    return buildSamples(from, to, data.priorStatus, data.priorInferred, data.events || []);
   }, [data, from, to]);
 
   const rangeMs = (from && to) ? to.getTime() - from.getTime() : 0;
@@ -121,9 +132,9 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
       {showHeader && (
         <div className="vemio-uptime-header">
           <h4 className="vemio-uptime-title">Online Status</h4>
-          {data && data.uptimePercent !== null && (
+          {data && data.confirmedUptimePercent !== null && (
             <span className="vemio-uptime-meta">
-              {data.uptimePercent.toFixed(2)}% up
+              {data.confirmedUptimePercent.toFixed(2)}% up
               {data.priorInferred && <span className="vemio-uptime-inferred"> · starting state inferred</span>}
             </span>
           )}
@@ -140,6 +151,18 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
         {!loading && !error && samples.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={samples} margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
+              <defs>
+                <pattern
+                  id="vemio-uptime-stripes"
+                  patternUnits="userSpaceOnUse"
+                  width="8"
+                  height="8"
+                  patternTransform="rotate(45)"
+                >
+                  <rect width="8" height="8" fill="#ef4444" fillOpacity="0.25" />
+                  <rect width="3" height="8" fill="#ef4444" fillOpacity="0.7" />
+                </pattern>
+              </defs>
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} horizontal={false} />
               <XAxis
                 dataKey="t"
@@ -153,7 +176,12 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
               <YAxis hide domain={[0, 100]} />
               <Tooltip
                 labelFormatter={formatTooltipLabel}
-                formatter={(v, name) => [name === 'up' ? 'Up' : 'Down', 'Status']}
+                formatter={(v, name) => {
+                  if (name === 'up') return ['Up', 'Status'];
+                  if (name === 'downSolid') return ['Down (confirmed reboot)', 'Status'];
+                  if (name === 'downStriped') return ['Down (poll failure — may not be actual outage)', 'Status'];
+                  return [v, name];
+                }}
                 contentStyle={{
                   fontSize: 12,
                   borderRadius: 4,
@@ -177,10 +205,20 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
               />
               <Area
                 type="step"
-                dataKey="down"
+                dataKey="downSolid"
                 stroke="#ef4444"
                 fill="#ef4444"
                 fillOpacity={0.7}
+                isAnimationActive={false}
+                connectNulls={false}
+                activeDot={false}
+              />
+              <Area
+                type="step"
+                dataKey="downStriped"
+                stroke="#ef4444"
+                strokeOpacity={0.4}
+                fill="url(#vemio-uptime-stripes)"
                 isAnimationActive={false}
                 connectNulls={false}
                 activeDot={false}

@@ -685,7 +685,15 @@ export default function DeviceDetailPage() {
         title="Uptime History"
         icon={Activity}
         iconColor="#14b8a6"
-        subtitle={`${uptimeData?.events?.length ?? 0} status changes in the last ${uptimeDays} days`}
+        subtitle={(() => {
+          const c = uptimeData?.confirmedEventCount ?? 0;
+          const i = uptimeData?.inferredEventCount ?? 0;
+          if (c === 0 && i === 0) return `No status changes in the last ${uptimeDays} days`;
+          const parts = [];
+          if (c > 0) parts.push(`${c} confirmed`);
+          if (i > 0) parts.push(`${i} poll-failure event${i === 1 ? '' : 's'}`);
+          return `${parts.join(', ')} in the last ${uptimeDays} days`;
+        })()}
       >
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginBottom: 16 }}>
           <span style={{ fontSize: 28, fontWeight: 700, color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>

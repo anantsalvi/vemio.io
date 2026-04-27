@@ -74,13 +74,11 @@ export const GET = withAuth(async (req, session) => {
     );
 
     const vemioIdSet = new Set(
-      nodesResult.rows.map(r => r.vemio_device_id).filter(Boolean)
+     nodesResult.rows.map(r => r.id)
     );
     const vemioToNode = new Map();
-    for (const row of nodesResult.rows) {
-      if (row.vemio_device_id) {
-        vemioToNode.set(row.vemio_device_id, row);
-      }
+   for (const row of nodesResult.rows) {
+     vemioToNode.set(row.id, row);
     }
 
     // ── Edges ──

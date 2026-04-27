@@ -2,17 +2,16 @@
 
 /**
  * VEMIO™ — UptimeTimeline
- * Filled-area uptime chart: green band where device was up, red band where down.
- * Backed by GET /api/devices/:id/uptime-range.
+ * Filled-area uptime chart with four bands:
+ *   - up           (green)              device confirmed up
+ *   - downSolid    (solid red)          confirmed down (sysuptime-delta, snmp-trap)
+ *   - downStriped  (diagonal red)       inferred down (collector poll-failure)
+ *   - unmonitored  (gray)               period before monitoringStart
  *
- * DAY 22 — three-tier rendering:
- *   - Confirmed up (green, solid)
- *   - Confirmed down (red, solid) — sysuptime-delta or snmp-trap events
- *   - Inferred down (red, diagonal-stripe pattern) — collector poll-failure
- *     events that may not represent actual outages
+ * Backed by GET /api/devices/:id/uptime-range (Day 22 schema).
  *
- * Sample series carries `confidenceDown` for inferred-down regions, so the
- * chart can render a separate striped layer on top of solid red.
+ * Day 16 — Scope 2 (original)
+ * Day 22 — confidence + monitoring-start awareness
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -39,16 +38,11 @@ function formatTooltipLabel(ts) {
 }
 
 /**
- * Build a dense sample series. Each sample has three nullable bands so that
- * each <Area> only renders where that particular state is active:
- *   - up:           filled when status is up
- *   - downSolid:    filled when status is down AND last transition was confirmed
- *   - downStriped:  filled when status is down AND last transition was inferred
- *
- * "Inferred" includes the case where status started inferred and there have
- * been no confirmed events since.
+ * Build sample series with mutually-exclusive bands. Each sample sets
+ * exactly one of {up, downSolid, downStriped, unmonitored} to 100, and
+ * the others to null, so each <Area> renders only where its band applies.
  */
-function buildSamples(from, to, priorStatus, priorInferred, events) {
+function buildSamples(from, to, monitoringStart, priorStatus, priorInferred, events) {
   const rangeMs = to.getTime() - from.getTime();
   let granularity = Math.max(MIN_GRANULARITY_MS, Math.floor(rangeMs / TARGET_POINTS));
   let pointCount = Math.floor(rangeMs / granularity) + 1;
@@ -60,6 +54,8 @@ function buildSamples(from, to, priorStatus, priorInferred, events) {
   const sorted = [...events].sort(
     (a, b) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime()
   );
+
+  const monStartMs = monitoringStart ? new Date(monitoringStart).getTime() : null;
 
   const samples = [];
   let eventIdx = 0;
@@ -73,12 +69,16 @@ function buildSamples(from, to, priorStatus, priorInferred, events) {
       currentConfirmed = !!sorted[eventIdx].confirmed;
       eventIdx++;
     }
+
+    const isUnmonitored = monStartMs !== null && t < monStartMs;
     const isUp = currentStatus === 'up';
+
     samples.push({
       t,
-      up: isUp ? 100 : null,
-      downSolid: !isUp && currentConfirmed ? 100 : null,
-      downStriped: !isUp && !currentConfirmed ? 100 : null,
+      up: !isUnmonitored && isUp ? 100 : null,
+      downSolid: !isUnmonitored && !isUp && currentConfirmed ? 100 : null,
+      downStriped: !isUnmonitored && !isUp && !currentConfirmed ? 100 : null,
+      unmonitored: isUnmonitored ? 100 : null,
     });
   }
   return samples;
@@ -122,7 +122,13 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
 
   const samples = useMemo(() => {
     if (!data || !from || !to) return [];
-    return buildSamples(from, to, data.priorStatus, data.priorInferred, data.events || []);
+    return buildSamples(
+      from, to,
+      data.monitoringStart,
+      data.priorStatus,
+      data.priorInferred,
+      data.events || []
+    );
   }, [data, from, to]);
 
   const rangeMs = (from && to) ? to.getTime() - from.getTime() : 0;
@@ -180,6 +186,7 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
                   if (name === 'up') return ['Up', 'Status'];
                   if (name === 'downSolid') return ['Down (confirmed reboot)', 'Status'];
                   if (name === 'downStriped') return ['Down (poll failure — may not be actual outage)', 'Status'];
+                  if (name === 'unmonitored') return ['Not monitored yet', 'Status'];
                   return [v, name];
                 }}
                 contentStyle={{
@@ -192,6 +199,15 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
                 itemStyle={{ color: 'rgba(255,255,255,0.9)' }}
                 labelStyle={{ color: 'rgba(255,255,255,0.6)' }}
                 separator=": "
+              />
+              <Area
+                type="step"
+                dataKey="unmonitored"
+                stroke="rgba(255,255,255,0.18)"
+                fill="rgba(255,255,255,0.08)"
+                isAnimationActive={false}
+                connectNulls={false}
+                activeDot={false}
               />
               <Area
                 type="step"

@@ -688,11 +688,26 @@ export default function DeviceDetailPage() {
         subtitle={(() => {
           const c = uptimeData?.confirmedEventCount ?? 0;
           const i = uptimeData?.inferredEventCount ?? 0;
-          if (c === 0 && i === 0) return `No status changes in the last ${uptimeDays} days`;
-          const parts = [];
-          if (c > 0) parts.push(`${c} confirmed`);
-          if (i > 0) parts.push(`${i} poll-failure event${i === 1 ? '' : 's'}`);
-          return `${parts.join(', ')} in the last ${uptimeDays} days`;
+          const monStart = uptimeData?.monitoringStart;
+          const monStartStr = monStart
+            ? new Date(monStart).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            : null;
+          const winFromMs = uptimeData?.range?.from ? new Date(uptimeData.range.from).getTime() : null;
+          const monStartMs = monStart ? new Date(monStart).getTime() : null;
+          const showsPreMonitoring = winFromMs !== null && monStartMs !== null && winFromMs < monStartMs;
+          let summary;
+          if (c === 0 && i === 0) {
+            summary = `No status changes in the last ${uptimeDays} days`;
+          } else {
+            const parts = [];
+            if (c > 0) parts.push(`${c} confirmed`);
+            if (i > 0) parts.push(`${i} poll-failure event${i === 1 ? '' : 's'}`);
+            summary = `${parts.join(', ')} in the last ${uptimeDays} days`;
+          }
+          if (showsPreMonitoring && monStartStr) {
+            return `${summary} · monitoring started ${monStartStr}`;
+          }
+          return summary;
         })()}
       >
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginBottom: 16 }}>

@@ -6,8 +6,9 @@
  * change *before* the window (so the chart can render the starting state
  * for devices that haven't changed status recently).
  *
- * DAY 22 — dual-source response.
- *   Events now classified by `source`:
+ * DAY 22 — dual-source response + monitoring start.
+ *
+ *   Events classified by `source`:
  *     - confirmed:  sysuptime-delta, snmp-trap, collector-seed
  *                   (ground truth: device actually rebooted, or device was
  *                    seeded into monitoring)
@@ -15,15 +16,18 @@
  *                   (poll failures or legacy webhook events; may not reflect
  *                    actual device state)
  *
- *   Two uptime percents:
- *     - confirmedUptimePercent: counts only confirmed transitions. Treats
- *       inferred events as if device stayed up. This is the trustworthy
- *       number to lead with.
- *     - monitoringUptimePercent: legacy calc, all events count. Useful for
- *       reasoning about collector reliability, NOT device reliability.
+ *   monitoringStart:
+ *     The earliest moment we have ANY observation of the device. Periods
+ *     before this within the window represent "we weren't watching yet",
+ *     not "device was down". The frontend renders these as a distinct
+ *     unmonitored band, and uptime percentages are calculated only over
+ *     [max(from, monitoringStart), to].
+ *
+ *   Two uptime percents (both over the MONITORED portion of the window):
+ *     - confirmedUptimePercent: counts only confirmed transitions.
+ *     - monitoringUptimePercent: legacy calc, all events count.
  *
  * Day 16 — Scope 2.
- * Sibling to health-history route, same tenant model.
  */
 
 import { withAuth } from '@/lib/auth';
@@ -47,7 +51,8 @@ function parseIso(s) {
 
 /**
  * Compute uptime percent over [from, to], given a starting status and
- * an ordered list of {status, changedAt} events.
+ * an ordered list of {status, changedAt} events. Events outside [from,to]
+ * are ignored. Returns null if range is non-positive.
  */
 function computeUptimePercent(from, to, priorStatus, events) {
   const rangeMs = to.getTime() - from.getTime();
@@ -58,6 +63,14 @@ function computeUptimePercent(from, to, priorStatus, events) {
   let cursorTime = from;
   for (const e of events) {
     const eTime = new Date(e.changedAt);
+    if (eTime <= from) {
+      // Event at or before the calc window start — apply its status as
+      // the current status, but don't accumulate any time.
+      cursorStatus = e.status;
+      cursorTime = from;
+      continue;
+    }
+    if (eTime > to) break;
     if (cursorStatus === 'up') uptimeMs += eTime.getTime() - cursorTime.getTime();
     cursorStatus = e.status;
     cursorTime = eTime;
@@ -102,6 +115,16 @@ export const GET = withAuth(async (req, session, { params }) => {
     }
     const device = deviceResult.rows[0];
 
+    // Earliest observation of this device. Defines monitoringStart.
+    const earliestResult = await queryWithTenant(tenantId,
+      `SELECT MIN(changed_at) AS first_seen
+         FROM device_status_history
+        WHERE device_id = $1`,
+      [deviceId]
+    );
+    const monitoringStartRaw = earliestResult.rows[0]?.first_seen || null;
+    const monitoringStart = monitoringStartRaw ? new Date(monitoringStartRaw) : null;
+
     // Status change events within window
     const eventsResult = await queryWithTenant(tenantId,
       `SELECT status, changed_at, source
@@ -125,21 +148,25 @@ export const GET = withAuth(async (req, session, { params }) => {
     );
 
     // Determine starting status for the window.
-    // Same logic as before, but priorInferred now also tracks whether the
-    // prior event was from a confirmed source. A `collector-seed up` is
-    // treated as confirmed prior state, not inferred.
     let priorStatus;
     let priorInferred;
     if (priorResult.rows.length > 0) {
       priorStatus = priorResult.rows[0].status;
       priorInferred = !isConfirmed(priorResult.rows[0].source);
     } else if (eventsResult.rows.length > 0) {
-      // No history before window, but events within window — assume the
-      // inverse of the first event.
-      priorStatus = eventsResult.rows[0].status === 'up' ? 'down' : 'up';
-      priorInferred = true;
+      // No history before window. First event in-window starts monitoring
+      // (or close to it). Set priorStatus to a reasonable value for the
+      // sub-monitoringStart period; the chart's unmonitored band will
+      // visually override it for confirmed seeds.
+      const firstEvent = eventsResult.rows[0];
+      if (isConfirmed(firstEvent.source)) {
+        priorStatus = firstEvent.status;
+        priorInferred = false;
+      } else {
+        priorStatus = firstEvent.status === 'up' ? 'down' : 'up';
+        priorInferred = true;
+      }
     } else {
-      // No history at all — fall back to current status.
       priorStatus = device.current_status || 'up';
       priorInferred = true;
     }
@@ -151,35 +178,36 @@ export const GET = withAuth(async (req, session, { params }) => {
       source: r.source,
       confirmed: isConfirmed(r.source),
     }));
-
-    // For confirmed-uptime calculation: treat inferred events as if they
-    // didn't exist. Device's confirmed status only changes on confirmed
-    // events. The starting status for confirmed calc may differ from the
-    // window's starting status if the most recent confirmed prior is
-    // different from the most recent any-source prior — but for now we
-    // use the same priorStatus, since priorResult already prefers the
-    // most recent event regardless of source. (A future refinement could
-    // query for the most recent CONFIRMED prior separately, but in
-    // practice the difference is small.)
     const confirmedEvents = allEvents.filter(e => e.confirmed);
 
-    const monitoringUptimePercent = computeUptimePercent(from, to, priorStatus, allEvents);
-    const confirmedUptimePercent = computeUptimePercent(from, to, priorStatus, confirmedEvents);
+    // Compute uptime over the MONITORED portion of the window only.
+    let calcFrom = from;
+    let calcPriorStatus = priorStatus;
+    if (monitoringStart && monitoringStart > from) {
+      calcFrom = monitoringStart;
+      // First event at or after calcFrom defines the starting state of
+      // the monitored period.
+      const seedEvent = allEvents.find(
+        e => new Date(e.changedAt).getTime() >= calcFrom.getTime()
+      );
+      if (seedEvent) calcPriorStatus = seedEvent.status;
+    }
+
+    const monitoringUptimePercent = computeUptimePercent(calcFrom, to, calcPriorStatus, allEvents);
+    const confirmedUptimePercent = computeUptimePercent(calcFrom, to, calcPriorStatus, confirmedEvents);
 
     return Response.json({
       range: {
         from: from.toISOString(),
         to: to.toISOString(),
       },
+      monitoringStart: monitoringStart ? monitoringStart.toISOString() : null,
       priorStatus,
       priorInferred,
       events: allEvents,
       confirmedEventCount: confirmedEvents.length,
       inferredEventCount: allEvents.length - confirmedEvents.length,
       currentStatus: device.current_status,
-      // Day 22: dual metrics. uptimePercent kept as alias for
-      // confirmedUptimePercent so existing frontend code that reads it
-      // gets the trustworthy number by default.
       uptimePercent: confirmedUptimePercent,
       confirmedUptimePercent,
       monitoringUptimePercent,

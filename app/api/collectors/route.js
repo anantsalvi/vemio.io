@@ -1,10 +1,16 @@
 /**
  * VEMIO™ — Collectors API
- * GET /api/collectors
+ * GET  /api/collectors          — list all collectors with status/runs/commands
+ * POST /api/collectors          — create a new pending collector (enrollment)
+ *                                 Body: { siteId, siteName }
+ *                                 Returns: { id, enrollmentToken, siteName, installCommand }
  */
 
 import { withAuth } from '@/lib/auth';
 import { queryWithTenant } from '@/lib/db';
+import { randomBytes } from 'crypto';
+
+const VPS_BASE_URL = process.env.VEMIO_VPS_URL || 'https://vemio-backend.vemio.in';
 
 export const GET = withAuth(async (req, session) => {
   const tenantId = session.tenantId || session.user?.tenantId;
@@ -26,6 +32,7 @@ export const GET = withAuth(async (req, session) => {
         cs.last_heartbeat,
         cs.created_at,
         cs.updated_at,
+        cs.enrollment_token,
         s.name AS linked_site_name,
         EXTRACT(EPOCH FROM (NOW() - cs.last_heartbeat)) AS seconds_since_heartbeat
       FROM collector_sites cs
@@ -110,6 +117,7 @@ export const GET = withAuth(async (req, session) => {
         lastHeartbeat: s.last_heartbeat,
         secondsSinceHeartbeat: secs,
         createdAt: s.created_at,
+        hasEnrollmentToken: !!s.enrollment_token,
         deviceCount: devCountBySite[s.id] || 0,
         pendingCommands: parseInt(cmds.pending) || 0,
         deliveredCommands: parseInt(cmds.delivered) || 0,
@@ -138,5 +146,81 @@ export const GET = withAuth(async (req, session) => {
   } catch (err) {
     console.error('[VEMIO API] Collectors query error:', err.message);
     return Response.json({ error: 'Failed to fetch collectors' }, { status: 500 });
+  }
+});
+
+// ── POST /api/collectors ────────────────────────────────────────────────────
+// Creates a pending collector_sites row and returns an enrollment token.
+// The user runs the install command on their collector machine, which calls
+// POST {VPS}/api/collector/enroll with the token to flip pending → active.
+// ─────────────────────────────────────────────────────────────────────────────
+export const POST = withAuth(async (req, session) => {
+  const tenantId = session.tenantId || session.user?.tenantId;
+  if (!tenantId) {
+    return Response.json({ error: 'No tenant in session' }, { status: 403 });
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const siteId = (body.siteId || '').trim();
+  const siteName = (body.siteName || '').trim();
+
+  if (!siteId) {
+    return Response.json({ error: 'siteId is required' }, { status: 400 });
+  }
+  if (!siteName) {
+    return Response.json({ error: 'siteName is required' }, { status: 400 });
+  }
+  if (siteName.length > 200) {
+    return Response.json({ error: 'siteName too long (max 200 chars)' }, { status: 400 });
+  }
+
+  try {
+    // Confirm site belongs to the caller's tenant before linking.
+    const siteCheck = await queryWithTenant(tenantId,
+      `SELECT id, name FROM sites WHERE id = $1`, [siteId]);
+    if (siteCheck.rows.length === 0) {
+      return Response.json({ error: 'Site not found in your tenant' }, { status: 404 });
+    }
+
+    // Token is the user-visible secret. api_key is a placeholder until enrollment
+    // (the enroll endpoint replaces it with a fresh server-generated key).
+    const enrollmentToken = randomBytes(32).toString('hex');
+    const placeholderApiKey = 'pending-' + randomBytes(16).toString('hex');
+
+    const inserted = await queryWithTenant(tenantId, `
+      INSERT INTO collector_sites
+        (tenant_id, site_id, site_name, api_key, enrollment_token, status)
+      VALUES
+        ($1, $2, $3, $4, $5, 'pending')
+      RETURNING id, site_id, site_name, status, created_at
+    `, [tenantId, siteId, siteName, placeholderApiKey, enrollmentToken]);
+
+    const row = inserted.rows[0];
+
+    // Install command the user runs on the collector machine.
+    const installCommand =
+      `curl -X POST ${VPS_BASE_URL}/api/collector/enroll \\
+  -H "Content-Type: application/json" \\
+  -d '{"enrollment_token":"${enrollmentToken}","hostname":"'"$(hostname)"'","os_info":"'"$(uname -sr)"'","node_version":"'"$(node -v 2>/dev/null || echo unknown)"'"}'`;
+
+    return Response.json({
+      id: row.id,
+      siteId: row.site_id,
+      siteName: row.site_name,
+      status: row.status,
+      createdAt: row.created_at,
+      enrollmentToken,
+      vpsUrl: VPS_BASE_URL,
+      installCommand,
+    }, { status: 201 });
+  } catch (err) {
+    console.error('[VEMIO API] Collector create error:', err.message);
+    return Response.json({ error: 'Failed to create collector' }, { status: 500 });
   }
 });

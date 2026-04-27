@@ -686,34 +686,12 @@ export default function DeviceDetailPage() {
         icon={Activity}
         iconColor="#14b8a6"
         subtitle={(() => {
-          const c = uptimeData?.confirmedEventCount ?? 0;
-          const i = uptimeData?.inferredEventCount ?? 0;
-          const monStart = uptimeData?.monitoringStart;
-          const monStartStr = monStart
-            ? new Date(monStart).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-            : null;
-          const winFromMs = uptimeData?.range?.from ? new Date(uptimeData.range.from).getTime() : null;
-          const monStartMs = monStart ? new Date(monStart).getTime() : null;
-          const showsPreMonitoring = winFromMs !== null && monStartMs !== null && winFromMs < monStartMs;
-          let summary;
-          if (c === 0 && i === 0) {
-            summary = `No status changes in the last ${uptimeDays} days`;
-          } else {
-            const parts = [];
-            if (c > 0) parts.push(`${c} confirmed`);
-            if (i > 0) parts.push(`${i} poll-failure event${i === 1 ? '' : 's'}`);
-            summary = `${parts.join(', ')} in the last ${uptimeDays} days`;
-          }
-          if (showsPreMonitoring && monStartStr) {
-            return `${summary} · monitoring started ${monStartStr}`;
-          }
-          return summary;
+          const r = uptimeData?.rebootCount ?? 0;
+          if (r === 0) return `No reboots in the last ${uptimeDays} days`;
+          return `${r} reboot${r === 1 ? '' : 's'} in the last ${uptimeDays} days`;
         })()}
       >
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, marginBottom: 16 }}>
-          <span style={{ fontSize: 28, fontWeight: 700, color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>
-            {uptimeData?.uptimePercent != null ? `${uptimeData.uptimePercent}%` : '—'}
-          </span>
           <div style={{ display: 'flex', gap: 4, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: 2 }}>
             {[7, 30, 90].map(d => (
               <button

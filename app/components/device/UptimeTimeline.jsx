@@ -1,27 +1,41 @@
 'use client';
 
 /**
- * VEMIO™ — UptimeTimeline
- * Filled-area uptime chart with four bands:
- *   - up           (green)              device confirmed up
- *   - downSolid    (solid red)          confirmed down (sysuptime-delta, snmp-trap)
- *   - downStriped  (diagonal red)       inferred down (collector poll-failure)
- *   - unmonitored  (gray)               period before monitoringStart
+ * VEMIO™ — UptimeTimeline (Day 22 v3)
  *
- * Backed by GET /api/devices/:id/uptime-range (Day 22 schema).
+ * Stepped up/down line chart in the style of Pingdom-class uptime charts.
  *
- * Day 16 — Scope 2 (original)
- * Day 22 — confidence + monitoring-start awareness
+ *   - Y axis is binary: up (top) or down (bottom).
+ *   - Cyan stepped line stays at "up" while the device is reachable and not
+ *     rebooting. Drops to "down" at confirmed reboot moments and at gaps in
+ *     polling, returns to "up" once the device is reachable again.
+ *   - Confirmed reboot dips: solid cyan, narrow.
+ *   - Gaps in polling (no sample for > MAX_GAP_MS): rendered as a gray
+ *     "monitoring gap" band — distinct from confirmed-down so the reader
+ *     can tell whether a "down" was a real outage or a collector hiccup.
+ *   - Pre-monitoring period (before earliest sample / synthesized boot):
+ *     gray "unmonitored" band.
+ *
+ * Backed by GET /api/devices/:id/uptime-range (Day 22 v3 schema).
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  ComposedChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, ReferenceLine,
 } from 'recharts';
 
-const TARGET_POINTS = 200;
-const MAX_POINTS = 600;
-const MIN_GRANULARITY_MS = 30 * 1000;
+// A "gap" in polling is anything longer than this between adjacent samples.
+// At 180s (3min) poll cadence, anything over 6 minutes is suspicious.
+const MAX_GAP_MS = 6 * 60 * 1000;
+
+// Visual durations for confirmed reboot dips. The dip is centered on the
+// boot_time_estimate; the line drops to "down" REBOOT_DIP_MS/2 before and
+// returns to "up" REBOOT_DIP_MS/2 after.
+const REBOOT_DIP_MS = 60 * 1000;
+
+const Y_UP = 100;
+const Y_DOWN = 0;
 
 function formatXAxisTick(timestamp, rangeMs) {
   const d = new Date(timestamp);
@@ -38,53 +52,149 @@ function formatTooltipLabel(ts) {
 }
 
 /**
- * Build sample series with mutually-exclusive bands. Each sample sets
- * exactly one of {up, downSolid, downStriped, unmonitored} to 100, and
- * the others to null, so each <Area> renders only where its band applies.
+ * Walk the samples + reboots, emit a series of points at every transition.
+ * Each point has:
+ *   t            timestamp (ms)
+ *   line         Y_UP / Y_DOWN / null  (the cyan stepped line)
+ *   gap          Y_UP if this t is inside a polling gap, else null
+ *   unmonitored  Y_UP if this t is before any data, else null
  */
-function buildSamples(from, to, monitoringStart, priorStatus, priorInferred, events) {
-  const rangeMs = to.getTime() - from.getTime();
-  let granularity = Math.max(MIN_GRANULARITY_MS, Math.floor(rangeMs / TARGET_POINTS));
-  let pointCount = Math.floor(rangeMs / granularity) + 1;
-  if (pointCount > MAX_POINTS) {
-    granularity = Math.ceil(rangeMs / MAX_POINTS);
-    pointCount = MAX_POINTS + 1;
+function buildSeries(from, to, samples, reboots, synthesis) {
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+
+  // Real samples sorted by time, with parsed ms timestamps.
+  const reachableSamples = (samples || [])
+    .filter(s => s.reachable)
+    .map(s => ({ tMs: new Date(s.t).getTime(), uptimeSec: s.uptimeSeconds }))
+    .sort((a, b) => a.tMs - b.tMs);
+
+  const earliestSampleMs = reachableSamples.length > 0
+    ? reachableSamples[0].tMs
+    : null;
+  const latestSampleMs = reachableSamples.length > 0
+    ? reachableSamples[reachableSamples.length - 1].tMs
+    : null;
+
+  // Reboot events sorted by boot time.
+  const sortedReboots = (reboots || [])
+    .map(r => ({
+      bootMs: new Date(r.bootTime).getTime(),
+      prevObservedMs: new Date(r.prevObservedAt).getTime(),
+    }))
+    .filter(r => !isNaN(r.bootMs))
+    .sort((a, b) => a.bootMs - b.bootMs);
+
+  // Synthesis: lastBootEstimate from device's most recent known uptime.
+  const synthBootMs = synthesis?.lastBootEstimate
+    ? new Date(synthesis.lastBootEstimate).getTime()
+    : null;
+  const synthLatestMs = synthesis?.latestPolledAt
+    ? new Date(synthesis.latestPolledAt).getTime()
+    : null;
+
+  // The "monitored region": the union of [synthBoot, synthLatest] and
+  // [earliestSample, latestSample]. Anything outside is unmonitored.
+  let monStartMs = null;
+  if (synthBootMs !== null) monStartMs = synthBootMs;
+  if (earliestSampleMs !== null) {
+    monStartMs = monStartMs === null
+      ? earliestSampleMs
+      : Math.min(monStartMs, earliestSampleMs);
   }
 
-  const sorted = [...events].sort(
-    (a, b) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime()
-  );
+  let monEndMs = null;
+  if (synthLatestMs !== null) monEndMs = synthLatestMs;
+  if (latestSampleMs !== null) {
+    monEndMs = monEndMs === null
+      ? latestSampleMs
+      : Math.max(monEndMs, latestSampleMs);
+  }
 
-  const monStartMs = monitoringStart ? new Date(monitoringStart).getTime() : null;
+  // Build a list of "events" (transitions) at distinct timestamps within
+  // [from, to]. We emit a sample point per significant moment:
+  //   - window start/end
+  //   - monitoring start/end (if inside window)
+  //   - each reboot (drop+rise)
+  //   - each polling gap (drop at gap start, rise at gap end)
+  // The chart uses connectNulls=false so each band only paints where it
+  // has data.
 
-  const samples = [];
-  let eventIdx = 0;
-  let currentStatus = priorStatus;
-  let currentConfirmed = !priorInferred;
+  const events = [];
 
-  for (let i = 0; i < pointCount; i++) {
-    const t = from.getTime() + i * granularity;
-    while (eventIdx < sorted.length && new Date(sorted[eventIdx].changedAt).getTime() <= t) {
-      currentStatus = sorted[eventIdx].status;
-      currentConfirmed = !!sorted[eventIdx].confirmed;
-      eventIdx++;
+  // Identify polling gaps. A gap = adjacent reachable samples more than
+  // MAX_GAP_MS apart. Treat the gap as a down region from sample[i].t
+  // until sample[i+1].t.
+  const gaps = [];
+  for (let i = 1; i < reachableSamples.length; i++) {
+    const dt = reachableSamples[i].tMs - reachableSamples[i - 1].tMs;
+    if (dt > MAX_GAP_MS) {
+      gaps.push({ startMs: reachableSamples[i - 1].tMs, endMs: reachableSamples[i].tMs });
+    }
+  }
+
+  // Helper: produce {t, line, gap, unmonitored} given the situation at a
+  // time point. We compute booleans then assign.
+  function pointAt(tMs, opts = {}) {
+    const isUnmonitored = monStartMs !== null && tMs < monStartMs;
+    const isInGap = gaps.some(g => tMs > g.startMs && tMs < g.endMs);
+    const isInRebootDip = sortedReboots.some(r =>
+      tMs >= r.bootMs - REBOOT_DIP_MS / 2 && tMs <= r.bootMs + REBOOT_DIP_MS / 2
+    );
+
+    let line = null;
+    if (!isUnmonitored && !isInGap) {
+      line = (isInRebootDip || opts.forceDown) ? Y_DOWN : Y_UP;
     }
 
-    const isUnmonitored = monStartMs !== null && t < monStartMs;
-    const isUp = currentStatus === 'up';
-
-    samples.push({
-      t,
-      up: !isUnmonitored && isUp ? 100 : null,
-      downSolid: !isUnmonitored && !isUp && currentConfirmed ? 100 : null,
-      downStriped: !isUnmonitored && !isUp && !currentConfirmed ? 100 : null,
-      unmonitored: isUnmonitored ? 100 : null,
-    });
+    return {
+      t: tMs,
+      line,
+      gap: isInGap ? Y_UP : null,
+      unmonitored: isUnmonitored ? Y_UP : null,
+    };
   }
-  return samples;
+
+  // Densely sample the window so step rendering is correct. We emit
+  // ~300 evenly-spaced points plus extra points at every gap/reboot edge
+  // to make transitions sharp.
+  const TARGET_POINTS = 300;
+  const granularity = Math.max(60_000, Math.floor((toMs - fromMs) / TARGET_POINTS));
+
+  const tSet = new Set();
+  for (let t = fromMs; t <= toMs; t += granularity) tSet.add(t);
+  tSet.add(fromMs);
+  tSet.add(toMs);
+  if (monStartMs !== null && monStartMs >= fromMs && monStartMs <= toMs) {
+    tSet.add(monStartMs - 1);
+    tSet.add(monStartMs);
+  }
+  for (const g of gaps) {
+    tSet.add(g.startMs);
+    tSet.add(g.startMs + 1);
+    tSet.add(g.endMs - 1);
+    tSet.add(g.endMs);
+  }
+  for (const r of sortedReboots) {
+    tSet.add(r.bootMs - REBOOT_DIP_MS / 2 - 1);
+    tSet.add(r.bootMs - REBOOT_DIP_MS / 2);
+    tSet.add(r.bootMs);
+    tSet.add(r.bootMs + REBOOT_DIP_MS / 2);
+    tSet.add(r.bootMs + REBOOT_DIP_MS / 2 + 1);
+  }
+
+  const sortedTs = [...tSet].filter(t => t >= fromMs && t <= toMs).sort((a, b) => a - b);
+
+  for (const t of sortedTs) {
+    events.push(pointAt(t));
+  }
+
+  return { series: events, monStartMs, gaps, sortedReboots };
 }
 
-export default function UptimeTimeline({ deviceId, from, to, height = 80, onData, showHeader = true }) {
+export default function UptimeTimeline({
+  deviceId, from, to, height = 80, onData, showHeader = true,
+}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -120,15 +230,9 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
     return () => { cancelled = true; };
   }, [deviceId, from, to]);
 
-  const samples = useMemo(() => {
-    if (!data || !from || !to) return [];
-    return buildSamples(
-      from, to,
-      data.monitoringStart,
-      data.priorStatus,
-      data.priorInferred,
-      data.events || []
-    );
+  const { series } = useMemo(() => {
+    if (!data || !from || !to) return { series: [] };
+    return buildSeries(from, to, data.samples, data.reboots, data.synthesis);
   }, [data, from, to]);
 
   const rangeMs = (from && to) ? to.getTime() - from.getTime() : 0;
@@ -138,10 +242,11 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
       {showHeader && (
         <div className="vemio-uptime-header">
           <h4 className="vemio-uptime-title">Online Status</h4>
-          {data && data.confirmedUptimePercent !== null && (
+          {data && (
             <span className="vemio-uptime-meta">
-              {data.confirmedUptimePercent.toFixed(2)}% up
-              {data.priorInferred && <span className="vemio-uptime-inferred"> · starting state inferred</span>}
+              {data.rebootCount === 0
+                ? 'No reboots in window'
+                : `${data.rebootCount} reboot${data.rebootCount === 1 ? '' : 's'} in window`}
             </span>
           )}
         </div>
@@ -154,21 +259,12 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
             Failed to load: {error}
           </div>
         )}
-        {!loading && !error && samples.length > 0 && (
+        {!loading && !error && series.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={samples} margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
-              <defs>
-                <pattern
-                  id="vemio-uptime-stripes"
-                  patternUnits="userSpaceOnUse"
-                  width="8"
-                  height="8"
-                  patternTransform="rotate(45)"
-                >
-                  <rect width="8" height="8" fill="#ef4444" fillOpacity="0.25" />
-                  <rect width="3" height="8" fill="#ef4444" fillOpacity="0.7" />
-                </pattern>
-              </defs>
+            <ComposedChart
+              data={series}
+              margin={{ top: 8, right: 16, bottom: 0, left: 8 }}
+            >
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} horizontal={false} />
               <XAxis
                 dataKey="t"
@@ -183,10 +279,12 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
               <Tooltip
                 labelFormatter={formatTooltipLabel}
                 formatter={(v, name) => {
-                  if (name === 'up') return ['Up', 'Status'];
-                  if (name === 'downSolid') return ['Down (confirmed reboot)', 'Status'];
-                  if (name === 'downStriped') return ['Down (poll failure — may not be actual outage)', 'Status'];
+                  if (v == null) return null;
                   if (name === 'unmonitored') return ['Not monitored yet', 'Status'];
+                  if (name === 'gap') return ['Down (collector gap — may not be actual outage)', 'Status'];
+                  if (name === 'line') {
+                    return [v === Y_UP ? 'Up' : 'Down (confirmed reboot)', 'Status'];
+                  }
                   return [v, name];
                 }}
                 contentStyle={{
@@ -200,92 +298,52 @@ export default function UptimeTimeline({ deviceId, from, to, height = 80, onData
                 labelStyle={{ color: 'rgba(255,255,255,0.6)' }}
                 separator=": "
               />
+
+              {/* Unmonitored band (gray) — full-height fill */}
               <Area
                 type="step"
                 dataKey="unmonitored"
+                stroke="rgba(255,255,255,0.10)"
+                fill="rgba(255,255,255,0.05)"
+                isAnimationActive={false}
+                connectNulls={false}
+                activeDot={false}
+              />
+
+              {/* Polling-gap band (also gray-ish, but distinct from unmonitored) */}
+              <Area
+                type="step"
+                dataKey="gap"
                 stroke="rgba(255,255,255,0.18)"
-                fill="rgba(255,255,255,0.08)"
+                fill="rgba(255,255,255,0.10)"
                 isAnimationActive={false}
                 connectNulls={false}
                 activeDot={false}
               />
-              <Area
-                type="step"
-                dataKey="up"
-                stroke="#22c55e"
-                fill="#22c55e"
-                fillOpacity={0.7}
+
+              {/* The cyan stepped line: up=100, down=0, null=hidden */}
+              <Line
+                type="stepAfter"
+                dataKey="line"
+                stroke="#22d3ee"
+                strokeWidth={2}
+                dot={false}
                 isAnimationActive={false}
                 connectNulls={false}
-                activeDot={false}
               />
-              <Area
-                type="step"
-                dataKey="downSolid"
-                stroke="#ef4444"
-                fill="#ef4444"
-                fillOpacity={0.7}
-                isAnimationActive={false}
-                connectNulls={false}
-                activeDot={false}
-              />
-              <Area
-                type="step"
-                dataKey="downStriped"
-                stroke="#ef4444"
-                strokeOpacity={0.4}
-                fill="url(#vemio-uptime-stripes)"
-                isAnimationActive={false}
-                connectNulls={false}
-                activeDot={false}
-              />
-            </AreaChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>
 
       <style jsx>{`
-        .vemio-uptime-timeline {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-        .vemio-uptime-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: baseline;
-          gap: 12px;
-        }
-        .vemio-uptime-title {
-          font-size: 14px;
-          font-weight: 600;
-          color: rgba(255,255,255,0.9);
-          margin: 0;
-        }
-        .vemio-uptime-meta {
-          font-size: 12px;
-          color: rgba(255,255,255,0.6);
-          font-variant-numeric: tabular-nums;
-        }
-        .vemio-uptime-inferred {
-          color: rgba(255,255,255,0.4);
-          font-style: italic;
-        }
-        .vemio-uptime-body {
-          width: 100%;
-          position: relative;
-        }
-        .vemio-uptime-state {
-          height: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 13px;
-          color: rgba(255,255,255,0.5);
-        }
-        .vemio-uptime-error {
-          color: #ef4444;
-        }
+        .vemio-uptime-timeline { display: flex; flex-direction: column; gap: 8px; }
+        .vemio-uptime-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+        .vemio-uptime-title { font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.9); margin: 0; }
+        .vemio-uptime-meta { font-size: 12px; color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; }
+        .vemio-uptime-body { width: 100%; position: relative; }
+        .vemio-uptime-state { height: 100%; display: flex; align-items: center; justify-content: center; font-size: 13px; color: rgba(255,255,255,0.5); }
+        .vemio-uptime-error { color: #ef4444; }
       `}</style>
     </div>
   );

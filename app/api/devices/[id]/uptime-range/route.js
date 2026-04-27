@@ -2,32 +2,16 @@
  * VEMIO™ — Device Uptime Range API
  * GET /api/devices/[id]/uptime-range?from=<iso>&to=<iso>
  *
- * Returns status change events within the window, plus the last status
- * change *before* the window (so the chart can render the starting state
- * for devices that haven't changed status recently).
+ * DAY 22 v3 — sample-based architecture.
  *
- * DAY 22 — dual-source response + monitoring start.
+ *   Returns a time series of uptime samples plus reboot events. The chart
+ *   renders the samples directly as a line (uptime in seconds → hours/days);
+ *   reboots appear as vertical drops where uptime returns to ~0.
  *
- *   Events classified by `source`:
- *     - confirmed:  sysuptime-delta, snmp-trap, collector-seed
- *                   (ground truth: device actually rebooted, or device was
- *                    seeded into monitoring)
- *     - inferred:   collector, webhook
- *                   (poll failures or legacy webhook events; may not reflect
- *                    actual device state)
- *
- *   monitoringStart:
- *     The earliest moment we have ANY observation of the device. Periods
- *     before this within the window represent "we weren't watching yet",
- *     not "device was down". The frontend renders these as a distinct
- *     unmonitored band, and uptime percentages are calculated only over
- *     [max(from, monitoringStart), to].
- *
- *   Two uptime percents (both over the MONITORED portion of the window):
- *     - confirmedUptimePercent: counts only confirmed transitions.
- *     - monitoringUptimePercent: legacy calc, all events count.
- *
- * Day 16 — Scope 2.
+ *   When the requested window extends before the earliest stored sample,
+ *   we synthesize a backfill segment from the most recent sample's uptime
+ *   value: assume linear growth back to the implied boot time. Anything
+ *   before that boot time is unmonitored.
  */
 
 import { withAuth } from '@/lib/auth';
@@ -37,47 +21,10 @@ const MIN_RANGE_MS = 60 * 1000;
 const MAX_RANGE_MS = 90 * 24 * 60 * 60 * 1000;
 const DEFAULT_RANGE_MS = 60 * 60 * 1000;
 
-const CONFIRMED_SOURCES = new Set(['sysuptime-delta', 'snmp-trap', 'collector-seed']);
-
-function isConfirmed(source) {
-  return CONFIRMED_SOURCES.has(source);
-}
-
 function parseIso(s) {
   if (!s) return null;
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
-}
-
-/**
- * Compute uptime percent over [from, to], given a starting status and
- * an ordered list of {status, changedAt} events. Events outside [from,to]
- * are ignored. Returns null if range is non-positive.
- */
-function computeUptimePercent(from, to, priorStatus, events) {
-  const rangeMs = to.getTime() - from.getTime();
-  if (rangeMs <= 0) return null;
-
-  let uptimeMs = 0;
-  let cursorStatus = priorStatus;
-  let cursorTime = from;
-  for (const e of events) {
-    const eTime = new Date(e.changedAt);
-    if (eTime <= from) {
-      // Event at or before the calc window start — apply its status as
-      // the current status, but don't accumulate any time.
-      cursorStatus = e.status;
-      cursorTime = from;
-      continue;
-    }
-    if (eTime > to) break;
-    if (cursorStatus === 'up') uptimeMs += eTime.getTime() - cursorTime.getTime();
-    cursorStatus = e.status;
-    cursorTime = eTime;
-  }
-  if (cursorStatus === 'up') uptimeMs += to.getTime() - cursorTime.getTime();
-
-  return Math.round((uptimeMs / rangeMs) * 100 * 100) / 100;
 }
 
 export const GET = withAuth(async (req, session, { params }) => {
@@ -91,23 +38,20 @@ export const GET = withAuth(async (req, session, { params }) => {
   if (!from) from = new Date(to.getTime() - DEFAULT_RANGE_MS);
 
   if (from >= to) {
-    return Response.json(
-      { error: 'Invalid range: from must be before to' },
-      { status: 400 }
-    );
+    return Response.json({ error: 'Invalid range: from must be before to' }, { status: 400 });
   }
   const rangeMs = to.getTime() - from.getTime();
   if (rangeMs < MIN_RANGE_MS) {
     return Response.json({ error: 'Range too small (min 1 minute)' }, { status: 400 });
   }
   if (rangeMs > MAX_RANGE_MS) {
-    return Response.json({ error: 'Range too large (max 7 days)' }, { status: 400 });
+    return Response.json({ error: 'Range too large (max 90 days)' }, { status: 400 });
   }
 
   try {
-    // Device + current status (for fallback when no history at all)
+    // Device + current state (for synthesis fallback)
     const deviceResult = await queryWithTenant(tenantId,
-      'SELECT id, current_status FROM devices WHERE id = $1',
+      'SELECT id, current_status, uptime_seconds FROM devices WHERE id = $1',
       [deviceId]
     );
     if (deviceResult.rows.length === 0) {
@@ -115,108 +59,101 @@ export const GET = withAuth(async (req, session, { params }) => {
     }
     const device = deviceResult.rows[0];
 
-    // Earliest observation of this device. Defines monitoringStart.
-    const earliestResult = await queryWithTenant(tenantId,
-      `SELECT MIN(changed_at) AS first_seen
-         FROM device_status_history
-        WHERE device_id = $1`,
-      [deviceId]
-    );
-    const monitoringStartRaw = earliestResult.rows[0]?.first_seen || null;
-    const monitoringStart = monitoringStartRaw ? new Date(monitoringStartRaw) : null;
-
-    // Status change events within window
-    const eventsResult = await queryWithTenant(tenantId,
-      `SELECT status, changed_at, source
-         FROM device_status_history
+    // Samples within window. Each sample is a (polled_at, uptime_seconds)
+    // pair the chart can plot directly.
+    const samplesResult = await queryWithTenant(tenantId,
+      `SELECT polled_at, uptime_ticks, reachable
+         FROM device_uptime_samples
         WHERE device_id = $1
-          AND changed_at >= $2
-          AND changed_at <= $3
-        ORDER BY changed_at ASC`,
+          AND polled_at >= $2
+          AND polled_at <= $3
+        ORDER BY polled_at ASC`,
       [deviceId, from.toISOString(), to.toISOString()]
     );
 
-    // Last status change before the window (defines the starting state)
-    const priorResult = await queryWithTenant(tenantId,
-      `SELECT status, changed_at, source
-         FROM device_status_history
+    // Latest sample overall (for synthesis when no samples in window)
+    const latestResult = await queryWithTenant(tenantId,
+      `SELECT polled_at, uptime_ticks
+         FROM device_uptime_samples
         WHERE device_id = $1
-          AND changed_at < $2
-        ORDER BY changed_at DESC
+          AND reachable = true
+        ORDER BY polled_at DESC
         LIMIT 1`,
-      [deviceId, from.toISOString()]
+      [deviceId]
     );
 
-    // Determine starting status for the window.
-    let priorStatus;
-    let priorInferred;
-    if (priorResult.rows.length > 0) {
-      priorStatus = priorResult.rows[0].status;
-      priorInferred = !isConfirmed(priorResult.rows[0].source);
-    } else if (eventsResult.rows.length > 0) {
-      // No history before window. First event in-window starts monitoring
-      // (or close to it). Set priorStatus to a reasonable value for the
-      // sub-monitoringStart period; the chart's unmonitored band will
-      // visually override it for confirmed seeds.
-      const firstEvent = eventsResult.rows[0];
-      if (isConfirmed(firstEvent.source)) {
-        priorStatus = firstEvent.status;
-        priorInferred = false;
-      } else {
-        priorStatus = firstEvent.status === 'up' ? 'down' : 'up';
-        priorInferred = true;
-      }
-    } else {
-      priorStatus = device.current_status || 'up';
-      priorInferred = true;
-    }
+    // Reboot events within window
+    const rebootsResult = await queryWithTenant(tenantId,
+      `SELECT detected_at, prev_observed_at, boot_time_estimate,
+              prev_uptime_ticks, cur_uptime_ticks, source
+         FROM device_reboot_events
+        WHERE device_id = $1
+          AND boot_time_estimate >= $2
+          AND boot_time_estimate <= $3
+        ORDER BY boot_time_estimate ASC`,
+      [deviceId, from.toISOString(), to.toISOString()]
+    );
 
-    // Annotate events with confirmed flag
-    const allEvents = eventsResult.rows.map(r => ({
-      status: r.status,
-      changedAt: r.changed_at,
+    const reboots = rebootsResult.rows.map(r => ({
+      detectedAt: r.detected_at,
+      prevObservedAt: r.prev_observed_at,
+      bootTime: r.boot_time_estimate,
+      prevUptimeSeconds: Math.round(Number(r.prev_uptime_ticks) / 100),
       source: r.source,
-      confirmed: isConfirmed(r.source),
     }));
-    const confirmedEvents = allEvents.filter(e => e.confirmed);
 
-    // Compute uptime over the MONITORED portion of the window only.
-    let calcFrom = from;
-    let calcPriorStatus = priorStatus;
-    if (monitoringStart && monitoringStart > from) {
-      calcFrom = monitoringStart;
-      // First event at or after calcFrom defines the starting state of
-      // the monitored period.
-      const seedEvent = allEvents.find(
-        e => new Date(e.changedAt).getTime() >= calcFrom.getTime()
+    // Convert ticks → seconds for the chart. Drop unreachable samples
+    // (they're rendered as gaps in the chart, which the frontend handles
+    // via null-valued points).
+    const samples = samplesResult.rows.map(r => ({
+      t: r.polled_at,
+      uptimeSeconds: r.reachable && r.uptime_ticks !== null
+        ? Math.round(Number(r.uptime_ticks) / 100)
+        : null,
+      reachable: r.reachable,
+    }));
+
+    // Synthesis: if we have a latest sample, we can extrapolate a line
+    // back to the implied last-boot time. The frontend uses this to fill
+    // in the chart for periods before any stored samples.
+    let synthesis = null;
+    const latestRow = latestResult.rows[0];
+    if (latestRow && latestRow.uptime_ticks !== null) {
+      const latestTicks = Number(latestRow.uptime_ticks);
+      const latestUptimeSec = Math.round(latestTicks / 100);
+      const latestPolledAt = new Date(latestRow.polled_at);
+      const lastBootEstimate = new Date(
+        latestPolledAt.getTime() - latestUptimeSec * 1000
       );
-      if (seedEvent) calcPriorStatus = seedEvent.status;
+      synthesis = {
+        latestPolledAt: latestPolledAt.toISOString(),
+        latestUptimeSeconds: latestUptimeSec,
+        lastBootEstimate: lastBootEstimate.toISOString(),
+      };
+    } else if (device.uptime_seconds != null) {
+      // Fallback: device row carries a current uptime (kept up-to-date by
+      // the sysinfo handler's regular UPDATE). Use NOW as the implied poll
+      // time. Slightly less accurate than a real sample but covers the
+      // "freshly deployed, no samples yet" case.
+      const latestUptimeSec = Number(device.uptime_seconds);
+      const lastBootEstimate = new Date(now.getTime() - latestUptimeSec * 1000);
+      synthesis = {
+        latestPolledAt: now.toISOString(),
+        latestUptimeSeconds: latestUptimeSec,
+        lastBootEstimate: lastBootEstimate.toISOString(),
+      };
     }
-
-    const monitoringUptimePercent = computeUptimePercent(calcFrom, to, calcPriorStatus, allEvents);
-    const confirmedUptimePercent = computeUptimePercent(calcFrom, to, calcPriorStatus, confirmedEvents);
 
     return Response.json({
-      range: {
-        from: from.toISOString(),
-        to: to.toISOString(),
-      },
-      monitoringStart: monitoringStart ? monitoringStart.toISOString() : null,
-      priorStatus,
-      priorInferred,
-      events: allEvents,
-      confirmedEventCount: confirmedEvents.length,
-      inferredEventCount: allEvents.length - confirmedEvents.length,
+      range: { from: from.toISOString(), to: to.toISOString() },
       currentStatus: device.current_status,
-      uptimePercent: confirmedUptimePercent,
-      confirmedUptimePercent,
-      monitoringUptimePercent,
+      samples,
+      reboots,
+      rebootCount: reboots.length,
+      synthesis,
     });
   } catch (err) {
     console.error('[VEMIO API] Device uptime range error:', err.message);
-    return Response.json(
-      { error: 'Failed to fetch uptime range' },
-      { status: 500 }
-    );
+    return Response.json({ error: 'Failed to fetch uptime range' }, { status: 500 });
   }
 });

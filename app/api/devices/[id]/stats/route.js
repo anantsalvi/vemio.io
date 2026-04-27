@@ -54,8 +54,8 @@ export const GET = withAuth(async (req, session) => {
     let wanFilter = '';
     if (interfaceFilter === 'wan') {
       wanFilter = `
-        AND ist.interface_auvik_id IN (
-          SELECT dp.interface_auvik_id FROM device_ports dp
+        AND ist.interface_vemio_id IN (
+          SELECT dp.interface_vemio_id FROM device_ports dp
           WHERE dp.device_id = $1 AND dp.is_wan = true
         )
       `;
@@ -64,7 +64,7 @@ export const GET = withAuth(async (req, session) => {
     // Fetch time-series
     const statsResult = await queryForTenant(target,
       `SELECT
-         ist.interface_auvik_id,
+         ist.interface_vemio_id,
          ist.interface_name,
          ist.tx_bps,
          ist.rx_bps,
@@ -75,17 +75,17 @@ export const GET = withAuth(async (req, session) => {
        WHERE ist.device_id = $1
          AND ist.recorded_at >= NOW() - INTERVAL '${interval}'
          ${wanFilter}
-       ORDER BY ist.interface_auvik_id, ist.recorded_at ASC`,
+       ORDER BY ist.interface_vemio_id, ist.recorded_at ASC`,
       [deviceId]
     );
 
     // Group by interface
     const interfaces = {};
     for (const row of statsResult.rows) {
-      const key = row.interface_auvik_id;
+      const key = row.interface_vemio_id;
       if (!interfaces[key]) {
         interfaces[key] = {
-          interfaceAuvikId: row.interface_auvik_id,
+          interfaceVemioId: row.interface_vemio_id,
           interfaceName: row.interface_name,
           data: [],
         };
@@ -101,8 +101,8 @@ export const GET = withAuth(async (req, session) => {
 
     // Get current values (latest per interface)
     const currentResult = await queryForTenant(target,
-      `SELECT DISTINCT ON (interface_auvik_id)
-         interface_auvik_id,
+      `SELECT DISTINCT ON (interface_vemio_id)
+         interface_vemio_id,
          interface_name,
          tx_bps,
          rx_bps,
@@ -112,12 +112,12 @@ export const GET = withAuth(async (req, session) => {
        WHERE device_id = $1
          AND recorded_at >= NOW() - INTERVAL '10 minutes'
          ${wanFilter}
-       ORDER BY interface_auvik_id, recorded_at DESC`,
+       ORDER BY interface_vemio_id, recorded_at DESC`,
       [deviceId]
     );
 
     const current = currentResult.rows.map(row => ({
-      interfaceAuvikId: row.interface_auvik_id,
+      interfaceVemioId: row.interface_vemio_id,
       interfaceName: row.interface_name,
       txBps: parseInt(row.tx_bps),
       rxBps: parseInt(row.rx_bps),
@@ -127,7 +127,7 @@ export const GET = withAuth(async (req, session) => {
 
     // Get WAN port metadata
     const wanPorts = await queryForTenant(target,
-      `SELECT dp.interface_auvik_id, dp.interface_name, dp.negotiated_speed, dp.is_wan
+      `SELECT dp.interface_vemio_id, dp.interface_name, dp.negotiated_speed, dp.is_wan
        FROM device_ports dp
        WHERE dp.device_id = $1 AND dp.is_wan = true`,
       [deviceId]
@@ -137,7 +137,7 @@ export const GET = withAuth(async (req, session) => {
       interfaces: Object.values(interfaces),
       current,
       wanPorts: wanPorts.rows.map(p => ({
-        interfaceAuvikId: p.interface_auvik_id,
+        interfaceVemioId: p.interface_vemio_id,
         interfaceName: p.interface_name,
         negotiatedSpeed: parseInt(p.negotiated_speed),
       })),

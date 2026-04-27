@@ -33,7 +33,7 @@ export const GET = withAuth(async (req, session, { params }) => {
 
   try {
     const deviceResult = await queryWithTenant(tenantId,
-      `SELECT d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
+      `SELECT d.id, d.vemio_device_id, d.name, d.device_type, d.make, d.model,
               d.ip_address, d.current_status
        FROM devices d WHERE d.id = $1`,
       [deviceId]
@@ -41,17 +41,17 @@ export const GET = withAuth(async (req, session, { params }) => {
     if (deviceResult.rows.length === 0) return Response.json({ error: 'Device not found' }, { status: 404 });
 
     const device = deviceResult.rows[0];
-    const auvikId = device.auvik_device_id;
+    const vemioId = device.vemio_device_id;
     const deviceUUID = device.id;
 
     // 1. Try Auvik-sourced ports
     const portsResult = await queryWithTenant(tenantId,
-      `SELECT dp.interface_auvik_id, dp.interface_name, dp.interface_type,
+      `SELECT dp.interface_vemio_id, dp.interface_name, dp.interface_type,
               dp.negotiated_speed, dp.operational_status,
               dp.connected_to_interface_id, dp.media_type
-       FROM device_ports dp WHERE dp.device_auvik_id = $1
+       FROM device_ports dp WHERE dp.device_vemio_id = $1
        ORDER BY dp.interface_name ASC`,
-      [auvikId]
+      [vemioId]
     );
 
     // 2. Get IP interfaces
@@ -62,7 +62,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       [deviceUUID]
     );
 
-    // 3. Get neighbors — try both auvik_device_id and UUID
+    // 3. Get neighbors — try both vemio_device_id and UUID
     const neighborsResult = await queryWithTenant(tenantId,
       `SELECT
          dn.device_id AS source_id,
@@ -78,16 +78,16 @@ export const GET = withAuth(async (req, session, { params }) => {
          COALESCE(nd.id, sd_rev.id) AS neighbor_device_uuid
        FROM device_neighbors dn
        LEFT JOIN devices nd ON (
-         nd.auvik_device_id = dn.neighbor_device_id
+         nd.vemio_device_id = dn.neighbor_device_id
          AND (dn.device_id = $1 OR dn.device_id = $2)
        )
        LEFT JOIN devices sd_rev ON (
-         sd_rev.auvik_device_id = dn.device_id
+         sd_rev.vemio_device_id = dn.device_id
          AND (dn.neighbor_device_id = $1 OR dn.neighbor_device_id = $2)
        )
        WHERE dn.device_id = $1 OR dn.neighbor_device_id = $1
           OR dn.device_id = $2 OR dn.neighbor_device_id = $2`,
-      [auvikId, deviceUUID]
+      [vemioId, deviceUUID]
     );
 
     let ports = [];
@@ -105,7 +105,7 @@ export const GET = withAuth(async (req, session, { params }) => {
 
       const neighborsByInterface = new Map();
       for (const n of neighborsResult.rows) {
-        const isSource = n.source_id === auvikId || n.source_id === deviceUUID;
+        const isSource = n.source_id === vemioId || n.source_id === deviceUUID;
         const localIface = isSource ? n.local_interface : n.remote_interface;
         const remoteIface = isSource ? n.remote_interface : n.local_interface;
         if (localIface) {
@@ -125,7 +125,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         const vlans = vlanByInterface.get(ifaceLower) || [];
         const neighbors = neighborsByInterface.get(ifaceLower) || [];
         return {
-          interfaceId: port.interface_auvik_id,
+          interfaceId: port.interface_vemio_id,
           name: port.interface_name, type: port.interface_type || 'ethernet',
           speed: port.negotiated_speed, status: port.operational_status || 'unknown',
           connectedToInterfaceId: port.connected_to_interface_id,
@@ -139,7 +139,7 @@ export const GET = withAuth(async (req, session, { params }) => {
       let portIdx = 0;
 
       for (const n of neighborsResult.rows) {
-        const isSource = n.source_id === auvikId || n.source_id === deviceUUID;
+        const isSource = n.source_id === vemioId || n.source_id === deviceUUID;
         const localIface = isSource
           ? (n.local_interface || 'port' + (++portIdx))
           : (n.remote_interface || 'port' + (++portIdx));
@@ -200,7 +200,7 @@ export const GET = withAuth(async (req, session, { params }) => {
 
     return Response.json({
       device: {
-        id: device.id, auvikDeviceId: device.auvik_device_id,
+        id: device.id, vemioDeviceId: device.vemio_device_id,
         name: device.name, type: device.device_type,
         make: device.make, model: device.model,
         ipAddress: device.ip_address, status: device.current_status,

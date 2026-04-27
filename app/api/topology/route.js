@@ -63,7 +63,7 @@ export const GET = withAuth(async (req, session) => {
 
     const nodesResult = await queryForTenant(target,
       `SELECT
-         d.id, d.auvik_device_id, d.name, d.device_type,
+         d.id, d.vemio_device_id, d.name, d.device_type,
          d.current_status, d.ip_address, d.make, d.model,
          d.serial_number, s.name AS site_name
        FROM devices d
@@ -73,13 +73,13 @@ export const GET = withAuth(async (req, session) => {
       { addTenantInfo: target.mode === 'all' }
     );
 
-    const auvikIdSet = new Set(
-      nodesResult.rows.map(r => r.auvik_device_id).filter(Boolean)
+    const vemioIdSet = new Set(
+      nodesResult.rows.map(r => r.vemio_device_id).filter(Boolean)
     );
-    const auvikToNode = new Map();
+    const vemioToNode = new Map();
     for (const row of nodesResult.rows) {
-      if (row.auvik_device_id) {
-        auvikToNode.set(row.auvik_device_id, row);
+      if (row.vemio_device_id) {
+        vemioToNode.set(row.vemio_device_id, row);
       }
     }
 
@@ -87,8 +87,8 @@ export const GET = withAuth(async (req, session) => {
     const edgesResult = await queryForTenant(target,
       `SELECT DISTINCT ON (LEAST(dn.device_id, dn.neighbor_device_id),
                            GREATEST(dn.device_id, dn.neighbor_device_id))
-         dn.device_id          AS source_auvik_id,
-         dn.neighbor_device_id AS target_auvik_id,
+         dn.device_id          AS source_vemio_id,
+         dn.neighbor_device_id AS target_vemio_id,
          dn.interface_name     AS source_interface,
          dn.neighbor_interface AS target_interface
        FROM device_neighbors dn
@@ -100,35 +100,35 @@ export const GET = withAuth(async (req, session) => {
     const mediaLookup = new Map();
     try {
       const ifResult = await queryForTenant(target,
-        `SELECT device_auvik_id, interface_name, media_type
+        `SELECT device_vemio_id, interface_name, media_type
          FROM device_ports
          WHERE media_type IS NOT NULL AND media_type NOT IN ('virtual', 'unknown')`
       );
       for (const row of ifResult.rows) {
-        mediaLookup.set(`${row.device_auvik_id}:${row.interface_name}`, row.media_type);
+        mediaLookup.set(`${row.device_vemio_id}:${row.interface_name}`, row.media_type);
       }
     } catch (err) {
       console.warn('[VEMIO API] device_ports query failed:', err.message);
     }
 
     // ── Resolve edges ──
-    const connectedAuvikIds = new Set();
+    const connectedVemioIds = new Set();
     const edges = edgesResult.rows
-      .filter(e => auvikIdSet.has(e.source_auvik_id) && auvikIdSet.has(e.target_auvik_id))
+      .filter(e => vemioIdSet.has(e.source_vemio_id) && vemioIdSet.has(e.target_vemio_id))
       .map(e => {
-        const srcNode = auvikToNode.get(e.source_auvik_id);
-        const tgtNode = auvikToNode.get(e.target_auvik_id);
+        const srcNode = vemioToNode.get(e.source_vemio_id);
+        const tgtNode = vemioToNode.get(e.target_vemio_id);
 
-        connectedAuvikIds.add(e.source_auvik_id);
-        connectedAuvikIds.add(e.target_auvik_id);
+        connectedVemioIds.add(e.source_vemio_id);
+        connectedVemioIds.add(e.target_vemio_id);
 
         let mediaType = null;
         if (e.source_interface) {
-          const srcMedia = mediaLookup.get(`${e.source_auvik_id}:${e.source_interface}`);
+          const srcMedia = mediaLookup.get(`${e.source_vemio_id}:${e.source_interface}`);
           if (srcMedia) mediaType = srcMedia;
         }
         if (!mediaType && e.target_interface) {
-          const tgtMedia = mediaLookup.get(`${e.target_auvik_id}:${e.target_interface}`);
+          const tgtMedia = mediaLookup.get(`${e.target_vemio_id}:${e.target_interface}`);
           if (tgtMedia) mediaType = tgtMedia;
         }
 
@@ -145,7 +145,7 @@ export const GET = withAuth(async (req, session) => {
     const subnetMap = new Map();
     try {
       const gwResult = await queryForTenant(target,
-        `SELECT di.device_id, di.ip_address, d.name, d.device_type, d.auvik_device_id
+        `SELECT di.device_id, di.ip_address, d.name, d.device_type, d.vemio_device_id
          FROM device_interfaces di
          JOIN devices d ON d.id = di.device_id
          WHERE d.device_type IN ('firewall', 'core_switch')
@@ -161,7 +161,7 @@ export const GET = withAuth(async (req, session) => {
         if (!existing || (row.device_type === 'core_switch' && existing.deviceType !== 'core_switch')) {
           subnetMap.set(sn, {
             deviceId: row.device_id, deviceName: row.name,
-            deviceType: row.device_type, auvikDeviceId: row.auvik_device_id,
+            deviceType: row.device_type, vemioDeviceId: row.vemio_device_id,
             gatewayIp: ipStr,
           });
         }
@@ -175,14 +175,14 @@ export const GET = withAuth(async (req, session) => {
       const wanResult = await queryForTenant(target,
         `SELECT
            d.id AS device_uuid,
-           d.auvik_device_id,
+           d.vemio_device_id,
            d.name AS device_name,
            dp.interface_name,
            dp.operational_status,
            dp.negotiated_speed,
            di.ip_address AS wan_ip
          FROM device_ports dp
-         JOIN devices d ON d.auvik_device_id = dp.device_auvik_id AND d.tenant_id = dp.tenant_id
+         JOIN devices d ON d.vemio_device_id = dp.device_vemio_id AND d.tenant_id = dp.tenant_id
          JOIN device_interfaces di ON di.device_id = d.id
            AND LOWER(di.interface_name) = LOWER(dp.interface_name)
          WHERE d.device_type = 'firewall'
@@ -208,7 +208,7 @@ export const GET = withAuth(async (req, session) => {
       );
 
       for (const row of wanResult.rows) {
-        const deviceNode = auvikToNode.get(row.auvik_device_id);
+        const deviceNode = vemioToNode.get(row.vemio_device_id);
         if (!deviceNode) continue;
         wanLinks.push({
           deviceId: deviceNode.id,
@@ -231,7 +231,7 @@ export const GET = withAuth(async (req, session) => {
 
     const nodes = nodesResult.rows.map(row => {
       const node = {
-        id: row.id, auvikDeviceId: row.auvik_device_id,
+        id: row.id, vemioDeviceId: row.vemio_device_id,
         name: row.name, type: row.device_type, status: row.current_status,
         ipAddress: row.ip_address, make: row.make, model: row.model,
         serialNumber: row.serial_number, siteName: row.site_name,

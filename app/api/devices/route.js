@@ -91,7 +91,7 @@ export const GET = withAuth(async (req, session) => {
     // Get devices (with tenant info in all mode)
     const devicesResult = await queryForTenant(target,
       `SELECT 
-         d.id, d.auvik_device_id, d.name, d.device_type, d.make, d.model,
+         d.id, d.vemio_device_id, d.name, d.device_type, d.make, d.model,
          d.ip_address, d.current_status, d.last_seen_at, d.uptime_percent_30d, d.uptime_seconds,
          d.created_at, d.is_retired,
          s.name AS site_name, s.id AS site_id
@@ -154,7 +154,7 @@ export const GET = withAuth(async (req, session) => {
     return Response.json({
       devices: paginatedDevices.map(row => ({
         id: row.id,
-        auvikDeviceId: row.auvik_device_id,
+        vemioDeviceId: row.vemio_device_id,
         name: row.name,
         type: row.device_type,
         make: row.make,

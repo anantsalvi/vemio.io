@@ -62,7 +62,7 @@ export const GET = withAuth(async (req, session, { params }) => {
     // Get device info
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.name, d.device_type, d.current_status, d.make, d.model,
-              d.ip_address, d.last_seen_at, d.auvik_device_id,
+              d.ip_address, d.last_seen_at, d.vemio_device_id,
               d.serial_number, d.firmware_version,
               d.eol_date, d.warranty_expiry,
               d.is_critical, d.has_redundancy,
@@ -198,7 +198,7 @@ export const GET = withAuth(async (req, session, { params }) => {
         ipAddress: device.ip_address,
         lastSeenAt: device.last_seen_at,
         siteName: device.site_name,
-        auvikDeviceId: device.auvik_device_id,
+        vemioDeviceId: device.vemio_device_id,
         serialNumber: device.serial_number,
         firmwareVersion: device.firmware_version,
         eolDate: device.eol_date,

@@ -22,7 +22,7 @@ export const GET = withAuth(async (req, session, { params }) => {
     /* ── 1. Device ── */
     const deviceResult = await queryWithTenant(tenantId,
       `SELECT d.id, d.name, d.device_type, d.current_status, d.make, d.model,
-              d.ip_address, d.mac_address, d.last_seen_at, d.auvik_device_id,
+              d.ip_address, d.mac_address, d.last_seen_at, d.vemio_device_id,
               d.serial_number, d.firmware_version, d.description,
               d.eol_date, d.warranty_expiry, d.uptime_seconds,
               d.is_critical, d.has_redundancy, d.is_retired,
@@ -152,11 +152,11 @@ export const GET = withAuth(async (req, session, { params }) => {
          CASE WHEN dn.device_id = $1 THEN nd.ip_address ELSE sd.ip_address END AS neighbor_ip,
          CASE WHEN dn.device_id = $1 THEN nd.id ELSE sd.id END AS neighbor_device_id
        FROM device_neighbors dn
-       LEFT JOIN devices sd ON sd.auvik_device_id = dn.device_id AND dn.device_id != $1 AND sd.tenant_id = $2
-       LEFT JOIN devices nd ON nd.auvik_device_id = dn.neighbor_device_id AND dn.device_id = $1 AND nd.tenant_id = $2
+       LEFT JOIN devices sd ON sd.vemio_device_id = dn.device_id AND dn.device_id != $1 AND sd.tenant_id = $2
+       LEFT JOIN devices nd ON nd.vemio_device_id = dn.neighbor_device_id AND dn.device_id = $1 AND nd.tenant_id = $2
        WHERE (dn.device_id = $1 OR dn.neighbor_device_id = $1)
          AND dn.tenant_id = $2`,
-      [dev.auvik_device_id, tenantId]
+      [dev.vemio_device_id, tenantId]
     );
 
     const neighbors = neighborsResult.rows.filter(r => r.neighbor_name);

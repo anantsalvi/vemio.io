@@ -355,7 +355,7 @@ return (
                           <div>
                             <span className="text-zinc-500 text-xs block">Auvik Device ID</span>
                             <span className="text-zinc-300 font-mono text-xs truncate block max-w-[200px]">
-                              {event.auvikDeviceId || '—'}
+                              {event.vemioDeviceId || '—'}
                             </span>
                           </div>
                           <div>

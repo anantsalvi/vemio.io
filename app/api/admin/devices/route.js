@@ -64,7 +64,7 @@ export const GET = withMSPAuth(async (req, session) => {
   const { rows } = await queryRaw(
     `SELECT d.id, d.name AS device_name, d.ip_address, d.current_status AS status, 
             d.device_type, CONCAT_WS(' ', d.make, d.model) AS make_model,
-            d.is_monitored, d.site_id, d.auvik_device_id, d.created_at, d.updated_at,
+            d.is_monitored, d.site_id, d.vemio_device_id, d.created_at, d.updated_at,
             t.name AS tenant_name, t.slug AS tenant_slug, t.id AS tenant_id,
             s.name AS site_name
      FROM devices d

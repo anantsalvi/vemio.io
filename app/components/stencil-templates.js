@@ -1,833 +1,622 @@
-/**
- * VEMIO Universal Stencil — adapts to ANY network device.
- *
- * Design principle: layout is inferred from the port data, not from a
- * hand-coded model registry. The renderer makes 4 decisions automatically:
- *
- *   1. Categorize ports (already done in API: physical, physical_sfp, etc.)
- *   2. Sort physical ports numerically when names are pure numbers / Port-N
- *   3. Split into top/bottom rows when ≥9 ports (real switch faceplate layout)
- *   4. Render SFP/fiber + trunks as separate stripes below the main rows
- *
- * Vendor info is used ONLY for the badge color/label — never for layout.
- *
- * No per-model knowledge required. Works for switches, firewalls, APs,
- * routers, servers, printers, anything with `port_name` and `category`.
- */
+"use client";
 
-import React from "react";
-import { Info } from "lucide-react";
+/* ============================================================================
+ * stencil-templates.js
+ * ----------------------------------------------------------------------------
+ * Universal device stencil renderer — clean dark-chassis style.
+ * Drop-in replacement preserving the existing public API:
+ *   - export function UniversalStencil({ device, ports, onPortClick, selectedPort })
+ *   - export function parseFirmware(makeModel)
+ *
+ * The renderer adapts to any device by reading port count and SFP count
+ * from the `ports` array — no per-model hand-curation required.
+ *
+ * Visual model matches the agreed reference:
+ *   - Dark slate chassis with rounded corners and subtle inner bezel
+ *   - Brand text upper-left:  "<MAKE> <MODEL>"
+ *   - Square CON button on the left, label "CON" below the button
+ *   - Two rows of physical (RJ45) ports, grouped in fours by spacing
+ *   - Odd port numbers above the top row, even numbers below the bottom row
+ *   - Active ports = filled with dark green tint, bright green border,
+ *     plus a small bright-green dot in the top-left corner
+ *   - SFP cages on the right, staggered (1/3 top, 2/4 bottom for 4 SFPs)
+ *   - Small ventilation grille on far right edge
+ * ============================================================================ */
 
-/* ───────────────────────────────────────────────────────────
-   Vendor accent colors (display only — no layout impact)
-   ─────────────────────────────────────────────────────────── */
-const VENDOR_COLORS = {
-  sophos:  "#0a4d8c",
-  hp:      "#0096d6",
-  hpe:     "#01a982",
-  aruba:   "#ff8300",
-  cisco:   "#1ba0d7",
-  juniper: "#84bd00",
-  fortinet:"#ee3124",
-  paloalto:"#fa582d",
-  brother: "#1e3a8a",
-  dell:    "#007db8",
-  netgear: "#9b59b6",
-  ubiquiti:"#00a9e0",
-  mikrotik:"#293f87",
+import React, { useMemo } from "react";
+
+/* ---------------------------------------------------------------------------
+ * parseFirmware — preserved from previous version of this file.
+ * Extracts a clean firmware/version string from the noisy SNMP sysDescr / make_model
+ * field. Used by page.jsx for the firmware badge.
+ * ------------------------------------------------------------------------- */
+export function parseFirmware(makeModel) {
+  if (!makeModel || typeof makeModel !== "string") return null;
+  const s = makeModel;
+
+  // Cisco IOS:  "... Version 15.2(7)E14, RELEASE SOFTWARE ..."
+  let m = s.match(/Version\s+([\d.()A-Za-z-]+?)(?:[,\s]|$)/i);
+  if (m) return m[1].replace(/[,]+$/, "");
+
+  // Sophos:  "Version: 19.5.4 MR-4"
+  m = s.match(/Version[:\s]+([\d.]+(?:\s*MR-?\d+)?)/i);
+  if (m) return m[1].trim();
+
+  // Aruba / HPE:  "PVOS_3.x.x.x" or "PV V.16.10.0023"
+  m = s.match(/\b(?:PV[OS]*[._\s]+)?([VR]?\.?\s*\d+(?:\.\d+)+[A-Za-z0-9.-]*)/);
+  if (m) return m[1].replace(/^[VR]\.?\s*/, "").trim();
+
+  // Generic semver-ish:  "1.2.3" or "1.2.3.4"
+  m = s.match(/\b\d+\.\d+(?:\.\d+){0,2}\b/);
+  if (m) return m[0];
+
+  return null;
+}
+
+/* ---------------------------------------------------------------------------
+ * Vendor accent colours — small lookup, used only for the brand-text underline
+ * stripe on the chassis. Falls back to a neutral grey when make is unknown.
+ * ------------------------------------------------------------------------- */
+const VENDOR_COLOURS = {
+  cisco: "#1ba0d7",
+  sophos: "#0a4d8c",
+  hp: "#0096d6",
+  hpe: "#01a982",
+  aruba: "#ff8300",
+  brother: "#1d428a",
+  meraki: "#67b346",
+  fortinet: "#ee3124",
+  ubiquiti: "#0559c9",
+  juniper: "#84b135",
+  netgear: "#27569e",
+  dlink: "#0072ce",
 };
 
-const PORT_STATUS_COLOR = (p) => {
-  if (!p) return "#374151";
-  if (p.adminStatus === "down") return "#ef4444";
-  if (p.operStatus === "up") return "#22c55e";
-  if (p.operStatus === "dormant") return "#f59e0b";
-  return "#374151";
-};
-
-/* ───────────────────────────────────────────────────────────
-   Helpers
-   ─────────────────────────────────────────────────────────── */
-function cleanString(s) {
-  return String(s || "").trim().replace(/,+$/, "").trim();
-}
-
-function vendorAccentColor(make) {
-  const key = cleanString(make).toLowerCase().replace(/[\s-]/g, "");
-  for (const k of Object.keys(VENDOR_COLORS)) {
-    if (key.includes(k)) return VENDOR_COLORS[k];
+function vendorAccent(make) {
+  if (!make) return "#5a6470";
+  const key = String(make).toLowerCase().replace(/[^a-z]/g, "");
+  for (const k of Object.keys(VENDOR_COLOURS)) {
+    if (key.includes(k)) return VENDOR_COLOURS[k];
   }
-  return "#6366f1"; // default indigo
+  return "#5a6470";
 }
 
-/**
- * Build a display label from make + model + port count.
- * Examples:
- *   "Sophos XGS 107 · 8 physical ports"
- *   "HP ProCurve 3500yl · 24 physical ports + 4 SFP"
- *   "Aruba AP-505 · 2 ports"
- */
-function buildDeviceLabel(make, model, physicalCount, sfpCount) {
-  const parts = [];
-  const m = cleanString(make);
-  const mod = cleanString(model);
-  if (m) parts.push(m);
-  if (mod) parts.push(mod);
-  let label = parts.join(" ");
-  if (!label) label = "Network Device";
-  return label;
-}
-
-/**
- * Extract a sortable numeric key from a port name.
- * "1" → 1, "Port1" → 1, "Port 24" → 24, "1/0/3" → 30003 (slot * 10000 + port * 100 + sub)
- * "eth0" → 0, "GigabitEthernet0/1" → 1
- * Returns Infinity if no number found, so unnamed ports go to the end.
- */
-function portSortKey(name) {
-  if (!name) return Infinity;
-  const s = String(name);
-
-  // Slot/module notation: 1/0/3 or 1/3 → composite numeric key
-  const slotMatch = s.match(/(\d+)\/(\d+)(?:\/(\d+))?$/);
-  if (slotMatch) {
-    const a = Number(slotMatch[1]) || 0;
-    const b = Number(slotMatch[2]) || 0;
-    const c = Number(slotMatch[3]) || 0;
-    return a * 10000 + b * 100 + c;
-  }
-
-  // Trailing number: "Port 24", "eth0", "GigabitEthernet0", "1"
-  const trailing = s.match(/(\d+)\s*$/);
-  if (trailing) return Number(trailing[1]);
-
-  return Infinity;
-}
-
-/**
- * Decide whether the row of ports should be split into top/bottom (switch
- * faceplate layout) or laid out in a single row (firewall / AP layout).
+/* ---------------------------------------------------------------------------
+ * Port classification + sorting.
  *
- * Rule: ≥9 ports OR explicit "switch" device type → 2 rows.
- * For 2-row layout, split by EVEN/ODD position so Port1 sits above Port2,
- * Port3 above Port4, etc — matching real-world device front panels.
- */
-function splitPhysicalRows(ports) {
-  if (ports.length < 9) {
-    return { top: ports, bottom: [] };
+ * We accept either the collector-shape (oper_status / admin_status / port_name /
+ * port_index / category) or the older Auvik-shape (status / name).  The API
+ * already normalises most of this into `category`, but we tolerate both.
+ *
+ * Returns:
+ *   { copper: [Port, ...], sfp: [Port, ...] }
+ * Each Port is augmented with { displayNumber, statusKind } where statusKind is:
+ *   'active'    — link up (oper=up)
+ *   'inactive'  — admin up but no link (oper=down, admin=up)
+ *   'disabled'  — admin down
+ *   'error'     — has errors (in_errors > 0 or out_errors > 0) — shown amber
+ * ------------------------------------------------------------------------- */
+function classifyAndSplit(ports) {
+  if (!Array.isArray(ports) || ports.length === 0) {
+    return { copper: [], sfp: [] };
   }
-  const top = [];
-  const bottom = [];
-  ports.forEach((p, i) => {
-    if (i % 2 === 0) top.push(p);
-    else bottom.push(p);
+
+  const enriched = ports.map((p, idx) => {
+    const name = p.port_name ?? p.name ?? "";
+    const oper = (p.oper_status ?? p.status ?? "").toString().toLowerCase();
+    const admin = (p.admin_status ?? "up").toString().toLowerCase();
+    const inErr = Number(p.in_errors) || 0;
+    const outErr = Number(p.out_errors) || 0;
+    const cat = p.category ?? "physical";
+
+    let statusKind = "disabled";
+    if (admin === "down") statusKind = "disabled";
+    else if (oper === "up" || oper === "connected" || oper === "online") statusKind = "active";
+    else statusKind = "inactive";
+    if (statusKind === "active" && (inErr > 0 || outErr > 0)) statusKind = "error";
+
+    // Pull a display number from the name. Pure numeric → that. Named like "Port3"
+    // or "GigabitEthernet0/3" → trailing integer. Otherwise fall back to ordinal.
+    const numMatch = String(name).match(/(\d+)\s*$/);
+    const displayNumber = numMatch ? parseInt(numMatch[1], 10) : idx + 1;
+
+    const isSfp = cat === "physical_sfp" || /^(sfp|portf|gi.*sfp|te|xg|fortyG)/i.test(name);
+
+    return { ...p, name, displayNumber, statusKind, _isSfp: isSfp, _ord: idx };
   });
-  return { top, bottom };
-}
 
-/* ───────────────────────────────────────────────────────────
-   PortBox — single port chip in the stencil
-   ─────────────────────────────────────────────────────────── */
-function PortBox({ port, onClick, isSelected, variant = "default" }) {
-  // STENCIL-TARGETMATCH-APR10: rounded square tile with thick glow matching locked target
-  const color = PORT_STATUS_COLOR(port);
-  const isUp = port?.operStatus === "up";
-  const isAdminDown = port?.adminStatus === "down";
-  const hasEndpoints = port?.attachedCount > 0;
-  const label = port?.name || String(port?.index || "?");
-
-  const isSfp = variant === "sfp";
-  const width = isSfp ? 42 : 36;
-  const height = isSfp ? 30 : 34;
-
-  const inRate = Number(port?.inRateMbps) || 0;
-  const outRate = Number(port?.outRateMbps) || 0;
-  const totalRate = inRate + outRate;
-  const trafficPct = Math.min(100, Math.round(totalRate));
-  const showTraffic = isUp && totalRate > 0.01;
-
-  const speedLabel = port?.speedMbps
-    ? (port.speedMbps >= 1000 ? (port.speedMbps / 1000) + " Gbps" : port.speedMbps + " Mbps")
-    : "";
-
-  const tooltipParts = [
-    label,
-    isAdminDown ? "Admin Down" : (port?.operStatus || "unknown").toUpperCase(),
-  ];
-  if (speedLabel) tooltipParts.push(speedLabel);
-  if (showTraffic) tooltipParts.push("In " + inRate.toFixed(1) + " / Out " + outRate.toFixed(1) + " Mbps");
-  if (port?.portIp) tooltipParts.push(port.portIp);
-  if (hasEndpoints) tooltipParts.push(port.attachedCount + " endpoint" + (port.attachedCount > 1 ? "s" : ""));
-  if (port?.connectedNeighborName) tooltipParts.push("\u2192 " + port.connectedNeighborName);
-
-  // Strong visual weight for up ports — LED-like inner glow + thick border
-  const tileBg = isSelected
-    ? "rgba(212,168,67,0.22)"
-    : isUp
-      ? "rgba(34,197,94,0.22)"
-      : isAdminDown
-        ? "rgba(239,68,68,0.15)"
-        : "rgba(20,25,40,0.55)";
-
-  const tileBorder = isSelected ? "#d4a843" : color;
-  // STENCIL-LAYOUTV2-APR10: stronger LED-like glow
-  const tileGlow = isUp
-    ? "0 0 18px " + color + "a0, inset 0 0 14px " + color + "70, 0 0 4px " + color
-    : isAdminDown
-      ? "0 0 8px " + color + "60, inset 0 0 6px " + color + "40"
-      : "none";
-
-  return (
-    <div
-      onClick={() => onClick?.(port)}
-      title={tooltipParts.join(" \u00b7 ")}
-      style={{
-        width: width,
-        height: height,
-        padding: 0,
-        borderRadius: 6,
-        background: tileBg,
-        border: "2.5px solid " + tileBorder,
-        cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "all 0.15s",
-        boxShadow: tileGlow,
-        position: "relative",
-        flexShrink: 0,
-      }}
-    >
-      <span style={{
-        fontSize: isSfp ? 11 : 12,
-        fontWeight: 700,
-        color: isSelected
-          ? "#d4a843"
-          : isUp
-            ? "#ffffff"
-            : isAdminDown
-              ? "#fca5a5"
-              : "rgba(255,255,255,0.5)",
-        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-        whiteSpace: "nowrap",
-        lineHeight: 1,
-        textShadow: isUp ? "0 0 4px " + color + "80" : "none",
-      }}>{label}</span>
-
-      {showTraffic && (
-        <div style={{
-          width: "75%",
-          height: 2,
-          marginTop: 3,
-          background: "rgba(0,0,0,0.4)",
-          borderRadius: 1,
-          overflow: "hidden",
-        }}>
-          <div style={{
-            width: trafficPct + "%",
-            height: "100%",
-            background: trafficPct > 70 ? "#f59e0b" : "#3b82f6",
-            transition: "width 0.3s",
-          }} />
-        </div>
-      )}
-
-      {hasEndpoints && (
-        <div style={{
-          position: "absolute",
-          top: -6,
-          right: -6,
-          minWidth: 14,
-          height: 14,
-          padding: "0 3px",
-          borderRadius: 7,
-          background: "#d4a843",
-          border: "2px solid #0a0e1a",
-          fontSize: 9,
-          color: "#0a0e1a",
-          fontWeight: 700,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          lineHeight: 1,
-        }}>{port.attachedCount > 9 ? "9+" : port.attachedCount}</div>
-      )}
-    </div>
+  // Only physical ports go in the chassis. Virtual/loopback/tunnel are excluded
+  // from the visual stencil entirely (they still appear in the table below).
+  const physical = enriched.filter(
+    (p) => p.category === "physical" || p.category === "physical_sfp" || p._isSfp || (!p.category && !/^(lo|tun|ipsec|vlan|br|dummy)/i.test(p.name))
   );
+
+  const copper = physical
+    .filter((p) => !p._isSfp)
+    .sort((a, b) => a.displayNumber - b.displayNumber);
+  const sfp = physical
+    .filter((p) => p._isSfp)
+    .sort((a, b) => a.displayNumber - b.displayNumber);
+
+  return { copper, sfp };
 }
 
-/* ───────────────────────────────────────────────────────────
-   parseDeviceTopology — STENCIL-PARSETOPO-APR10
-   Extracts port topology from makeModel string (vendor-agnostic).
-   Returns { copperPorts, sfpPorts, poeBudgetWatts, hasPoE, confidence }
-   ─────────────────────────────────────────────────────────── */
-function parseDeviceTopology(makeModel, model) {
-  const result = {
-    copperPorts: 0,
-    sfpPorts: 0,
-    poeBudgetWatts: 0,
-    hasPoE: false,
-    confidence: "none",
-  };
-
-  const combined = [makeModel, model].filter(Boolean).join(" ");
-  if (!combined) return result;
-  const s = combined.toLowerCase();
-
-  // Copper port count: "24p", "24-port", "24 port", "24G" (but not "24 GHz")
-  const copperMatch = s.match(/(\d+)\s*(?:p(?![a-z])|port|-port)/);
-  if (copperMatch) {
-    result.copperPorts = parseInt(copperMatch[1], 10);
-    result.confidence = "partial";
+/* ---------------------------------------------------------------------------
+ * Layout maths.
+ *
+ * For N copper ports we lay them out in two rows. The first row holds the
+ * odd-indexed ports (1, 3, 5...), the second row holds the even-indexed ports
+ * (2, 4, 6...). Every group of 4 columns gets an extra horizontal gap.
+ *
+ * Returns:
+ *   { columns, portW, portH, colGap, groupGap, rowGap, totalWidth }
+ *
+ * Auto-sizes by port count so 8/24/48 all fit in the available width without
+ * the need for a horizontal scrollbar.
+ * ------------------------------------------------------------------------- */
+function computeLayout(copperCount, availableWidth) {
+  const cols = Math.max(1, Math.ceil(copperCount / 2));
+  // total width budget for the port grid
+  const W = availableWidth;
+  // group every 4 columns, so the number of inter-group gaps is floor((cols-1)/4)
+  const groupGapCount = Math.max(0, Math.floor((cols - 1) / 4));
+  // we want roughly: cols*portW + (cols-1)*colGap + groupGapCount*extraGroupGap = W
+  // pick portW based on density
+  let portW, colGap, groupGap;
+  if (cols <= 4) {
+    portW = 36;
+    colGap = 6;
+    groupGap = 14;
+  } else if (cols <= 12) {
+    portW = 32;
+    colGap = 4;
+    groupGap = 12;
+  } else if (cols <= 18) {
+    portW = 24;
+    colGap = 3;
+    groupGap = 10;
   } else {
-    // Fallback: "24G" where G = Gigabit (HPE Instant On, HP ProCurve naming)
-    const gMatch = s.match(/(\d+)g[- ]/);
-    if (gMatch) {
-      result.copperPorts = parseInt(gMatch[1], 10);
-      result.confidence = "partial";
-    }
+    portW = 16;
+    colGap = 2;
+    groupGap = 8;
   }
 
-  // SFP port count: "2p SFP", "4 SFP", "2x SFP+"
-  const sfpMatch = s.match(/(\d+)\s*(?:p|x|-port)?\s*sfp/);
-  if (sfpMatch) {
-    result.sfpPorts = parseInt(sfpMatch[1], 10);
-    if (result.confidence === "partial") result.confidence = "high";
-  }
+  const totalWidth =
+    cols * portW + (cols - 1) * colGap + groupGapCount * groupGap;
 
-  // PoE budget in watts: "195W", "195 W", "370W"
-  const poeMatch = s.match(/(\d+)\s*w(?:[^a-z]|$)/);
-  if (poeMatch) {
-    const watts = parseInt(poeMatch[1], 10);
-    if (watts >= 30 && watts <= 2000) {
-      result.poeBudgetWatts = watts;
-      result.hasPoE = true;
-    }
-  }
-
-  // PoE hint from other markers
-  if (/poe/.test(s)) result.hasPoE = true;
-
-  return result;
+  return {
+    columns: cols,
+    portW,
+    portH: 26,
+    colGap,
+    groupGap,
+    rowGap: 12, // vertical gap between top row and bottom row
+    totalWidth,
+  };
 }
 
-/* ───────────────────────────────────────────────────────────
-   UniversalStencil — main renderer (STENCIL-V2-APR07)
-   ─────────────────────────────────────────────────────────── */
-export function UniversalStencil({ device, ports, vlanCount, onPortClick, selectedPort }) {
-  if (!ports || ports.length === 0) {
-    return (
-      <div style={{
-        padding: 32,
-        textAlign: "center",
-        background: "rgba(0,0,0,0.4)",
-        borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.06)",
-        color: "rgba(255,255,255,0.4)",
-        fontSize: 13,
-      }}>
-        No ports detected on this device.
-      </div>
-    );
-  }
+/* ---------------------------------------------------------------------------
+ * X-coordinate of the i-th column (0-indexed) within the port grid.
+ * ------------------------------------------------------------------------- */
+function colX(i, layout) {
+  const groupOffsets = Math.floor(i / 4) * layout.groupGap;
+  return i * (layout.portW + layout.colGap) + groupOffsets;
+}
 
-  const make = cleanString(device?.make);
-  const model = cleanString(device?.model);
-  const accent = vendorAccentColor(make);
-
-  // STENCIL-PARSETOPO-APR10: parse topology from SNMP make_model string
-  const topology = parseDeviceTopology(device?.makeModel, device?.model);
-
-  const seen = new Set();
-  const dedupedPorts = ports.filter(p => {
-    const key = (p.name || "") + "|" + p.index;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  const physical = dedupedPorts.filter(p => p.category === "physical");
-  const sfp      = dedupedPorts.filter(p => p.category === "physical_sfp");
-  const trunks   = dedupedPorts.filter(p => p.category === "trunk");
-
-  const sortedPhysical = [...physical].sort((a, b) =>
-    portSortKey(a.name || a.index) - portSortKey(b.name || b.index)
-  );
-  const sortedSfp = [...sfp].sort((a, b) =>
-    portSortKey(a.name || a.index) - portSortKey(b.name || b.index)
-  );
-
-  const { top, bottom } = splitPhysicalRows(sortedPhysical);
-  const label = buildDeviceLabel(make, model, sortedPhysical.length, sortedSfp.length);
-
-  // Aggregate stats — STENCIL-DATAFIX-APR07: count only rendered ports, not virtual interfaces
-  const renderedPorts = [...sortedPhysical, ...sortedSfp, ...trunks];
-  const upCount = renderedPorts.filter(p => p.operStatus === "up").length;
-  const totalCount = renderedPorts.length;
-  const utilizationPct = totalCount > 0 ? Math.round((upCount / totalCount) * 100) : 0;
-  const totalIn = renderedPorts.reduce((s, p) => s + (Number(p.inRateMbps) || 0), 0);
-  const totalOut = renderedPorts.reduce((s, p) => s + (Number(p.outRateMbps) || 0), 0);
-  const totalThroughput = totalIn + totalOut;
-  const endpointPortCount = renderedPorts.filter(p => p.attachedCount > 0).length;
-
-  // LED states based on real data
-  const ledPwr = "#22c55e"; // always on if device responds
-  const ledSta = upCount > 0 ? "#22c55e" : "#f59e0b";
-  const ledLnk = totalThroughput > 0.1 ? "#22c55e" : "#374151";
+/* ---------------------------------------------------------------------------
+ * Port tile — single rendering primitive used for both copper and SFP ports.
+ * Variant 'copper' is square-ish, variant 'sfp' is wider.
+ * ------------------------------------------------------------------------- */
+function PortTile({
+  port,
+  x,
+  y,
+  width,
+  height,
+  variant,
+  label,
+  onClick,
+  isSelected,
+}) {
+  const status = port?.statusKind ?? "disabled";
+  const fill =
+    status === "active"
+      ? "#0a3d2c"
+      : status === "error"
+      ? "#3a2a0a"
+      : "#0d1117";
+  const stroke =
+    status === "active"
+      ? "#22c55e"
+      : status === "error"
+      ? "#f59e0b"
+      : "#3a4250";
+  const strokeWidth = status === "active" || status === "error" ? 1 : 0.5;
 
   return (
-    <div style={{
-      background: "linear-gradient(180deg, rgba(15,20,32,0.95) 0%, rgba(10,14,26,0.98) 100%)",
-      borderRadius: 12,
-      padding: "20px 24px",
-      border: "1px solid " + accent + "30",
-      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px " + accent + "10",
-    }}>
-      {/* STENCIL-LAYOUTV2-APR10: device header + legend moved to top */}
-      <div style={{
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "space-between",
-        marginBottom: 12,
-        flexWrap: "wrap",
-        gap: 12,
-      }}>
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, minWidth: 0, flex: 1 }}>
-          <div style={{
-            width: 36,
-            height: 36,
-            borderRadius: 8,
-            background: "rgba(96,165,250,0.15)",
-            border: "1px solid rgba(96,165,250,0.35)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}>
-            <div style={{
-              width: 16,
-              height: 12,
-              border: "1.5px solid #60a5fa",
-              borderRadius: 2,
-            }} />
-          </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{
-              fontSize: 18,
-              fontWeight: 700,
-              color: "rgba(255,255,255,0.98)",
-              lineHeight: 1.2,
-            }}>{device?.name || label}</div>
-            <div style={{
-              fontSize: 12,
-              color: "rgba(255,255,255,0.55)",
-              marginTop: 3,
-              lineHeight: 1.4,
-            }}>
-              {(() => {
-                const parts = [];
-                if (device?.type) {
-                  parts.push(device.type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()));
-                }
-                if (make) parts.push(make + (model ? " " + model : ""));
-                if (device?.ipAddress) parts.push(String(device.ipAddress).replace("/32", ""));
-                if (device?.siteName) parts.push(device.siteName);
-                return parts.join(" \u00b7 ");
-              })()}
-            </div>
-            <div style={{
-              display: "flex",
-              gap: 14,
-              marginTop: 10,
-              flexWrap: "wrap",
-              alignItems: "center",
-            }}>
-              {[
-                { color: "#22c55e", label: "Up" },
-                { color: "#374151", label: "Down" },
-                { color: "#ef4444", label: "Admin down" },
-                { color: "#f59e0b", label: "Dormant" },
-              ].map(l => (
-                <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <div style={{
-                    width: 11,
-                    height: 11,
-                    borderRadius: 3,
-                    border: "2px solid " + l.color,
-                    background: "rgba(0,0,0,0.4)",
-                  }} />
-                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>{l.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+    <g
+      style={{ cursor: port ? "pointer" : "default" }}
+      onClick={port && onClick ? () => onClick(port) : undefined}
+    >
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        rx={3}
+        fill={fill}
+        stroke={isSelected ? "#60a5fa" : stroke}
+        strokeWidth={isSelected ? 1.5 : strokeWidth}
+      />
+      {/* corner indicator dot for active/error ports */}
+      {(status === "active" || status === "error") && (
+        <circle
+          cx={x + 5}
+          cy={y + 5}
+          r={1.8}
+          fill={status === "active" ? "#4ade80" : "#fbbf24"}
+        />
+      )}
+      {/* SFP-style label sits inside the wider tile */}
+      {variant === "sfp" && label && (
+        <text
+          x={x + width / 2}
+          y={y + height / 2 + 3}
+          textAnchor="middle"
+          fontFamily="Arial, sans-serif"
+          fontSize="9"
+          fill="#7a8390"
+          letterSpacing="0.3"
+          style={{ pointerEvents: "none" }}
+        >
+          {label}
+        </text>
+      )}
+    </g>
+  );
+}
 
-        {/* STENCIL-MOVELEDS-APR10: LEDs moved into grey faceplate bar below */}
-        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-          <span style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.55)",
-            padding: "4px 10px",
-            borderRadius: 12,
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>
-            {sortedPhysical.length} physical{sortedSfp.length > 0 ? " \u00b7 " + sortedSfp.length + " SFP" : ""}{trunks.length > 0 ? " \u00b7 " + trunks.length + " trunk" : ""}
-          </span>
-        </div>
-      </div>
+/* ---------------------------------------------------------------------------
+ * Empty placeholder tile — drawn when a row has fewer ports than the column
+ * count (odd total). Same shape as a port but with no port reference.
+ * ------------------------------------------------------------------------- */
+function EmptyTile({ x, y, width, height }) {
+  return (
+    <rect
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      rx={3}
+      fill="#0d1117"
+      stroke="#3a4250"
+      strokeWidth={0.5}
+      opacity={0.3}
+    />
+  );
+}
 
-      {/* Faceplate body */}
-      <div style={{
-        display: "flex",
-        gap: 14,
-        padding: "16px 18px",
-        background: "linear-gradient(180deg, #1a2030 0%, #141926 100%)",
-        borderRadius: 6,
-        border: "1px solid rgba(255,255,255,0.08)",
-        overflowX: "auto",
-        alignItems: "center",
-      }}>
-        {/* Brand strip */}
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          paddingRight: 14,
-          borderRight: "1px solid rgba(255,255,255,0.1)",
-          flexShrink: 0,
-        }}>
-          <div style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: "rgba(255,255,255,0.75)",
-            letterSpacing: 0.4,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>{make || "DEVICE"}</div>
-          <div style={{
-            fontSize: 8,
-            color: "rgba(255,255,255,0.35)",
-            letterSpacing: 0.2,
-            fontFamily: "'JetBrains Mono', monospace",
-          }}>{model || ""}</div>
-          <div style={{
-            width: 22,
-            height: 16,
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 2,
-            background: "rgba(0,0,0,0.4)",
-            marginTop: 6,
-          }} title="Console port" />
-        </div>
+/* ---------------------------------------------------------------------------
+ * UniversalStencil — main exported component.
+ *
+ * Props:
+ *   device       — { make, model, ... } (only make/model are read here)
+ *   ports        — array of port records from /api/devices/[id]/ports or .../detail
+ *   onPortClick  — optional (port) => void; called when the user clicks a port tile
+ *   selectedPort — optional currently-selected port (for highlight ring)
+ * ------------------------------------------------------------------------- */
+export function UniversalStencil({
+  device,
+  ports,
+  onPortClick,
+  selectedPort,
+}) {
+  const { copper, sfp } = useMemo(() => classifyAndSplit(ports), [ports]);
 
-        {/* Physical port grid */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, flexShrink: 0 }}>
-          {sortedPhysical.length === 0 && sortedSfp.length === 0 && trunks.length === 0 && (
-            <p style={{
-              fontSize: 12,
-              color: "rgba(255,255,255,0.35)",
-              margin: 0,
-              textAlign: "center",
-              padding: "10px 20px",
-            }}>
-              No physical, SFP, or trunk ports — see table below for virtual interfaces.
-            </p>
-          )}
+  // No physical ports? Render a compact empty-state chassis with just the brand.
+  const hasAnyPhysical = copper.length + sfp.length > 0;
 
-          {top.length > 0 && (
-            <div style={{ display: "flex", gap: 4 }}>
-              {top.map(p => (
-                <PortBox
-                  key={"top-" + p.index + "-" + p.name}
-                  port={p}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.index === p.index}
-                />
-              ))}
-            </div>
-          )}
-          {bottom.length > 0 && (
-            <div style={{ display: "flex", gap: 4 }}>
-              {bottom.map(p => (
-                <PortBox
-                  key={"bot-" + p.index + "-" + p.name}
-                  port={p}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.index === p.index}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+  // Layout budget: chassis is 668px wide. Reserve 50px left brand area + 50px
+  // CON button block + 24px right padding + SFP block width.
+  const sfpCount = sfp.length;
+  const sfpBlockWidth = sfpCount === 0 ? 0 : sfpCount <= 2 ? 56 : sfpCount <= 4 ? 110 : 200;
+  const leftReserve = 76; // brand + CON
+  const rightReserve = 24; // far-right ventilation + padding
+  const sfpPadding = sfpCount > 0 ? 18 : 0;
+  const portsAvailable = 668 - leftReserve - rightReserve - sfpPadding - sfpBlockWidth;
 
-        {/* SFP / fiber section */}
-        {sortedSfp.length > 0 && (
-          <div style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-            paddingLeft: 14,
-            borderLeft: "1px solid rgba(255,255,255,0.1)",
-            flexShrink: 0,
-          }}>
-            <div style={{
-              fontSize: 8,
-              color: "rgba(255,255,255,0.4)",
-              textAlign: "center",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              fontFamily: "'JetBrains Mono', monospace",
-              marginBottom: 2,
-            }}>SFP / Fiber</div>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", maxWidth: 200 }}>
-              {sortedSfp.map(p => (
-                <PortBox
-                  key={"sfp-" + p.index + "-" + p.name}
-                  port={p}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.index === p.index}
-                  variant="sfp"
-                />
-              ))}
-            </div>
-          </div>
-        )}
+  const layout = useMemo(
+    () => computeLayout(copper.length, portsAvailable),
+    [copper.length, portsAvailable]
+  );
 
-        {/* Trunks section */}
-        {trunks.length > 0 && (
-          <div style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-            paddingLeft: 14,
-            borderLeft: "1px solid rgba(255,255,255,0.1)",
-            flexShrink: 0,
-          }}>
-            <div style={{
-              fontSize: 8,
-              color: "rgba(255,255,255,0.4)",
-              textAlign: "center",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              fontFamily: "'JetBrains Mono', monospace",
-              marginBottom: 2,
-            }}>Trunks / LAG</div>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", maxWidth: 160 }}>
-              {trunks.map(p => (
-                <PortBox
-                  key={"trk-" + p.index + "-" + p.name}
-                  port={p}
-                  onClick={onPortClick}
-                  isSelected={selectedPort?.index === p.index}
-                  variant="sfp"
-                />
-              ))}
-            </div>
-          </div>
-        )}
-        {/* LEDs anchored to the right of the port grid */}
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          paddingLeft: 14,
-          borderLeft: "1px solid rgba(255,255,255,0.1)",
-          flexShrink: 0,
-        }}>
-          {[
-            { name: "PWR", color: ledPwr },
-            { name: "STA", color: ledSta },
-            { name: "FAN", color: ledPwr },
-            { name: "TMP", color: ledPwr },
-          ].map(led => (
-            <div key={led.name} style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}>
-              <div style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: led.color,
-                boxShadow: "0 0 6px " + led.color + "a0",
-              }} />
-              <span style={{
-                fontSize: 9,
-                color: "rgba(255,255,255,0.55)",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontWeight: 600,
-                letterSpacing: 0.3,
-              }}>{led.name}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+  // selectedPort identity check — selectedPort might be a full port record OR
+  // just a port_index / name. We compare on port_index then port_name.
+  const selectedKey =
+    selectedPort?.port_index ?? selectedPort?.port_name ?? selectedPort?.name;
 
-      {/* Stats row */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: 12,
-        marginTop: 16,
-        paddingTop: 16,
-        borderTop: "1px solid rgba(255,255,255,0.08)",
-      }}>
-        <div>
-          <div style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.45)",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            marginBottom: 4,
-            fontWeight: 600,
-          }}>Total ports</div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "rgba(255,255,255,0.95)" }}>{totalCount}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-            {sortedPhysical.length} copper{sortedSfp.length > 0 ? " \u00b7 " + sortedSfp.length + " SFP" : ""}
-          </div>
-        </div>
-        <div>
-          <div style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.45)",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            marginBottom: 4,
-            fontWeight: 600,
-          }}>Up</div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "#22c55e" }}>{upCount}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>{utilizationPct}% utilization</div>
-        </div>
-        <div>
-          {/* STENCIL-TARGETMATCH-APR10: PoE card when data exists, Active VLANs fallback */}
-          {(() => {
-            const poeDraw = Number(device?.poeDrawWatts) || 0;
-            // STENCIL-PARSETOPO-APR10: use parsed budget from makeModel as fallback
-            const poeBudget = Number(device?.poeBudgetWatts) || topology.poeBudgetWatts || 0;
-            const hasPoE = poeBudget > 0;
-            if (hasPoE) {
-              const pct = Math.round((poeDraw / poeBudget) * 100);
+  const isSelected = (p) =>
+    selectedKey != null &&
+    (p.port_index === selectedKey || p.port_name === selectedKey || p.name === selectedKey);
+
+  // Geometry constants
+  const chassisH = 150;
+  const portsTopY = 50; // Y of the odd-number labels
+  const topRowY = portsTopY + 5; // top row of port tiles starts here
+  const botRowY = topRowY + layout.portH + layout.rowGap;
+  const evenLabelY = botRowY + layout.portH + 12; // even-number labels below bottom row
+
+  const accent = vendorAccent(device?.make);
+  const brand = (
+    [device?.make, device?.model].filter(Boolean).join(" ") || "UNKNOWN DEVICE"
+  )
+    .toString()
+    .toUpperCase();
+
+  // Where the SFP block starts horizontally
+  const sfpBlockX = leftReserve + layout.totalWidth + sfpPadding;
+
+  return (
+    <div style={{ width: "100%", overflow: "hidden" }}>
+      <svg
+        width="100%"
+        viewBox={`0 0 680 ${chassisH}`}
+        xmlns="http://www.w3.org/2000/svg"
+        role="img"
+        style={{ display: "block" }}
+      >
+        <title>{brand} stencil</title>
+        <desc>
+          {`Network device chassis with ${copper.length} copper ports and ${sfp.length} SFP ports`}
+        </desc>
+
+        {/* chassis */}
+        <rect
+          x={6}
+          y={10}
+          width={668}
+          height={chassisH - 20}
+          rx={6}
+          fill="#1a1f28"
+          stroke="#0a0d12"
+          strokeWidth={0.5}
+        />
+        <rect
+          x={10}
+          y={14}
+          width={660}
+          height={chassisH - 28}
+          rx={4}
+          fill="none"
+          stroke="#3a4250"
+          strokeWidth={0.5}
+          opacity={0.6}
+        />
+
+        {/* brand + accent stripe */}
+        <text
+          x={22}
+          y={34}
+          fontFamily="Arial, sans-serif"
+          fontSize={13}
+          fontWeight={400}
+          fill="#a8b0bc"
+          letterSpacing={1.5}
+        >
+          {brand}
+        </text>
+        <rect x={22} y={38} width={120} height={1.5} fill={accent} opacity={0.7} />
+
+        {/* CON button + label below */}
+        <rect
+          x={22}
+          y={55}
+          width={32}
+          height={32}
+          rx={3}
+          fill="#0d1117"
+          stroke="#3a4250"
+          strokeWidth={0.5}
+        />
+        <text
+          x={38}
+          y={103}
+          textAnchor="middle"
+          fontFamily="Arial, sans-serif"
+          fontSize={9}
+          fill="#7a8390"
+          letterSpacing={0.5}
+        >
+          CON
+        </text>
+
+        {/* port grid */}
+        {hasAnyPhysical && (
+          <g transform={`translate(${leftReserve}, 0)`}>
+            {/* odd-number labels above top row */}
+            {Array.from({ length: layout.columns }).map((_, i) => {
+              const port = copper[i * 2];
+              if (!port) return null;
               return (
-                <>
-                  <div style={{
-                    fontSize: 10,
-                    color: "rgba(255,255,255,0.45)",
-                    textTransform: "uppercase",
-                    letterSpacing: 0.5,
-                    marginBottom: 4,
-                    fontWeight: 600,
-                  }}>PoE Budget</div>
-                  <div style={{ fontSize: 20, fontWeight: 600, color: "#f59e0b" }}>{poeDraw}W</div>
-                  <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-                    of {poeBudget}W ({pct}%)
-                  </div>
-                </>
+                <text
+                  key={`top-label-${i}`}
+                  x={colX(i, layout) + layout.portW / 2}
+                  y={portsTopY}
+                  textAnchor="middle"
+                  fontFamily="Arial, sans-serif"
+                  fontSize={9}
+                  fill="#7a8390"
+                >
+                  {port.displayNumber}
+                </text>
               );
-            }
-            return (
-              <>
-                <div style={{
-                  fontSize: 10,
-                  color: "rgba(255,255,255,0.45)",
-                  textTransform: "uppercase",
-                  letterSpacing: 0.5,
-                  marginBottom: 4,
-                  fontWeight: 600,
-                }}>Active VLANs</div>
-                <div style={{ fontSize: 20, fontWeight: 600, color: "#d4a843" }}>{vlanCount || 0}</div>
-                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-                  {endpointPortCount} ports with endpoints
-                </div>
-              </>
-            );
-          })()}
-        </div>
-        <div>
-          <div style={{
-            fontSize: 10,
-            color: "rgba(255,255,255,0.45)",
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            marginBottom: 4,
-            fontWeight: 600,
-          }}>Throughput</div>
-          <div style={{ fontSize: 20, fontWeight: 600, color: "rgba(255,255,255,0.95)" }}>
-            {totalThroughput >= 1000 ? (totalThroughput / 1000).toFixed(1) + " Gbps" : totalThroughput.toFixed(1) + " Mbps"}
-          </div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", marginTop: 2 }}>
-            in {totalIn.toFixed(1)} / out {totalOut.toFixed(1)}
-          </div>
-        </div>
-      </div>
+            })}
 
+            {/* top row of tiles */}
+            {Array.from({ length: layout.columns }).map((_, i) => {
+              const port = copper[i * 2];
+              const x = colX(i, layout);
+              if (!port) return <EmptyTile key={`top-empty-${i}`} x={x} y={topRowY} width={layout.portW} height={layout.portH} />;
+              return (
+                <PortTile
+                  key={`top-${i}`}
+                  port={port}
+                  x={x}
+                  y={topRowY}
+                  width={layout.portW}
+                  height={layout.portH}
+                  variant="copper"
+                  onClick={onPortClick}
+                  isSelected={isSelected(port)}
+                />
+              );
+            })}
+
+            {/* bottom row of tiles */}
+            {Array.from({ length: layout.columns }).map((_, i) => {
+              const port = copper[i * 2 + 1];
+              const x = colX(i, layout);
+              if (!port) return <EmptyTile key={`bot-empty-${i}`} x={x} y={botRowY} width={layout.portW} height={layout.portH} />;
+              return (
+                <PortTile
+                  key={`bot-${i}`}
+                  port={port}
+                  x={x}
+                  y={botRowY}
+                  width={layout.portW}
+                  height={layout.portH}
+                  variant="copper"
+                  onClick={onPortClick}
+                  isSelected={isSelected(port)}
+                />
+              );
+            })}
+
+            {/* even-number labels below bottom row */}
+            {Array.from({ length: layout.columns }).map((_, i) => {
+              const port = copper[i * 2 + 1];
+              if (!port) return null;
+              return (
+                <text
+                  key={`bot-label-${i}`}
+                  x={colX(i, layout) + layout.portW / 2}
+                  y={evenLabelY}
+                  textAnchor="middle"
+                  fontFamily="Arial, sans-serif"
+                  fontSize={9}
+                  fill="#7a8390"
+                >
+                  {port.displayNumber}
+                </text>
+              );
+            })}
+          </g>
+        )}
+
+        {/* SFP block — staggered: 1/3 top, 2/4 bottom for 4 SFPs.
+            For 1 SFP: single slot, top row.
+            For 2 SFPs: stacked vertically.
+            For 3+: staggered grid. */}
+        {sfpCount > 0 && (
+          <g transform={`translate(${sfpBlockX}, 0)`}>
+            {sfp.map((p, idx) => {
+              const sfpW = sfpCount <= 2 ? 50 : 44;
+              const sfpH = layout.portH;
+              const isOdd = idx % 2 === 0;
+              const col = Math.floor(idx / 2);
+              const x = col * (sfpW + 8) + (isOdd ? 0 : (sfpW + 8) / 2);
+              const y = isOdd ? topRowY : botRowY;
+              const labelY = isOdd ? portsTopY : evenLabelY;
+              return (
+                <g key={`sfp-${idx}`}>
+                  <text
+                    x={x + sfpW / 2}
+                    y={labelY}
+                    textAnchor="middle"
+                    fontFamily="Arial, sans-serif"
+                    fontSize={9}
+                    fill="#7a8390"
+                  >
+                    SFP+{p.displayNumber || idx + 1}
+                  </text>
+                  <PortTile
+                    port={p}
+                    x={x}
+                    y={y}
+                    width={sfpW}
+                    height={sfpH}
+                    variant="sfp"
+                    onClick={onPortClick}
+                    isSelected={isSelected(p)}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        )}
+
+        {/* far-right ventilation grille */}
+        <g transform="translate(636, 60)" fill="#3a4250">
+          <rect x={0} y={0} width={2} height={20} />
+          <rect x={6} y={0} width={2} height={20} />
+          <rect x={12} y={0} width={2} height={20} />
+          <rect x={18} y={0} width={2} height={20} />
+        </g>
+
+        {/* empty-state hint */}
+        {!hasAnyPhysical && (
+          <text
+            x={340}
+            y={chassisH / 2 + 4}
+            textAnchor="middle"
+            fontFamily="Arial, sans-serif"
+            fontSize={11}
+            fill="#7a8390"
+          >
+            No physical ports reported for this device
+          </text>
+        )}
+      </svg>
+
+      {/* compact legend, sits just below the chassis */}
+      <div
+        style={{
+          display: "flex",
+          gap: "16px",
+          alignItems: "center",
+          marginTop: "8px",
+          paddingLeft: "22px",
+          fontSize: "11px",
+          color: "#7a8390",
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
+        <LegendDot fill="#0a3d2c" stroke="#22c55e" label="Connected" />
+        <LegendDot fill="#3a2a0a" stroke="#f59e0b" label="Errors" />
+        <LegendDot fill="#0d1117" stroke="#3a4250" label="Idle / disabled" />
+      </div>
     </div>
   );
 }
 
-/* ───────────────────────────────────────────────────────────
-   Compatibility shims — keep these so the existing page code
-   that imports findStencilTemplate / findPortByName still works
-   without changes. Both return null/undefined to signal that
-   the universal renderer should be used.
-   ─────────────────────────────────────────────────────────── */
-export function findStencilTemplate() {
-  // Always return null — the page will fall through to the universal renderer
-  return null;
+function LegendDot({ fill, stroke, label }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+      <svg width={14} height={11} viewBox="0 0 14 11">
+        <rect
+          x={0.5}
+          y={0.5}
+          width={13}
+          height={10}
+          rx={2}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={0.8}
+        />
+      </svg>
+      {label}
+    </span>
+  );
 }
 
-export function findPortByName(ports, name) {
-  if (!ports || !name) return null;
-  return ports.find(p =>
-    p.name === name ||
-    String(p.index) === name ||
-    (p.name && p.name.toLowerCase() === name.toLowerCase())
-  ) || null;
-}
-
-/* ───────────────────────────────────────────────────────────
-   Firmware parser — extracts vendor-specific version strings
-   from sysDescr text. Used by the Device Information section.
-   ─────────────────────────────────────────────────────────── */
-export function parseFirmware(sysDescr, make) {
-  if (!sysDescr) return null;
-  const s = String(sysDescr);
-  const m = String(make || "").toLowerCase();
-
-  // Aruba ArubaOS — "ArubaOS (MODEL: 505), Version 8.10.0.19-8.10.0.19 LSR"
-  if (m.includes("aruba")) {
-    const match = s.match(/Version\s+([\d.]+(?:-[\d.]+)?)/i);
-    if (match) return `ArubaOS ${match[1].split("-")[0]}`;
-  }
-
-  // HP / HPE — "revision K.16.02.0036" or "Firmware Version 2.7.0.0001"
-  if (m === "hp" || m === "hpe") {
-    const rev = s.match(/revision\s+([A-Z]\.\d+\.\d+\.\d+)/i);
-    if (rev) return rev[1];
-    const fw = s.match(/Firmware\s+(?:Version\s+)?([\d.]+)/i);
-    if (fw) return fw[1];
-    const ver = s.match(/Version\s+([\d.]+)/i);
-    if (ver) return ver[1];
-  }
-
-  // Sophos / Linux kernel — "Linux localhost 6.6.49 #1 SMP ..."
-  if (m.includes("sophos") || /linux/i.test(s)) {
-    const match = s.match(/Linux\s+\S+\s+([\d.]+)/i);
-    if (match) return `Linux ${match[1]}`;
-  }
-
-  // Brother / generic — "Brother NC-... Firmware Ver.1.04 ..."
-  if (m.includes("brother")) {
-    const match = s.match(/Ver\.?\s*([\d.]+)/i);
-    if (match) return `Ver. ${match[1]}`;
-  }
-
-  // Generic fallback
-  const generic = s.match(/Version\s+([\d.]+(?:[-.][\w\d]+)?)/i);
-  if (generic) return generic[1];
-
-  return null;
-}
+export default UniversalStencil;
